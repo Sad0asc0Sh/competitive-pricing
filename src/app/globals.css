@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+:root {
+  font-family: Vazirmatn, "Segoe UI", Tahoma, sans-serif;
+}
+
+body {
+  font-family: Vazirmatn, "Segoe UI", Tahoma, sans-serif;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.card {
+  @apply rounded-2xl border border-slate-200 bg-white p-5 shadow-sm;
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-danger,
+.btn-success {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+.btn-primary {
+  @apply bg-indigo-600 text-white hover:bg-indigo-700;
+}
+.btn-secondary {
+  @apply border border-slate-300 bg-white text-slate-800 hover:bg-slate-50;
+}
+.btn-danger {
+  @apply bg-rose-600 text-white hover:bg-rose-700;
+}
+.btn-success {
+  @apply bg-emerald-600 text-white hover:bg-emerald-700;
+}
+
+.input {
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100;
+}
+.label {
+  @apply mb-1 block text-xs font-medium text-slate-600;
+}
+
+.badge {
+  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+}
+
+table.data {
+  @apply w-full text-sm;
+}
+table.data th {
+  @apply bg-slate-50 px-3 py-2 text-right text-xs font-semibold text-slate-600;
+}
+table.data td {
+  @apply border-t border-slate-100 px-3 py-2 align-middle;
+}
+
+.prose-fa h2 {
+  @apply mt-8 mb-3 text-xl font-bold text-slate-900;
+}
+.prose-fa h3 {
+  @apply mt-6 mb-2 text-base font-bold text-slate-800;
+}
+.prose-fa p,
+.prose-fa li {
+  @apply text-sm leading-7 text-slate-700;
+}
+.prose-fa ul {
+  @apply list-disc pr-6;
+}
+.prose-fa ol {
+  @apply list-decimal pr-6;
+}
+.prose-fa code {
+  @apply rounded bg-slate-100 px-1 py-0.5 text-xs text-indigo-700;
+  direction: ltr;
+  display: inline-block;
+}
+.prose-fa pre {
+  @apply my-3 overflow-x-auto rounded-xl bg-slate-900 p-4 text-xs text-slate-100;
+  direction: ltr;
+  text-align: left;
+}
+.prose-fa pre code {
+  @apply bg-transparent p-0 text-slate-100;
+}
