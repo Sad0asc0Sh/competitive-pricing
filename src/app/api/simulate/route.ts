@@ -33,7 +33,11 @@ export async function POST(req: Request) {
     }[];
   } | null;
 
-  if (!b?.offers) return NextResponse.json({ error: "offers لازم است" }, { status: 400 });
+  // سیستم واقعی بدون داده ساختگی: نام محصول و حداقل ۲ پیشنهاد معتبر الزامی است؛
+  // هیچ مقدار پیش‌فرض نمونه‌ای (مثل دوربین داهوا) برنمی‌گردانیم.
+  if (!b?.productName?.trim()) return NextResponse.json({ error: "نام محصول (productName) الزامی است" }, { status: 400 });
+  if (!Array.isArray(b?.offers) || b.offers.length < 2)
+    return NextResponse.json({ error: "حداقل ۲ پیشنهاد رقیب (offers) برای شبیه‌سازی واقعی لازم است" }, { status: 400 });
 
   let baseCfg;
   try {
@@ -50,31 +54,35 @@ export async function POST(req: Request) {
         ? parseColleaguePriceListText(b.colleagueListText, "auto", now)
         : [];
 
-  const offers: RawOffer[] = b.offers.map((o, i) => ({
-    shopName: o.shopName ?? `فروشگاه ${i + 1}`,
-    shopCity: o.shopCity ?? null,
-    sellerType: o.sellerType ?? "online",
-    shopScore: o.shopScore ?? null,
-    price: Number(o.price),
-    lastChangedAt:
-      o.lastChangedDaysAgo != null
-        ? new Date(now.getTime() - Number(o.lastChangedDaysAgo) * 86400000)
-        : null,
-    lastChangedText: o.lastChangedText ?? null,
-    priceUnreliable: !!o.priceUnreliable,
-    isAd: !!o.isAd,
-    inStock: o.inStock !== false,
-  }));
+  const offers: RawOffer[] = b
+    .offers!.filter((o) => o && Number(o.price) > 0)
+    .map((o, i) => ({
+      shopName: o.shopName?.trim() || `فروشگاه ${i + 1}`,
+      shopCity: o.shopCity ?? null,
+      sellerType: o.sellerType ?? "online",
+      shopScore: o.shopScore ?? null,
+      price: Math.round(Number(o.price)),
+      lastChangedAt:
+        o.lastChangedDaysAgo != null
+          ? new Date(now.getTime() - Number(o.lastChangedDaysAgo) * 86400000)
+          : null,
+      lastChangedText: o.lastChangedText ?? null,
+      priceUnreliable: !!o.priceUnreliable,
+      isAd: !!o.isAd,
+      inStock: o.inStock !== false,
+    }));
+  if (offers.length < 2)
+    return NextResponse.json({ error: "حداقل ۲ پیشنهاد با قیمت معتبر لازم است" }, { status: 400 });
 
-  const simProductName = b.productName?.trim() || "دوربین مداربسته داهوا مدل DH-IPC-HFW1230S-S5 ظرفیت 2 مگاپیکسل";
+  const simProductName = b.productName!.trim();
   const simTorobTitle = b.torobTitle?.trim() || simProductName;
 
   const result = runPricingPipeline(
     {
-      source: "simulate",
+      source: "manual",
       productTitle: simTorobTitle,
       offers,
-      totalSellerCount: b.totalSellerCount ?? offers.length,
+      totalSellerCount: b.totalSellerCount && b.totalSellerCount >= offers.length ? b.totalSellerCount : offers.length,
       fetchedAt: now,
       ok: true,
     },

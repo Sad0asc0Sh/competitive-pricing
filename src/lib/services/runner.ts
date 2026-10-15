@@ -203,12 +203,31 @@ async function priceOneProduct(
       result.steps.push({
         step: "ai_review",
         title: "بازبینی هوش مصنوعی مکمل",
-        message: `${review.verdict}: ${review.reasoning}`,
+        message:
+          review.verdict === "adjust" && review.suggestedFinalPrice
+            ? `adjust (پیشنهاد AI: ${review.suggestedFinalPrice.toLocaleString("fa-IR")} تومان): ${review.reasoning}`
+            : `${review.verdict}: ${review.reasoning}`,
         level: review.verdict === "approve" ? "info" : "warn",
+        data: review.suggestedFinalPrice ? { suggestedFinalPrice: review.suggestedFinalPrice } : undefined,
       });
       if (review.verdict === "reject") {
         result.needsReview = true;
-        result.reviewReasons.push("AI تصمیم را رد کرد");
+        result.reviewReasons.push(`AI تصمیم را رد کرد: ${review.reasoning}`);
+      } else if (review.verdict === "adjust") {
+        // منطق اصلاح‌شده adjust: پیشنهاد AI هرگز مستقیم اعمال نمی‌شود؛ فقط به ریویو می‌رود.
+        // اگر پیشنهاد AI زیر خط قرمز سود باشد، مثل reject رفتار می‌کنیم.
+        const suggested = review.suggestedFinalPrice;
+        const floor = result.supply.hardFloorPrice;
+        const cost = result.supply.effectiveCostPrice;
+        const unsafe = suggested == null || (floor > 0 && suggested < floor) || (cost > 0 && suggested <= cost);
+        result.needsReview = true;
+        result.reviewReasons.push(
+          suggested != null
+            ? unsafe
+              ? `پیشنهاد AI (${suggested.toLocaleString("fa-IR")} تومان) زیر خط قرمز سود است و مردود شد`
+              : `AI اصلاح قیمت را پیشنهاد داد (${suggested.toLocaleString("fa-IR")} تومان): ${review.reasoning}`
+            : `AI نیاز به اصلاح دید: ${review.reasoning}`,
+        );
       }
     }
   }
@@ -365,13 +384,39 @@ async function priceOneProduct(
   return { id: decision.id, status };
 }
 
-export async function applyDecision(decisionId: number, campaignEndsAt?: Date | null): Promise<{ ok: boolean; message: string }> {
+/** آیا تصمیم توسط ناظر SystemOne رد شده؟ (وضعیت rejected یا لاگ supervisor با verdict=reject) */
+export function isSupervisorRejected(d: {
+  status: string;
+  steps: { step: string; message?: string; data?: Record<string, unknown> }[];
+}): boolean {
+  if (d.status === "rejected") return true;
+  const sup = d.steps.find((s) => s.step === "supervisor");
+  if (!sup) return false;
+  const verdict = (sup.data as { verdict?: string } | undefined)?.verdict;
+  if (verdict === "reject") return true;
+  if (typeof sup.message === "string" && sup.message.includes("⛔ رد کامل")) return true;
+  return false;
+}
+
+export async function applyDecision(
+  decisionId: number,
+  campaignEndsAt?: Date | null,
+  opts?: { force?: boolean },
+): Promise<{ ok: boolean; message: string }> {
   const [d] = await db.select().from(priceDecisions).where(eq(priceDecisions.id, decisionId)).limit(1);
   if (!d || !d.finalPrice || !d.basePrice) return { ok: false, message: "تصمیم نامعتبر" };
   const [p] = await db.select().from(products).where(eq(products.id, d.productId)).limit(1);
   if (!p) return { ok: false, message: "محصول یافت نشد" };
   if (d.source !== "torob" && d.source !== "manual") {
     return { ok: false, message: `اعمال تصمیم با منبع «${d.source}» ممنوع است؛ فقط تصمیم‌های مبتنی بر داده واقعی ترب یا ورود دستی مجاز به ارسال به فروشگاه‌اند` };
+  }
+  // منطق اصلاح‌شده رد/ریویو: تصمیم ردشده توسط ناظر بالاسر هرگز (حتی با تأیید انسانی اشتباهی)
+  // به فروشگاه ارسال نمی‌شود، مگر با force صریح که در لاگ ثبت می‌شود.
+  if (isSupervisorRejected({ status: d.status, steps: (d.steps ?? []) as { step: string; message?: string }[] }) && !opts?.force) {
+    return {
+      ok: false,
+      message: "این تصمیم توسط ناظر SystemOne رد شده (امتیاز زیر آستانه رد) و قابل اعمال نیست. برای بازبینی، محصول را با منبع/قیمت اصلاح و دوباره استعلام بگیرید.",
+    };
   }
 
   const effectiveCost = d.effectiveCostPrice ?? p.costPrice ?? 0;
@@ -432,8 +477,8 @@ export async function applyDecision(decisionId: number, campaignEndsAt?: Date | 
 
   await logActivity(
     "apply",
-    `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف نهایی ${d.finalPrice} | کمپین: ${d.campaignType} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}`,
-    { decisionId: d.id },
+    `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف نهایی ${d.finalPrice} | کمپین: ${d.campaignType} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${opts?.force ? " (اعمال اجباری انسانی با force)" : ""}`,
+    { decisionId: d.id, forced: !!opts?.force },
     push.ok ? "info" : "warn",
   );
   return push;

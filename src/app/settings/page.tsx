@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { pricingProfiles, schedules, storeConnectors } from "@/db/schema";
 import { ConnectorEditor, ProfileEditor, ScheduleEditor } from "@/components/settings-panels";
 import { ensureDefaults, mergeConfig } from "@/lib/services/bootstrap";
-import { aiEnabled } from "@/lib/ai/client";
+import { getAIStatus } from "@/lib/ai/client";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,16 @@ export default async function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold">تنظیمات موتور قیمت‌گذاری</h1>
         <p className="mt-1 text-sm text-slate-500">
-          همه پارامترهای الگوریتم از این‌جا قابل تنظیم است؛ هر محصول می‌تواند پروفایل خاص خودش را داشته باشد. هوش مصنوعی: {aiEnabled() ? "فعال" : "غیرفعال — متغیرهای AI_API_KEY / AI_BASE_URL / AI_MODEL را تنظیم کنید"}.
+          همه پارامترهای الگوریتم از این‌جا قابل تنظیم است؛ هر محصول می‌تواند پروفایل خاص خودش را داشته باشد.{" "}
+          {(() => {
+            const s = getAIStatus();
+            return (
+              <>
+                هوش مصنوعی مکمل: {s.aiEnabled ? `فعال (${s.aiModel})` : "غیرفعال — در .env مقدار AI_API_KEY (و در صورت نیاز AI_BASE_URL / AI_MODEL) را بگذارید"}{" "}
+                · ناظر SubQ: {s.subqEnabled ? `متصل (${s.subqModel})` : "موتور آنی محلی — برای API زنده، SUBQ_API_KEY را در .env بگذارید"}.
+              </>
+            );
+          })()}
         </p>
       </div>
 

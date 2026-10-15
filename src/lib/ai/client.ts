@@ -14,13 +14,38 @@ import type { RawOffer } from "@/lib/pricing/types";
  */
 
 export function aiEnabled(): boolean {
-  return Boolean(process.env.AI_API_KEY);
+  return Boolean((process.env.AI_API_KEY ?? "").trim());
+}
+
+export function subqEnabled(): boolean {
+  return Boolean((process.env.SUBQ_API_KEY ?? "").trim());
+}
+
+/** وضعیت تجمیعی هوش مصنوعی برای داشبورد، تنظیمات و /api/health (بدون افشای توکن) */
+export function getAIStatus(): {
+  aiEnabled: boolean;
+  aiBaseUrl: string;
+  aiModel: string;
+  subqEnabled: boolean;
+  subqBaseUrl: string;
+  subqModel: string;
+} {
+  return {
+    aiEnabled: aiEnabled(),
+    aiBaseUrl: (process.env.AI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, ""),
+    aiModel: process.env.AI_MODEL ?? "gpt-4o-mini",
+    subqEnabled: subqEnabled(),
+    subqBaseUrl: (process.env.SUBQ_BASE_URL ?? "https://api.subq.ai/v1").replace(/\/+$/, ""),
+    subqModel: process.env.SUBQ_MODEL ?? "subq-snap-preview",
+  };
 }
 
 async function chat(messages: { role: "system" | "user"; content: string }[], jsonMode = true): Promise<string | null> {
   if (!aiEnabled()) return null;
   const base = (process.env.AI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
   const model = process.env.AI_MODEL ?? "gpt-4o-mini";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
@@ -31,6 +56,7 @@ async function chat(messages: { role: "system" | "user"; content: string }[], js
         messages,
         ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       }),
+      signal: ctrl.signal,
       cache: "no-store",
     });
     if (!res.ok) return null;
@@ -38,6 +64,8 @@ async function chat(messages: { role: "system" | "user"; content: string }[], js
     return data.choices?.[0]?.message?.content ?? null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -114,7 +142,15 @@ export async function reviewDecisionWithAI(input: {
   try {
     const p = JSON.parse(content) as AIReview;
     if (!["approve", "reject", "adjust"].includes(p.verdict)) return null;
-    return p;
+    const suggested =
+      typeof p.suggestedFinalPrice === "number" && Number.isFinite(p.suggestedFinalPrice) && p.suggestedFinalPrice > 0
+        ? Math.round(p.suggestedFinalPrice)
+        : null;
+    return {
+      verdict: p.verdict,
+      suggestedFinalPrice: suggested,
+      reasoning: typeof p.reasoning === "string" && p.reasoning.trim() ? p.reasoning.trim().slice(0, 2000) : "—",
+    };
   } catch {
     return null;
   }

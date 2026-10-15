@@ -3,7 +3,8 @@ import { activityLogs, priceDecisions, priceRuns, products, schedules } from "@/
 import { CardRangeRunner, RunButton } from "@/components/actions";
 import { campaignColor, campaignLabel, faDate, faNum, pct, statusColor, statusLabel, strategyLabel, toman } from "@/lib/format";
 import { ensureDefaults } from "@/lib/services/bootstrap";
-import { aiEnabled } from "@/lib/ai/client";
+import { getAIStatus } from "@/lib/ai/client";
+import { getStoreStatus } from "@/lib/store/connectors";
 import { count, desc, eq, sql } from "drizzle-orm";
 import Link from "next/link";
 
@@ -31,6 +32,13 @@ export default async function DashboardPage() {
   ]);
 
   const nextRun = sch.map((s) => s.nextRunAt).filter(Boolean).sort((a, b) => a!.getTime() - b!.getTime())[0];
+  const aiStatus = getAIStatus();
+  let storeStatus = null;
+  try {
+    storeStatus = await getStoreStatus();
+  } catch {
+    storeStatus = null;
+  }
 
   return (
     <div className="space-y-6">
@@ -41,10 +49,24 @@ export default async function DashboardPage() {
           </h1>
           <p className="mt-1 text-sm text-slate-500">
             استعلام خودکار بعدی: <b>{faDate(nextRun)}</b> · هوش مصنوعی:{" "}
-            {aiEnabled() ? (
-              <span className="text-emerald-600">فعال</span>
+            {aiStatus.aiEnabled ? (
+              <span className="text-emerald-600">فعال ({aiStatus.aiModel})</span>
             ) : (
-              <span className="text-amber-600">غیرفعال (AI_API_KEY تنظیم نشده)</span>
+              <span className="text-amber-600">غیرفعال (AI_API_KEY در .env تنظیم نشده)</span>
+            )}{" "}
+            · ناظر SubQ:{" "}
+            {aiStatus.subqEnabled ? (
+              <span className="text-emerald-600">متصل ({aiStatus.subqModel})</span>
+            ) : (
+              <span className="text-slate-500">موتور آنی محلی (SUBQ_API_KEY تنظیم نشده)</span>
+            )}{" "}
+            · فروشگاه:{" "}
+            {storeStatus?.activeType ? (
+              <span className="text-emerald-600">متصل ({storeStatus.activeType})</span>
+            ) : storeStatus?.envFallback ? (
+              <span className="text-emerald-600">متصل (env sgeooole)</span>
+            ) : (
+              <span className="text-rose-600">قطع — کانکتور یا SGEOOOLE_API_URL را تنظیم کنید</span>
             )}
           </p>
         </div>

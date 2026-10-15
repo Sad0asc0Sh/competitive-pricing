@@ -34,9 +34,17 @@ export default function SimulatePage() {
 
   const [res, setRes] = useState<PricingResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const run = async (forceCostless = false, overrideTorobTitle?: string) => {
     setBusy(true);
+    setErr(null);
+    setRes(null);
+    if (!productName.trim()) {
+      setErr("نام محصول الزامی است (سیستم واقعی بدون داده ساختگی کار می‌کند).");
+      setBusy(false);
+      return;
+    }
     const offers = offersText
       .split("\n")
       .map((l) => l.split(",").map((s) => s.trim()))
@@ -91,7 +99,12 @@ export default function SimulatePage() {
         offers,
       }),
     });
-    setRes(await r.json());
+    const j = await r.json();
+    if (!r.ok) {
+      setErr(j.error ?? "خطا در شبیه‌سازی");
+    } else {
+      setRes(j as PricingResult);
+    }
     setBusy(false);
   };
 
@@ -416,7 +429,8 @@ export default function SimulatePage() {
 
         {/* ستون خروجی بصری: کارت ناظر بالاسر SubQ SystemOne + نوار طیف بازار + پیش‌نمایش کارت */}
         <div className="card lg:col-span-7">
-          {!res && (
+          {err && <div className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800">{err}</div>}
+          {!res && !err && (
             <div className="flex h-64 flex-col items-center justify-center text-center text-slate-400">
               <p className="text-sm font-medium">
                 روی دکمه «اجرای ناظر SystemOne و محاسبه کف و سقف» کلیک کنید تا نتیجه تصمیم‌گیری ۴ مقیاسی و کارت محصول نمایش داده شود.

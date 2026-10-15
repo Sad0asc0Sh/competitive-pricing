@@ -5,27 +5,31 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.aiEnabled = aiEnabled;
 exports.extractOffersWithAI = extractOffersWithAI;
+exports.getAIStatus = getAIStatus;
 exports.reviewDecisionWithAI = reviewDecisionWithAI;
-/**
- * لایه هوش مصنوعی — سازگار با هر API شبیه OpenAI (OpenAI, OpenRouter, Groq, Ollama, ...)
- *  env:
- *   AI_API_KEY      کلید (اجباری برای فعال‌سازی)
- *   AI_BASE_URL     پیش‌فرض https://api.openai.com/v1
- *   AI_MODEL        پیش‌فرض gpt-4o-mini
- *
- * کاربردها:
- *  1) استخراج پیشنهادها از HTML وقتی API ساخت‌یافته در دسترس نیست
- *  2) بازبینی تصمیم‌های کم‌اعتماد (second opinion) و توضیح انسانی
- *  3) تأیید تطابق محصول (آیا لیستینگ ترب همان کالای ماست؟)
- */
-
+exports.subqEnabled = subqEnabled;
 function aiEnabled() {
-  return Boolean(process.env.AI_API_KEY);
+  return Boolean((process.env.AI_API_KEY ?? "").trim());
+}
+function subqEnabled() {
+  return Boolean((process.env.SUBQ_API_KEY ?? "").trim());
+}
+function getAIStatus() {
+  return {
+    aiEnabled: aiEnabled(),
+    aiBaseUrl: (process.env.AI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, ""),
+    aiModel: process.env.AI_MODEL ?? "gpt-4o-mini",
+    subqEnabled: subqEnabled(),
+    subqBaseUrl: (process.env.SUBQ_BASE_URL ?? "https://api.subq.ai/v1").replace(/\/+$/, ""),
+    subqModel: process.env.SUBQ_MODEL ?? "subq-snap-preview"
+  };
 }
 async function chat(messages, jsonMode = true) {
   if (!aiEnabled()) return null;
   const base = (process.env.AI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
   const model = process.env.AI_MODEL ?? "gpt-4o-mini";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
@@ -43,6 +47,7 @@ async function chat(messages, jsonMode = true) {
           }
         } : {})
       }),
+      signal: ctrl.signal,
       cache: "no-store"
     });
     if (!res.ok) return null;
@@ -50,6 +55,8 @@ async function chat(messages, jsonMode = true) {
     return data.choices?.[0]?.message?.content ?? null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 function stripHtml(html, maxLen = 60000) {
@@ -97,7 +104,12 @@ async function reviewDecisionWithAI(input) {
   try {
     const p = JSON.parse(content);
     if (!["approve", "reject", "adjust"].includes(p.verdict)) return null;
-    return p;
+    const suggested = typeof p.suggestedFinalPrice === "number" && Number.isFinite(p.suggestedFinalPrice) && p.suggestedFinalPrice > 0 ? Math.round(p.suggestedFinalPrice) : null;
+    return {
+      verdict: p.verdict,
+      suggestedFinalPrice: suggested,
+      reasoning: typeof p.reasoning === "string" && p.reasoning.trim() ? p.reasoning.trim().slice(0, 2000) : "—"
+    };
   } catch {
     return null;
   }

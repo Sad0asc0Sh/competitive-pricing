@@ -15,12 +15,12 @@ export async function GET(_: Request, { params }: Ctx) {
   return NextResponse.json({ ...d, offers });
 }
 
-/** POST /api/decisions/:id  body: { action: 'approve' | 'reject' } */
+/** POST /api/decisions/:id  body: { action: 'approve' | 'reject', force?: boolean } */
 export async function POST(req: Request, { params }: Ctx) {
   const { id } = await params;
-  const { action } = (await req.json().catch(() => ({}))) as { action?: string };
+  const { action, force } = (await req.json().catch(() => ({}))) as { action?: string; force?: boolean };
   if (action === "approve") {
-    const r = await applyDecision(Number(id));
+    const r = await applyDecision(Number(id), null, { force: force === true });
     return NextResponse.json(r, { status: r.ok ? 200 : 400 });
   }
   if (action === "reject") {

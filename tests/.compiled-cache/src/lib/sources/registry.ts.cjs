@@ -3,11 +3,12 @@
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
+exports.ALLOWED_SOURCE_TYPES = void 0;
 exports.fetchFromSource = fetchFromSource;
 exports.getAdapter = getAdapter;
+exports.isAllowedSourceType = isAllowedSourceType;
 exports.listAdapters = listAdapters;
 exports.manualSource = manualSource;
-var _mock = require("./mock");
 var _torob = require("./torob");
 /** منبع دستی: پیشنهادها را از ورودی کاربر (import) می‌گیرد */
 function manualSource(offers, totalSellerCount) {
@@ -20,9 +21,17 @@ function manualSource(offers, totalSellerCount) {
     error: offers.length ? undefined : "هیچ پیشنهادی وارد نشده"
   };
 }
+/**
+ * تنها منبع واقعی مجاز در محیط تولید: ترب.
+ * منبع شبیه‌سازی (mock) به‌طور کامل حذف شده است تا هیچ تصمیم قیمتی
+ * بر اساس داده ساختگی گرفته یا به فروشگاه ارسال نشود.
+ */
+const ALLOWED_SOURCE_TYPES = exports.ALLOWED_SOURCE_TYPES = ["torob"];
+function isAllowedSourceType(sourceType) {
+  return ALLOWED_SOURCE_TYPES.includes(sourceType);
+}
 const adapters = {
-  torob: _torob.torobAdapter,
-  mock: _mock.mockAdapter
+  torob: _torob.torobAdapter
 };
 function getAdapter(sourceType) {
   return adapters[sourceType] ?? null;
@@ -46,7 +55,7 @@ async function fetchFromSource(product, manualOffers) {
       totalSellerCount: 0,
       fetchedAt: new Date(),
       ok: false,
-      error: "منبع ناشناخته"
+      error: "منبع ناشناخته یا غیرمجاز (فقط ترب پشتیبانی می‌شود)"
     };
   }
   try {

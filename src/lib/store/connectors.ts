@@ -173,7 +173,8 @@ const sgeooole: StoreConnectorAdapter = {
       return { ok: false, message: `sgeooole PUT HTTP ${putRes.status}` };
     }
 
-    return { ok: false, message: `sgeooole HTTP ${res.status}` };
+    const errText = await res.text().catch(() => "");
+    return { ok: false, message: `sgeooole HTTP ${res.status}${errText ? ` — ${errText.slice(0, 300)}` : ""}` };
   },
 };
 
@@ -231,21 +232,71 @@ export async function getActiveConnector(): Promise<StoreConnector | null> {
   return rows[0] ?? null;
 }
 
+/** وضعیت اتصال فروشگاه برای داشبورد و /api/health (بدون افشای سکرت) */
+export async function getStoreStatus(): Promise<{
+  activeType: string | null;
+  activeName: string | null;
+  envFallback: boolean;
+  baseUrl: string;
+  lastError: string | null;
+}> {
+  try {
+    const active = await getActiveConnector();
+    if (active && active.type !== "none") {
+      return {
+        activeType: active.type,
+        activeName: active.name,
+        envFallback: false,
+        baseUrl: active.type === "sgeooole" ? String(active.config?.baseUrl ?? "") : "",
+        lastError: active.lastError ?? null,
+      };
+    }
+  } catch {
+    // ادامه به بررسی env
+  }
+  const envBase = (process.env.SGEOOOLE_API_URL ?? "").replace(/\/$/, "");
+  const envKey = (process.env.SGEOOOLE_PRICING_SECRET ?? "").trim();
+  return {
+    activeType: null,
+    activeName: null,
+    envFallback: Boolean(envBase && envKey),
+    baseUrl: envBase,
+    lastError: null,
+  };
+}
+
 export async function pushToStore(payload: PricePushPayload): Promise<{ ok: boolean; message: string; skipped?: boolean }> {
   const connector = await getActiveConnector();
-  if (!connector || connector.type === "none") return { ok: true, skipped: true, message: "کانکتور فروشگاه فعال نیست (فقط ثبت داخلی)" };
-  const adapter = adapters[connector.type];
-  if (!adapter) return { ok: false, message: `کانکتور ناشناخته: ${connector.type}` };
-  try {
-    const r = await adapter.push(connector.config, payload);
-    await db
-      .update(storeConnectors)
-      .set({ lastPushAt: new Date(), lastError: r.ok ? null : r.message })
-      .where(eq(storeConnectors.id, connector.id));
-    return r;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await db.update(storeConnectors).set({ lastError: msg }).where(eq(storeConnectors.id, connector.id));
-    return { ok: false, message: msg };
+  if (connector && connector.type !== "none") {
+    const adapter = adapters[connector.type];
+    if (!adapter) return { ok: false, message: `کانکتور ناشناخته: ${connector.type}` };
+    try {
+      const r = await adapter.push(connector.config, payload);
+      await db
+        .update(storeConnectors)
+        .set({ lastPushAt: new Date(), lastError: r.ok ? null : r.message })
+        .where(eq(storeConnectors.id, connector.id));
+      return r;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await db.update(storeConnectors).set({ lastError: msg }).where(eq(storeConnectors.id, connector.id));
+      return { ok: false, message: msg };
+    }
   }
+  // سیستم واقعی بدون داده ساختگی: اگر کانکتوری در دیتابیس فعال نیست ولی
+  // متغیرهای محیطی فروشگاه (SGEOOOLE_API_URL + SGEOOOLE_PRICING_SECRET) تنظیم‌اند،
+  // مستقیم از env به sgeooole پوش کن تا قیمت‌ها واقعاً به سایت برسند.
+  const envBase = (process.env.SGEOOOLE_API_URL ?? "").trim();
+  const envKey = (process.env.SGEOOOLE_PRICING_SECRET ?? process.env.STORE_WEBHOOK_SECRET ?? "").trim();
+  if (envBase && envKey) {
+    try {
+      const r = await sgeooole.push({ baseUrl: envBase, apiKey: envKey }, payload);
+      return r.ok
+        ? { ...r, message: `${r.message} (via env fallback)` }
+        : r;
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  return { ok: true, skipped: true, message: "کانکتور فروشگاه فعال نیست و SGEOOOLE_API_URL تنظیم نشده (فقط ثبت داخلی)" };
 }
