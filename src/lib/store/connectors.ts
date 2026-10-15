@@ -1,5 +1,6 @@
 import { db } from "@/db";
 import { storeConnectors, type StoreConnector } from "@/db/schema";
+import type { SgeoooleBadgeTheme, SgeoooleCampaignType } from "@/lib/pricing/types";
 import { eq } from "drizzle-orm";
 
 /** payload استاندارد که به فروشگاه ارسال می‌شود */
@@ -7,19 +8,174 @@ export interface PricePushPayload {
   productId: number;
   sku: string;
   storeExternalId?: string | null;
-  basePrice: number; // قیمت اصلی (regular)
-  finalPrice: number; // قیمت با تخفیف (sale)
-  discountPct: number;
-  campaignType: string; // flash | featured | none
+  /** قیمت خرید/تامین نهایی از لیست همکاران */
+  effectiveCostPrice?: number;
+  /** خط قرمز کف قیمت فروش (تومان) */
+  hardFloorPrice?: number;
+  /** سقف واقعی بازار که معیار تخفیف قرار گرفته است */
+  monitoredMarketCeiling?: number | null;
+  basePrice: number; // قیمت سقف معیار (regular / compareAtPrice)
+  finalPrice: number; // قیمت کف قطعی فروش (sale / current_price در فید ترب)
+  discountPct: number; // درصد تخفیف صحیح (1..99)
+  campaignType: SgeoooleCampaignType | string; // flash | featured | timed_sale | none
+  campaignName?: string | null;
+  badgeTheme?: SgeoooleBadgeTheme | string | null;
+  showInFeatured?: boolean | null;
   campaignEndsAt?: string | null;
   decisionId: number;
   confidence: number;
+  projectedNationalRank?: number | null;
+  projectedLocalRank?: number | null;
+  competitionTier?: string | null;
 }
 
 export interface StoreConnectorAdapter {
   type: string;
   push(cfg: Record<string, string>, payload: PricePushPayload): Promise<{ ok: boolean; message: string }>;
 }
+
+/**
+ * کانکتور اختصاصی فروشگاه sgeooole (`ekgkala-backend`):
+ * پشتیبانی کامل و بدون تداخل از هر ۳ سیستم تخفیف `sgeooole`:
+ *  1. `flash` («پیشنهاد لحظه‌ای» در صفحه اصلی):
+ *     - `Product.isFlashDeal = true`, `Product.isSpecialOffer = false`
+ *     - حذف خودکار محصول از کمپین‌های `Sale` فعال برای جلوگیری از خطای `409 CAMPAIGN_CONFLICT`
+ *  2. `featured` («پیشنهاد شگفت‌انگیز» در صفحه اصلی):
+ *     - `Product.isSpecialOffer = true`, `Product.isFlashDeal = false`
+ *     - حذف خودکار محصول از کمپین‌های `Sale` فعال برای جلوگیری از خطای `409 CAMPAIGN_CONFLICT`
+ *  3. `timed_sale` («مدیریت فرصت‌های زمان‌دار» در بخش مالی و تخفیف پنل مدیریت — مدل `Sale`):
+ *     - ساخت یا بروزرسانی خودکار سند `Sale` در بخش مالی و تخفیف با `name`, `discountPercentage`, `badgeTheme` (`green-orange` | `gold-red` | `red-purple`) و `showInFeatured` (نمایش در بخش منتخب‌های صفحه اصلی)
+ *     - تنظیم `Product.price = basePrice (سقف معیار)` و خاموش کردن `isFlashDeal` / `isSpecialOffer` و `discount = 0` روی خود `Product` تا تخفیف دقیقاً از طریق کمپین `Sale` روی کف اعمال شود!
+ */
+export function buildSgeoooleRequestPayload(p: PricePushPayload) {
+  const intDiscountPct =
+    p.discountPct > 0 && p.basePrice > p.finalPrice
+      ? Math.max(1, Math.min(99, Math.round(p.discountPct)))
+      : 0;
+
+  const isFlash = p.campaignType === "flash" && intDiscountPct > 0;
+  const isSpecial = p.campaignType === "featured" && intDiscountPct > 0;
+  const isTimedSale = p.campaignType === "timed_sale" && intDiscountPct > 0;
+  const hasDirectProductPromo = isFlash || isSpecial;
+  const hasAnyPromo = hasDirectProductPromo || isTimedSale;
+
+  const defaultHours = isFlash ? 12 : isSpecial ? 48 : 72;
+  const endIso = p.campaignEndsAt ?? new Date(Date.now() + defaultHours * 3600 * 1000).toISOString();
+  const badgeTheme: SgeoooleBadgeTheme =
+    (p.badgeTheme as SgeoooleBadgeTheme) ||
+    (isFlash ? "gold-red" : isSpecial ? "red-purple" : "green-orange");
+
+  return {
+    sku: p.sku,
+    productCode: p.storeExternalId?.toUpperCase().startsWith("KY-") ? p.storeExternalId.toUpperCase() : undefined,
+    productId: p.storeExternalId && !p.storeExternalId.toUpperCase().startsWith("KY-") ? p.storeExternalId : undefined,
+    // فیلدهای استاندارد مدل Product در sgeooole:
+    // نکته کلیدی: در timed_sale قیمت پایه روی Product برابر سقف معیار (basePrice) قرار می‌گیرد و تخفیف از طریق مدل Sale اعمال می‌شود
+    price: hasAnyPromo ? p.basePrice : p.finalPrice,
+    compareAtPrice: hasDirectProductPromo ? p.basePrice : null,
+    discount: hasDirectProductPromo ? intDiscountPct : 0,
+    isFlashDeal: isFlash,
+    flashDealEndTime: isFlash ? endIso : null,
+    isSpecialOffer: isSpecial,
+    specialOfferEndTime: isSpecial ? endIso : null,
+    // اطلاعات کامل سیستم تخفیف برای هماهنگی هر ۳ موتور در بک‌اند sgeooole
+    campaignType: hasAnyPromo ? p.campaignType : "none",
+    timedSale: isTimedSale
+      ? {
+          enabled: true,
+          name: p.campaignName || "فروش ویژه هوشمند",
+          discountPercentage: intDiscountPct,
+          endDate: endIso,
+          badgeTheme,
+          showInFeatured: p.showInFeatured ?? true,
+        }
+      : {
+          enabled: false,
+        },
+    // فیلدهای تکمیلی قیمت‌گذاری رقابتی، سقف و کف بازار و تامین همکاران
+    finalPrice: p.finalPrice,
+    basePrice: p.basePrice,
+    monitoredMarketCeiling: p.monitoredMarketCeiling ?? p.basePrice,
+    costPrice: p.effectiveCostPrice ?? 0,
+    hardFloorPrice: p.hardFloorPrice ?? 0,
+    pricingMeta: {
+      decisionId: p.decisionId,
+      confidence: p.confidence,
+      projectedNationalRank: p.projectedNationalRank ?? null,
+      projectedLocalRank: p.projectedLocalRank ?? null,
+      competitionTier: p.competitionTier ?? null,
+      campaignType: hasAnyPromo ? p.campaignType : "none",
+      campaignName: p.campaignName ?? null,
+      badgeTheme,
+      showInFeatured: p.showInFeatured ?? (isSpecial || isTimedSale),
+      updatedAt: new Date().toISOString(),
+    },
+    rebuildTorobFeed: true,
+  };
+}
+
+const sgeooole: StoreConnectorAdapter = {
+  type: "sgeooole",
+  async push(cfg, p) {
+    // حفاظت نهایی قبل از ارسال به سایت: هرگز قیمت فروش <= قیمت خرید نباشد
+    if (p.effectiveCostPrice && p.effectiveCostPrice > 0 && p.finalPrice <= p.effectiveCostPrice) {
+      return {
+        ok: false,
+        message: `مسدود شد: قیمت نهایی (${p.finalPrice}) کمتر یا مساوی قیمت خرید/تامین (${p.effectiveCostPrice}) است!`,
+      };
+    }
+
+    const baseUrl = (cfg.baseUrl ?? process.env.SGEOOOLE_API_URL ?? "").replace(/\/$/, "");
+    const apiKey = cfg.apiKey ?? process.env.SGEOOOLE_PRICING_SECRET ?? process.env.STORE_WEBHOOK_SECRET ?? "";
+    const bearerToken = cfg.adminToken ?? process.env.SGEOOOLE_ADMIN_TOKEN ?? "";
+
+    if (!baseUrl) {
+      return { ok: false, message: "آدرس سرور sgeooole (baseUrl / SGEOOOLE_API_URL) تنظیم نشده است" };
+    }
+
+    const bodyPayload = buildSgeoooleRequestPayload(p);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(apiKey ? { "X-Pricing-Secret": apiKey } : {}),
+      ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+    };
+
+    // ۱) تلاش برای ارسال به اندپوینت اختصاصی همگام‌سازی قیمت و هر ۳ سیستم تخفیف در sgeooole
+    const syncUrl = `${baseUrl}/api/products/pricing-sync`;
+    const res = await fetch(syncUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(bodyPayload),
+      cache: "no-store",
+    });
+
+    if (res.ok) {
+      return {
+        ok: true,
+        message: `sgeooole: محصول ${p.sku} بروزرسانی شد (سقف معیار: ${p.basePrice.toLocaleString("fa-IR")} با ${p.discountPct}% تخفیف → کف قطعی: ${p.finalPrice.toLocaleString("fa-IR")} تومان | کمپین: ${p.campaignType})`,
+      };
+    }
+
+    // ۲) اگر اندپوینت اختصاصی نبود و storeExternalId (MongoDB _id) داشتیم، با PUT /api/products/:id بروزرسانی کن
+    if (res.status === 404 && p.storeExternalId && /^[a-fA-F0-9]{24}$/.test(p.storeExternalId)) {
+      const putRes = await fetch(`${baseUrl}/api/products/${p.storeExternalId}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(bodyPayload),
+        cache: "no-store",
+      });
+      if (putRes.ok) {
+        return {
+          ok: true,
+          message: `sgeooole (PUT): محصول ${p.storeExternalId} بروزرسانی شد`,
+        };
+      }
+      return { ok: false, message: `sgeooole PUT HTTP ${putRes.status}` };
+    }
+
+    return { ok: false, message: `sgeooole HTTP ${res.status}` };
+  },
+};
 
 /** ووکامرس: PUT /wp-json/wc/v3/products/{id} */
 const woocommerce: StoreConnectorAdapter = {
@@ -68,7 +224,7 @@ const webhook: StoreConnectorAdapter = {
   },
 };
 
-const adapters: Record<string, StoreConnectorAdapter> = { woocommerce, webhook };
+const adapters: Record<string, StoreConnectorAdapter> = { sgeooole, woocommerce, webhook };
 
 export async function getActiveConnector(): Promise<StoreConnector | null> {
   const rows = await db.select().from(storeConnectors).where(eq(storeConnectors.active, true)).limit(1);

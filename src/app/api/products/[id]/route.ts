@@ -1,5 +1,8 @@
 import { db } from "@/db";
 import { products } from "@/db/schema";
+import { parseColleaguePriceListText, resolveSupplyCost } from "@/lib/pricing/sourcing";
+import type { SupplierQuote } from "@/lib/pricing/types";
+import { getProfileConfig } from "@/lib/services/bootstrap";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -17,12 +20,66 @@ export async function GET(_: Request, { params }: Ctx) {
 export async function PATCH(req: Request, { params }: Ctx) {
   const { id } = await params;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const allowed = ["sku", "name", "category", "storeExternalId", "sourceType", "torobUrl", "torobPrk", "costPrice", "minMarginPct", "autoApply", "profileId", "status"] as const;
+  const [existing] = await db.select().from(products).where(eq(products.id, Number(id))).limit(1);
+  if (!existing) return NextResponse.json({ error: "یافت نشد" }, { status: 404 });
+
+  const allowed = [
+    "sku",
+    "name",
+    "category",
+    "storeExternalId",
+    "sourceType",
+    "torobUrl",
+    "torobPrk",
+    "torobDetailsUrl",
+    "costPrice",
+    "supplierQuotes",
+    "minMarginPct",
+    "minProfitAmount",
+    "preferredCampaignType",
+    "autoApply",
+    "profileId",
+    "status",
+  ] as const;
+
   const patch: Record<string, unknown> = {};
   for (const k of allowed) if (k in body) patch[k] = body[k];
+
+  if (typeof body.colleagueListText === "string") {
+    patch.supplierQuotes = parseColleaguePriceListText(body.colleagueListText, "auto");
+  }
+
   if ("costPrice" in patch) patch.costPrice = Number(patch.costPrice) || 0;
-  if ("minMarginPct" in patch) patch.minMarginPct = patch.minMarginPct === "" || patch.minMarginPct == null ? null : Number(patch.minMarginPct);
+  if ("minMarginPct" in patch) {
+    patch.minMarginPct =
+      patch.minMarginPct === "" || patch.minMarginPct == null ? null : Number(patch.minMarginPct);
+  }
+  if ("minProfitAmount" in patch) {
+    patch.minProfitAmount =
+      patch.minProfitAmount === "" || patch.minProfitAmount == null ? null : Number(patch.minProfitAmount);
+  }
   if ("profileId" in patch) patch.profileId = patch.profileId ? Number(patch.profileId) : null;
+
+  const { config } = await getProfileConfig((patch.profileId as number | null) ?? existing.profileId);
+  const supplierQuotes = (patch.supplierQuotes as SupplierQuote[] | undefined) ?? existing.supplierQuotes ?? [];
+  const manualCost = (patch.costPrice as number | undefined) ?? existing.costPrice;
+  const minMarginPct = (patch.minMarginPct as number | null | undefined) ?? existing.minMarginPct;
+  const minProfitAmount = (patch.minProfitAmount as number | null | undefined) ?? existing.minProfitAmount;
+
+  const supply = resolveSupplyCost({
+    supplierQuotes,
+    manualCostPrice: manualCost,
+    minMarginPctOverride: minMarginPct,
+    minProfitAmountOverride: minProfitAmount,
+    config,
+  });
+
+  if (supply.effectiveCostPrice > 0) {
+    patch.costPrice = supply.effectiveCostPrice;
+    patch.selectedSupplierName = supply.selectedQuote?.supplierName ?? null;
+    patch.currentHardFloorPrice = supply.hardFloorPrice;
+  }
+
   patch.updatedAt = new Date();
   try {
     const [row] = await db.update(products).set(patch).where(eq(products.id, Number(id))).returning();

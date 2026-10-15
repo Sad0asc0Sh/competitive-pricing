@@ -1,0 +1,23 @@
+version: "3.8"
+services:
+  pricing-postgres:
+    image: postgres:16-alpine
+    container_name: sgeooole-pricing-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: sgeooole_pg_password_2026
+      POSTGRES_DB: sgeooole_pricing
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pricing_pg_data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c shared_buffers=32MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=16MB
+      -c max_connections=30
+
+volumes:
+  pricing_pg_data:

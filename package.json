@@ -1,10 +1,14 @@
 {
-  "name": "nextjs-postgresql-template",
+  "name": "ai-driven-competitive-pricing-system",
+  "version": "3.5.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3050",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 3050",
+    "test": "node --test tests/pricing-engine.test.cjs",
+    "db:push": "drizzle-kit push",
+    "mcp:serve": "PORT=3005 npx -y torob-mcp@0.1.2 --http",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },

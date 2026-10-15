@@ -15,13 +15,15 @@ export async function GET() {
 
 /**
  * POST /api/runs
- * body: { productIds?: number[], category?: string, manualOffers?: RawOffer[] }
- * اجرای دستی موتور قیمت (همه محصولات فعال یا زیرمجموعه)
+ * body: { productIds?: number[], category?: string, cardRangeFrom?: number, cardRangeTo?: number, manualOffers?: RawOffer[] }
+ * اجرای دستی موتور قیمت (همه محصولات فعال، رنج مشخصی از کارت‌ها یا زیرمجموعه انتخابی)
  */
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as {
     productIds?: number[];
     category?: string;
+    cardRangeFrom?: number;
+    cardRangeTo?: number;
     manualOffers?: { shopName: string; price: number; lastChangedDaysAgo?: number; isAd?: boolean; inStock?: boolean }[];
   };
   const manualOffers: RawOffer[] | undefined = body.manualOffers?.map((o) => ({
@@ -35,6 +37,8 @@ export async function POST(req: Request) {
     trigger: "manual",
     productIds: body.productIds,
     category: body.category,
+    cardRangeFrom: body.cardRangeFrom ? Number(body.cardRangeFrom) : undefined,
+    cardRangeTo: body.cardRangeTo ? Number(body.cardRangeTo) : undefined,
     manualOffers,
   });
   return NextResponse.json(summary);

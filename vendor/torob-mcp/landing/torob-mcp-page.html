@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP · Torob MCP</title>
+<link rel="canonical" href="https://torob-mcp.mmdju3.workers.dev/mcp">
+<meta name="robots" content="noindex, follow">
+<meta name="keywords" content="ترب MCP, Torob MCP, MCP سرور ترب, اتصال ترب به هوش مصنوعی, قیمت ترب, جستجوی ترب">
+<meta property="og:locale" content="fa_IR">
+<meta property="og:locale:alternate" content="en_US">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Torob MCP">
+<link rel="manifest" href='data:application/manifest+json,%7B%22name%22%3A%22Torob%20MCP%22%2C%22short_name%22%3A%22Torob%20MCP%22%2C%22display%22%3A%22standalone%22%2C%22dir%22%3A%22rtl%22%2C%22lang%22%3A%22fa%22%2C%22start_url%22%3A%22.%22%2C%22background_color%22%3A%22%23e9e9ef%22%2C%22theme_color%22%3A%22%23e9e9ef%22%7D'>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebSite","name":"Torob MCP","alternateName":"ترب MCP","url":"https://torob-mcp.mmdju3.workers.dev/","description":"پل بین ترب و دستیار هوشمند شما — جست‌وجو، مقایسه و قیمت واقعی، بدون کلید و لاگین.","inLanguage":["fa","en"]}
+</script>
+<meta name="description" content="پل بین ترب و دستیار هوشمند شما — جست‌وجو، مقایسه و قیمت واقعی، بدون کلید و لاگین.">
+<meta name="theme-color" id="tcm" content="#e9e9ef">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Torob MCP">
+<meta property="og:title" content="Torob MCP">
+<meta property="og:description" content="پل بین ترب و دستیار هوشمند شما — جست‌وجو، مقایسه و قیمت واقعی، بدون کلید و لاگین.">
+<meta property="og:url" content="https://torob-mcp.mmdju3.workers.dev/mcp">
+<meta property="og:image" content="https://torob-mcp.mmdju3.workers.dev/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Torob MCP">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Torob MCP">
+<meta name="twitter:description" content="پل بین ترب و دستیار هوشمند شما — جست‌وجو، مقایسه و قیمت واقعی، بدون کلید و لاگین.">
+<meta name="twitter:image" content="https://torob-mcp.mmdju3.workers.dev/og.png">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23ffffff'/%3E%3Crect x='1.5' y='1.5' width='61' height='61' rx='14.5' fill='none' stroke='%23e4e4e9' stroke-width='3'/%3E%3Ctext x='32' y='44' font-family='Arial,sans-serif' font-size='36' font-weight='bold' text-anchor='middle' fill='%23d80d19'%3ET%3C/text%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" media="(prefers-color-scheme: dark)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101014'/%3E%3Crect x='1.5' y='1.5' width='61' height='61' rx='14.5' fill='none' stroke='%233a3a42' stroke-width='3'/%3E%3Ctext x='32' y='44' font-family='Arial,sans-serif' font-size='36' font-weight='bold' text-anchor='middle' fill='%23ff5c68'%3ET%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="/og.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Nunito:wght@900&display=swap" rel="stylesheet">
+<style>
+  @font-face {
+    font-family: "Doran"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/doran-400.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Doran"; font-style: normal; font-weight: 500; font-display: swap;
+    src: url("/doran-500.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Doran"; font-style: normal; font-weight: 700; font-display: swap;
+    src: url("/doran-700.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Doran"; font-style: normal; font-weight: 800; font-display: swap;
+    src: url("/doran-800.woff2") format("woff2");
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: flex; align-items: center; justify-content: center;
+    font-family: "Doran", "Vazirmatn", system-ui, -apple-system, sans-serif;
+    color: #1d1d1f; line-height: 2; padding: 20px; overflow: hidden;
+    background-color: #e9e9ef;
+    background-image: radial-gradient(1100px 520px at 50% -8%, #ffffff 0%, rgba(255,255,255,0) 55%), radial-gradient(900px 700px at 50% 115%, rgba(30,30,40,.10) 0%, rgba(30,30,40,0) 55%);
+  }
+  main { text-align: center; max-width: 640px; position: relative; z-index: 2; }
+  .endpoint { display: inline-flex; align-items: center; gap: 8px; direction: ltr; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; color: #1c2128; background: rgba(255,255,255,.65); -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%); border: 1px solid rgba(255,255,255,.9); box-shadow: 0 2px 10px rgba(0,0,0,.06), inset 0 1px 0 rgba(255,255,255,.8); border-radius: 12px; padding: 8px 12px; margin-top: 18px; opacity: 0; animation: rise .9s cubic-bezier(.2,.7,.2,1) .7s forwards; }
+  .endpoint code { user-select: all; }
+  .endpoint button { font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid rgba(0,0,0,.08); background: #1d1d1f; color: #fff; border-radius: 999px; padding: 4px 14px; }
+  .steps { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; opacity: 0; animation: rise .9s cubic-bezier(.2,.7,.2,1) .8s forwards; }
+  .steps span { font-size: 12px; font-weight: 500; color: #3a3a3e; background: rgba(255,255,255,.5); border: 1px solid rgba(255,255,255,.8); border-radius: 999px; padding: 4px 14px; }
+  body.dark .endpoint { color: #f5f5f7; background: rgba(28,28,32,.6); border-color: rgba(255,255,255,.12); }
+  body.dark .endpoint button { background: #f5f5f7; color: #101014; border-color: transparent; }
+  body.dark .steps span { color: #c7c7cc; background: rgba(28,28,32,.5); border-color: rgba(255,255,255,.1); }
+  .backrow { margin-top: 20px; opacity: 0; animation: rise .9s cubic-bezier(.2,.7,.2,1) .9s forwards; }
+  .backrow .back { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; text-decoration: none; color: #1c2128; background: rgba(255,255,255,.65); -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%); border: 1px solid rgba(255,255,255,.9); box-shadow: 0 2px 10px rgba(0,0,0,.06), inset 0 1px 0 rgba(255,255,255,.8); border-radius: 999px; padding: 9px 24px; transition: transform .15s ease, box-shadow .15s ease; }
+  .backrow .back:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(0,0,0,.10), inset 0 1px 0 rgba(255,255,255,.8); }
+  body.dark .backrow .back { color: #f5f5f7; background: rgba(28,28,32,.6); border-color: rgba(255,255,255,.12); box-shadow: 0 2px 10px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.08); }
+  @media (prefers-reduced-motion: reduce) { .endpoint, .steps, .backrow { opacity: 1; animation: none; } }
+  h1 {
+    font-size: 64px; font-weight: 800; margin: 0; line-height: 1.4; letter-spacing: 0;
+    direction: ltr; color: #1d1d1f;
+    font-family: "Outfit", "Doran", system-ui, sans-serif;
+  }
+  h1 span { display: inline-block; animation: enter .8s ease both; animation-delay: calc(var(--i) * .08s); }
+  @keyframes enter { from { opacity: 0; filter: blur(10px); } to { opacity: 1; filter: blur(0); } }
+  h1.shimmer {
+    background: linear-gradient(110deg,#1d1d1f 40%,#d80d19 48%,#ffd7da 50%,#d80d19 52%,#1d1d1f 60%);
+    background-size: 250% auto;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    background-position: calc((1 - var(--sw, 0)) * 100%) center;
+  }
+  h1.shimmer span { animation: none; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  .sub { color: #1d1d1f; font-size: 16px; font-weight: 600; margin: 2px 0 0; min-height: 2em; white-space: nowrap; opacity: 0; animation: rise .9s cubic-bezier(.2,.7,.2,1) .35s forwards; transition: opacity .45s ease; text-shadow: 0 0 22px #e9e9ef, 0 0 10px #e9e9ef, 0 0 3px #e9e9ef, 0 1px 4px #e9e9ef, 0 2px 4px rgba(0,0,0,.18); }
+  .btns { opacity: 0; animation: rise .9s cubic-bezier(.2,.7,.2,1) .55s forwards; }
+  #fdot { position: fixed; left: 0; top: 0; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; z-index: 3; opacity: 0; background: #1d1d1f; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+  body.follow-on #fdot { opacity: 1; }
+  #bg { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+  .vignette { position: fixed; inset: 0; z-index: 1; pointer-events: none; background: radial-gradient(ellipse at center, transparent 46%, rgba(20,20,30,.20) 100%); }
+  @media (prefers-reduced-motion: reduce) {
+    h1, .sub, .btns, .stats, .note { opacity: 1; animation: none; transform: none; transition: none; }
+    .qr-ov, .qr-card { transition: none; }
+    h1 span { animation: none; }
+    .btns a::after { animation: none; opacity: 0; }
+    .btns a:hover { animation: none; }
+    .dot.wait { animation: none; opacity: 1; }
+    #fdot { display: none; }
+  }
+  .btns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
+  .btns a {
+    font-size: 15px; font-weight: 600; text-decoration: none;
+    border-radius: 999px; padding: 11px 32px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+    line-height: 1.6; position: relative; overflow: hidden;
+  }
+  .btns a::after {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.75), transparent);
+    pointer-events: none; opacity: 0;
+  }
+  main.synced .btns a::after { opacity: 1; transform: translateX(calc(var(--sw, 0) * 450% - 150%)) skewX(-15deg); }
+  .btns a:hover { animation: jelly .6s ease; }
+  @keyframes jelly {
+    0% { transform: scale(1,1); } 25% { transform: scale(1.15,.85); }
+    45% { transform: scale(.92,1.1); } 65% { transform: scale(1.03,.97); }
+    100% { transform: scale(1,1); }
+  }
+  .btns svg { display: block; flex: none; }
+  .btns .dot { flex: none; }
+  .btns a:focus-visible { outline: 2px solid #d80d19; outline-offset: 2px; }
+  .btns .go, .btns .mid {
+    background: rgba(255,255,255,.65);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(160%);
+    border: 1px solid rgba(255,255,255,.9);
+    box-shadow: 0 2px 10px rgba(0,0,0,.06), inset 0 1px 0 rgba(255,255,255,.8);
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .btns .go { color: #1c2128; }
+  .btns .mid { color: #000; }
+  .btns .go:hover, .btns .mid:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(0,0,0,.10), inset 0 1px 0 rgba(255,255,255,.8); }
+  .btns .go svg { width: 19px; height: 19px; fill: #1c2128; }
+  .btns .mid svg { width: 15px; height: 15px; fill: #000; }
+  .btns .health {
+    font-weight: 500; color: #6e6e73;
+    background: rgba(255,255,255,.65);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(160%);
+    border: 1px solid rgba(255,255,255,.9);
+    box-shadow: 0 2px 10px rgba(0,0,0,.06), inset 0 1px 0 rgba(255,255,255,.8);
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .btns .health:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(0,0,0,.10), inset 0 1px 0 rgba(255,255,255,.8); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #c7c7cc; flex: none; }
+  .dot.wait { animation: blinkdot 1s ease-in-out infinite; }
+  .dot.bad { background: #d70015; }
+  @keyframes blinkdot { 50% { opacity: .25; } }
+  .dot.on { background: #1d8127; position: relative; }
+  .dot.on::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid rgba(29,129,39,.6); animation: ping 1.8s ease-out infinite; }
+  @keyframes ping { from { transform: scale(.5); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+  .stats { color: #b3b3b9; font-size: 12px; font-weight: 400; margin: 18px 0 0; opacity: 0; animation: rise 1s ease 1s forwards; }
+  .note { position: fixed; bottom: 12px; left: 0; right: 0; margin: 0; padding: 0 16px; text-align: center; font-size: 11px; font-weight: 400; color: #c8c8ce; opacity: 0; animation: rise 1s ease 1.2s forwards; pointer-events: none; }
+  .note a { color: inherit; pointer-events: auto; text-decoration: none; }
+  .note a:hover { text-decoration: underline; }
+  .qr-ov { position: fixed; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.25); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+  .qr-ov.open { opacity: 1; pointer-events: auto; }
+  .qr-card { background: rgba(255,255,255,.85); -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%); border: 1px solid rgba(255,255,255,.9); box-shadow: 0 12px 40px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.8); border-radius: 22px; padding: 20px 20px 16px; text-align: center; max-width: 300px; width: 100%; transform: scale(.95); transition: transform .2s ease; }
+  .qr-ov.open .qr-card { transform: scale(1); }
+  .qr-card svg.qr { width: 200px; height: 200px; display: block; margin: 0 auto; border-radius: 12px; background: #fff; padding: 10px; shape-rendering: crispEdges; }
+  .qr-card h2 { font-size: 15px; font-weight: 700; margin: 12px 0 2px; }
+  .qr-card p { font-size: 12px; font-weight: 400; color: #6e6e73; margin: 0 0 12px; direction: ltr; }
+  .qr-card .row { display: flex; gap: 8px; justify-content: center; }
+  .qr-card button { font-family: inherit; font-size: 12px; font-weight: 500; color: #1c2128; background: rgba(255,255,255,.65); border: 1px solid rgba(255,255,255,.9); box-shadow: 0 2px 10px rgba(0,0,0,.06); border-radius: 999px; padding: 6px 16px; cursor: pointer; }
+  body.dark .qr-card { background: rgba(28,28,32,.9); border-color: rgba(255,255,255,.12); box-shadow: 0 12px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.08); color: #f5f5f7; }
+  body.dark .qr-card p { color: #98989f; }
+  body.dark .qr-card button { color: #f5f5f7; background: rgba(28,28,32,.6); border-color: rgba(255,255,255,.12); }
+  .btns .go-wrap { position: relative; display: inline-flex; }
+  .btns .go-wrap .go { flex: 1; }
+  .btns .go-wrap .stars { position: absolute; top: -10px; inset-inline-start: -6px; font-size: 11px; font-weight: 700; color: #1c2128; font-family: "Outfit", system-ui, sans-serif; background: #fff; border: 1px solid rgba(0,0,0,.08); box-shadow: 0 2px 8px rgba(0,0,0,.10); border-radius: 999px; padding: 0 9px; direction: ltr; line-height: 1.8; white-space: nowrap; pointer-events: none; }
+  .btns .go-wrap .stars:empty { display: none; }
+  body.dark .btns .go-wrap .stars { color: #f5f5f7; background: #1c1c20; border-color: rgba(255,255,255,.14); box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+  .topbar { position: fixed; top: 14px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: center; z-index: 5; opacity: 0; animation: rise 1s ease .8s forwards; }
+  .top-actions { display: flex; gap: 8px; }
+  .topbar button { font-family: inherit; font-size: 12px; font-weight: 500; color: #1c2128; background: rgba(255,255,255,.65); -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%); border: 1px solid rgba(255,255,255,.9); box-shadow: 0 2px 10px rgba(0,0,0,.06); border-radius: 999px; padding: 6px 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: transform .15s ease, box-shadow .15s ease; }
+  .topbar button:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(0,0,0,.10); }
+  .topbar button svg { width: 14px; height: 14px; fill: currentColor; display: block; }
+  body { transition: background-color .3s ease, color .3s ease; }
+  html[lang="en"] body { font-family: "Outfit", "Doran", system-ui, sans-serif; }
+  html[lang="en"] .sub, html[lang="en"] .btns a, html[lang="en"] .topbar button { letter-spacing: .01em; }
+  body.dark { background-color: #101014; color: #f5f5f7; background-image: radial-gradient(1100px 520px at 50% -8%, rgba(255,255,255,.07) 0%, rgba(255,255,255,0) 60%), radial-gradient(900px 700px at 50% 115%, rgba(0,0,0,.5) 0%, rgba(0,0,0,0) 55%); }
+  body.dark .vignette { background: radial-gradient(ellipse at center, transparent 52%, rgba(0,0,0,.55) 100%); }
+  body.dark h1 { color: #d80d19; }
+  body.dark h1.shimmer { background: linear-gradient(110deg,#f5f5f7 40%,#d80d19 48%,#ffd7da 50%,#d80d19 52%,#f5f5f7 60%); background-size: 250% auto; -webkit-background-clip: text; background-clip: text; color: transparent; background-position: calc((1 - var(--sw, 0)) * 100%) center; }
+  body.dark .sub { color: #f5f5f7; text-shadow: 0 0 18px #101014, 0 0 6px #101014, 0 0 2px #101014, 0 1px 3px #101014, 0 1px 2px rgba(0,0,0,.6); }
+  body.dark .btns .go, body.dark .btns .mid, body.dark .btns .health { color: #f5f5f7; background: rgba(28,28,32,.6); border-color: rgba(255,255,255,.12); box-shadow: 0 2px 10px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.08); }
+  body.dark .btns .go svg { fill: #f5f5f7; }
+  body.dark .btns .mid svg { fill: #fff; }
+  body.dark #fdot { background: #f5f5f7; box-shadow: 0 2px 10px rgba(0,0,0,.6); }
+  body.dark .topbar button { color: #f5f5f7; background: rgba(28,28,32,.6); border-color: rgba(255,255,255,.12); box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+  body.dark .stats { color: #98989f; }
+  body.dark .note { color: #636366; }
+  @media (max-width: 480px) {
+    body { padding: 16px 16px 52px; overflow-y: auto; }
+    main { margin: auto; width: 100%; }
+    h1 { font-size: 42px; }
+    .sub { font-size: 14.5px; white-space: normal; min-height: 0; }
+    .btns { flex-direction: column; align-items: stretch; gap: 12px; margin-top: 26px; padding: 0 20px; }
+    .btns a { padding: 13px 26px; font-size: 16px; }
+    .stats { font-size: 12.5px; margin-top: 20px; }
+    .note { font-size: 10.5px; bottom: 10px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+<div class="vignette" aria-hidden="true"></div>
+<div id="fdot" aria-hidden="true"></div>
+<div class="topbar">
+  <button id="langB" type="button">EN</button>
+  <div class="top-actions">
+    <button id="darkB" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span id="darkT">تیره</span></button>
+  </div>
+</div>
+<main>
+  <h1><span style="--i:0">T</span><span style="--i:1">o</span><span style="--i:2">r</span><span style="--i:3">o</span><span style="--i:4">b</span><span style="--i:5">&nbsp;</span><span style="--i:6">M</span><span style="--i:7">C</span><span style="--i:8">P</span></h1>
+  <p class="sub" id="mcpSub">این آدرس مخصوص اتصال دستیار هوشمنده، نه مرورگر.</p>
+  <div class="endpoint"><code id="mcpUrl">https://torob-mcp.mmdju3.workers.dev/mcp</code><button id="mcpCopy" type="button"><span id="mcpCopyT">کپی</span></button></div>
+  <div class="steps"><span id="st1">۱ · آدرس رو کپی کن</span><span id="st2">۲ · توی کلاینت MCP بذار</span><span id="st3">۳ · بدون کلید وصل شو</span></div>
+  <div class="backrow"><a class="back" id="backHome" href="https://torob-mcp.mmdju3.workers.dev/">بازگشت به صفحه اصلی</a></div>
+</main>
+<script>
+  var __mx = -999, __my = -999;
+  (function () {
+    var cv = document.getElementById("bg"), cx = cv.getContext("2d");
+    var W = 0, H = 0, GAP = 24, cols = 0, ox = [], oy = [];
+    var DPR = Math.min(window.devicePixelRatio || 1, 2);
+    var coarse = matchMedia("(pointer: coarse)").matches;
+    var calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var force = 4;
+    function kick(n) { force = Math.max(force, n || 4); }
+    function size() {
+      W = innerWidth; H = innerHeight;
+      cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+      cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      cols = Math.ceil(W / GAP);
+      var n = cols * Math.ceil(H / GAP), i;
+      ox = []; oy = [];
+      for (i = 0; i < n; i++) { ox[i] = 0; oy[i] = 0; }
+      kick(4);
+    }
+    size(); addEventListener("resize", size);
+    addEventListener("orientationchange", function () { setTimeout(size, 50); });
+    var lx = -1000, ly = -1000;
+    var lastT = 0, lastB = 0, lastL = 0, lastR = 0, lastDark = null;
+    try {
+      new MutationObserver(function () { kick(5); }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    } catch (e) {}
+    ["darkB", "langB"].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) b.addEventListener("click", function () { kick(6); });
+    });
+    (function frame() {
+      requestAnimationFrame(frame);
+      var mb = document.querySelector(".sub").getBoundingClientRect();
+      var darkBg = document.body.classList.contains("dark");
+      if (darkBg !== lastDark) { lastDark = darkBg; kick(5); }
+      if (Math.abs(mb.top - lastT) > 1 || Math.abs(mb.bottom - lastB) > 1 || Math.abs(mb.left - lastL) > 1 || Math.abs(mb.right - lastR) > 1) {
+        lastT = mb.top; lastB = mb.bottom; lastL = mb.left; lastR = mb.right;
+        kick(3);
+      }
+      var i, moved = (__mx !== lx || __my !== ly);
+      lx = __mx; ly = __my;
+      if (!moved && force <= 0) {
+        var settled = true;
+        for (i = 0; i < ox.length; i++) {
+          if (ox[i] > 0.06 || ox[i] < -0.06 || oy[i] > 0.06 || oy[i] < -0.06) { settled = false; break; }
+        }
+        if (settled) return;
+      }
+      if (force > 0) force--;
+      var mT = mb.top - 14, mB = mb.bottom + 14, mL = mb.left - 24, mR = mb.right + 24;
+      cx.clearRect(0, 0, W, H);
+      var idx = 0, y, x;
+      for (y = GAP / 2; y < H; y += GAP) {
+        for (x = GAP / 2; x < W; x += GAP) {
+          var tx = 0, ty = 0;
+          if (!calm && __mx > -500) {
+            var ddx = x - __mx, ddy = y - __my, d = Math.sqrt(ddx * ddx + ddy * ddy);
+            if (d < 90 && d > 1) { var f = (1 - d / 90) * 10; tx = ddx / d * f; ty = ddy / d * f; }
+          }
+          var px = ox[idx] + (tx - ox[idx]) * 0.2, py = oy[idx] + (ty - oy[idx]) * 0.2;
+          ox[idx] = px; oy[idx] = py; idx++;
+          var inMain = (x + px > mL && x + px < mR && y + py > mT && y + py < mB);
+          var RR = coarse ? 1.7 : 1.35;
+          if (darkBg) cx.fillStyle = inMain ? (coarse ? "rgba(255,255,255,.11)" : "rgba(255,255,255,.09)") : (coarse ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.13)");
+          else cx.fillStyle = inMain ? (coarse ? "rgba(0,0,0,.14)" : "rgba(0,0,0,.12)") : (coarse ? "rgba(0,0,0,.24)" : "rgba(0,0,0,.18)");
+          cx.beginPath(); cx.arc(x + px, y + py, RR, 0, 7); cx.fill();
+        }
+      }
+    })();
+  })();
+  (function () {
+    if (matchMedia("(pointer: coarse)").matches || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    var dx = document.getElementById("fdot");
+    var shown = false;
+    addEventListener("pointermove", function (e) {
+      __mx = e.clientX; __my = e.clientY;
+      if (!shown) { shown = true; document.body.classList.add("follow-on"); }
+      dx.style.transform = "translate(" + (e.clientX - 5) + "px," + (e.clientY - 5) + "px)";
+    }, { passive: true });
+    document.addEventListener("mouseleave", function () { shown = false; document.body.classList.remove("follow-on"); __mx = -999; __my = -999; });
+  })();
+  (function () {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    var t = null;
+    function touch(e) {
+      var th = e.changedTouches && e.changedTouches[0];
+      if (!th) return;
+      if (e.target && e.target.closest && e.target.closest("a,button")) return;
+      __mx = th.clientX; __my = th.clientY;
+      if (t) clearTimeout(t);
+      t = setTimeout(function () { __mx = -999; __my = -999; }, 600);
+    }
+    addEventListener("touchstart", touch, { passive: true });
+    addEventListener("touchmove", touch, { passive: true });
+  })();
+  setTimeout(function () {
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      document.querySelector("h1").classList.add("shimmer");
+      var mn = document.querySelector("main");
+      mn.classList.add("synced");
+      var t0 = performance.now();
+      (function swLoop() {
+        var t = ((performance.now() - t0) % 3200) / 3200;
+        mn.style.setProperty("--sw", t.toFixed(4));
+        requestAnimationFrame(swLoop);
+      })();
+    }
+  }, 1800);
+  document.querySelector(".sub").style.animation = "none";
+  document.querySelector(".sub").style.opacity = "1";
+  document.querySelectorAll(".backrow a, .endpoint button, .topbar button").forEach(function (a) {
+    a.addEventListener("click", function () {
+      try { if (navigator.vibrate && !matchMedia("(prefers-reduced-motion: reduce)").matches) navigator.vibrate(10); } catch (e) {}
+    });
+  });
+  document.getElementById("mcpCopy").addEventListener("click", function () {
+    var u = "https://torob-mcp.mmdju3.workers.dev/mcp";
+    var t = document.getElementById("mcpCopyT");
+    var back = t.textContent;
+    var okT = document.documentElement.lang === "en" ? MCPCOPED_EN : MCPCOPED_FA;
+    function done(ok) { t.textContent = ok ? okT : back; setTimeout(function () { t.textContent = back; }, 1600); }
+    if (navigator.clipboard) { navigator.clipboard.writeText(u).then(function () { done(true); }, function () { done(false); }); return; }
+    var i = document.createElement("input"); i.value = u; document.body.appendChild(i); i.select();
+    try { document.execCommand("copy"); done(true); } catch (err) { done(false); }
+    document.body.removeChild(i);
+  });
+  var SUB_FA = "این آدرس مخصوص اتصال دستیار هوشمنده، نه مرورگر.", SUB_EN = "This address is for your AI assistant, not the browser.";
+  var BACK_FA = "بازگشت به صفحه اصلی", BACK_EN = "Back to home";
+  var MCPCOPY_FA = "کپی", MCPCOPY_EN = "Copy", MCPCOPED_FA = "کپی شد", MCPCOPED_EN = "Copied";
+  var ST1_FA = "۱ · آدرس رو کپی کن", ST1_EN = "1 · Copy the address";
+  var ST2_FA = "۲ · توی کلاینت MCP بذار", ST2_EN = "2 · Paste it in your MCP client";
+  var ST3_FA = "۳ · بدون کلید وصل شو", ST3_EN = "3 · Connect, no key needed";
+  var isEn = false;
+  document.getElementById("langB").addEventListener("click", function () {
+    isEn = !isEn;
+    var L = document.documentElement;
+    L.lang = isEn ? "en" : "fa";
+    L.dir = isEn ? "ltr" : "rtl";
+    document.title = isEn ? "MCP · Torob MCP" : "MCP · Torob MCP";
+    document.getElementById("langB").textContent = isEn ? "FA" : "EN";
+    document.getElementById("mcpSub").textContent = isEn ? SUB_EN : SUB_FA;
+    document.getElementById("mcpCopyT").textContent = isEn ? MCPCOPY_EN : MCPCOPY_FA;
+    document.getElementById("st1").textContent = isEn ? ST1_EN : ST1_FA;
+    document.getElementById("st2").textContent = isEn ? ST2_EN : ST2_FA;
+    document.getElementById("st3").textContent = isEn ? ST3_EN : ST3_FA;
+    document.getElementById("backHome").textContent = isEn ? BACK_EN : BACK_FA;
+    document.getElementById("darkT").textContent = isEn ? (document.body.classList.contains("dark") ? "Light" : "Dark") : (document.body.classList.contains("dark") ? "روشن" : "تیره");
+  });
+  try {
+    if (localStorage.getItem("torob-dark") === "1") document.body.classList.add("dark");
+    else if (!localStorage.getItem("torob-dark") && matchMedia("(prefers-color-scheme: dark)").matches) document.body.classList.add("dark");
+  } catch (e) {}
+  function syncDarkT() { document.getElementById("darkT").textContent = document.documentElement.lang === "en" ? (document.body.classList.contains("dark") ? "Light" : "Dark") : (document.body.classList.contains("dark") ? "روشن" : "تیره"); try { document.getElementById("tcm").content = document.body.classList.contains("dark") ? "#101014" : "#e9e9ef"; } catch (e) {} }
+  syncDarkT();
+  document.getElementById("darkB").addEventListener("click", function () {
+    document.body.classList.toggle("dark");
+    try { localStorage.setItem("torob-dark", document.body.classList.contains("dark") ? "1" : "0"); } catch (e) {}
+    syncDarkT();
+  });
+</script>
+</body>
+</html>

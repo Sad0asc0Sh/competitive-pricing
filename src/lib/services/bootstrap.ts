@@ -5,55 +5,104 @@ import { eq } from "drizzle-orm";
 
 let bootstrapped = false;
 
-/** ایجاد داده‌های پیش‌فرض (پروفایل، کمپین‌ها، زمان‌بندی، کانکتور) — idempotent */
+/** ایجاد داده‌های پیش‌فرض (پروفایل، ۳ سیستم کمپین، زمان‌بندی، کانکتور sgeooole) — idempotent */
 export async function ensureDefaults(): Promise<void> {
   if (bootstrapped) return;
   const profiles = await db.select().from(pricingProfiles).limit(1);
   if (!profiles.length) {
-    await db.insert(pricingProfiles).values({ name: "پروفایل پیش‌فرض", isDefault: true, config: DEFAULT_PROFILE_CONFIG });
+    await db.insert(pricingProfiles).values({
+      name: "پروفایل پیش‌فرض (سود کم، فروش زیاد — ترب و مشهد)",
+      isDefault: true,
+      config: DEFAULT_PROFILE_CONFIG,
+    });
   }
   const camps = await db.select().from(discountCampaigns).limit(1);
   if (!camps.length) {
     await db.insert(discountCampaigns).values([
       {
-        name: "تخفیف لحظه‌ای",
+        name: "پیشنهاد لحظه‌ای (صفحه اصلی)",
         type: "flash",
         active: true,
-        priority: 10,
+        priority: 15,
         minDiscountPct: 12,
-        maxDiscountPct: 100,
+        maxDiscountPct: 45,
         activeHours: [],
         activeDays: [],
         categories: [],
         durationHours: 12,
+        badgeTheme: "gold-red",
+        showInFeatured: false,
+        cardRangeFrom: 1,
+        cardRangeTo: 8,
+        maxCards: 8,
+        minPriceToman: 0,
+        maxPriceToman: 0,
+        onlyTopRanked: true,
+        targetProductIds: [],
       },
       {
-        name: "منتخب / شگفت‌انگیز",
+        name: "پیشنهاد شگفت‌انگیز (صفحه اصلی)",
         type: "featured",
         active: true,
-        priority: 5,
+        priority: 10,
+        minDiscountPct: 6,
+        maxDiscountPct: 45,
+        activeHours: [],
+        activeDays: [],
+        categories: [],
+        durationHours: 48,
+        badgeTheme: "red-purple",
+        showInFeatured: true,
+        cardRangeFrom: 1,
+        cardRangeTo: 20,
+        maxCards: 16,
+        minPriceToman: 0,
+        maxPriceToman: 0,
+        onlyTopRanked: false,
+        targetProductIds: [],
+      },
+      {
+        name: "فروش ویژه زمان‌دار (مالی و تخفیف + منتخب‌ها)",
+        type: "timed_sale",
+        active: true,
+        priority: 8,
         minDiscountPct: 3,
-        maxDiscountPct: 100,
+        maxDiscountPct: 45,
         activeHours: [],
         activeDays: [],
         categories: [],
         durationHours: 72,
+        badgeTheme: "green-orange",
+        showInFeatured: true,
+        cardRangeFrom: 1,
+        cardRangeTo: 100,
+        maxCards: 0,
+        minPriceToman: 0,
+        maxPriceToman: 0,
+        onlyTopRanked: false,
+        targetProductIds: [],
       },
     ]);
   }
   const sch = await db.select().from(schedules).limit(1);
   if (!sch.length) {
     await db.insert(schedules).values({
-      name: "استعلام خودکار هر ۶ ساعت",
-      intervalMinutes: 360,
+      name: "استعلام خودکار هر ۳ ساعت (ترب و مشهد)",
+      intervalMinutes: 180,
       active: true,
       filter: {},
-      nextRunAt: new Date(Date.now() + 360 * 60000),
+      nextRunAt: new Date(Date.now() + 180 * 60000),
     });
   }
   const conn = await db.select().from(storeConnectors).limit(1);
   if (!conn.length) {
     await db.insert(storeConnectors).values([
+      {
+        name: "فروشگاه sgeooole (ekgkala-backend)",
+        type: "sgeooole",
+        active: false,
+        config: { baseUrl: "http://localhost:5000", apiKey: "", adminToken: "" },
+      },
       { name: "ووکامرس", type: "woocommerce", active: false, config: { baseUrl: "", consumerKey: "", consumerSecret: "" } },
       { name: "وب‌هوک عمومی", type: "webhook", active: false, config: { url: "", secret: "" } },
     ]);
@@ -77,7 +126,11 @@ export async function getProfileConfig(profileId?: number | null): Promise<{ id:
 export function mergeConfig(partial: Partial<PricingProfileConfig> | null | undefined): PricingProfileConfig {
   const d = DEFAULT_PROFILE_CONFIG;
   const p = partial ?? {};
+  const pSup = p.supervisor ?? ({} as Partial<PricingProfileConfig["supervisor"]>);
+  const pGates = pSup.gates ?? ({} as Partial<PricingProfileConfig["supervisor"]["gates"]>);
+
   return {
+    sourcing: { ...d.sourcing, ...(p.sourcing ?? {}) },
     filters: { ...d.filters, ...(p.filters ?? {}) },
     outliers: { ...d.outliers, ...(p.outliers ?? {}) },
     aggregation: { ...d.aggregation, ...(p.aggregation ?? {}) },
@@ -86,6 +139,16 @@ export function mergeConfig(partial: Partial<PricingProfileConfig> | null | unde
     guards: { ...d.guards, ...(p.guards ?? {}) },
     discount: { ...d.discount, ...(p.discount ?? {}) },
     rounding: { ...d.rounding, ...(p.rounding ?? {}) },
+    supervisor: {
+      ...d.supervisor,
+      ...pSup,
+      gates: {
+        identity_match: { ...d.supervisor.gates.identity_match, ...(pGates.identity_match ?? {}) },
+        market_data_integrity: { ...d.supervisor.gates.market_data_integrity, ...(pGates.market_data_integrity ?? {}) },
+        profit_and_rank_safety: { ...d.supervisor.gates.profit_and_rank_safety, ...(pGates.profit_and_rank_safety ?? {}) },
+        ceiling_discount_validity: { ...d.supervisor.gates.ceiling_discount_validity, ...(pGates.ceiling_discount_validity ?? {}) },
+      },
+    },
     ai: { ...d.ai, ...(p.ai ?? {}) },
   };
 }
