@@ -3,6 +3,7 @@ import { products } from "@/db/schema";
 import { parseColleaguePriceListText, resolveSupplyCost } from "@/lib/pricing/sourcing";
 import type { SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig } from "@/lib/services/bootstrap";
+import { isAllowedSourceType } from "@/lib/sources/registry";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -41,6 +42,10 @@ export async function PATCH(req: Request, { params }: Ctx) {
     "profileId",
     "status",
   ] as const;
+
+  if ("sourceType" in body && !isAllowedSourceType(String(body.sourceType))) {
+    return NextResponse.json({ error: "منبع استعلام نامعتبر است؛ فقط «ترب» پشتیبانی می‌شود" }, { status: 400 });
+  }
 
   const patch: Record<string, unknown> = {};
   for (const k of allowed) if (k in body) patch[k] = body[k];

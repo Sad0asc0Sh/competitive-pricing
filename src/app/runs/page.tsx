@@ -42,7 +42,40 @@ export default async function RunsPage({ searchParams }: { searchParams: Promise
           {!runs.length && <li className="text-sm text-slate-400">اجرایی ثبت نشده</li>}
         </ul>
       </div>
-      <div className="card overflow-x-auto">
+      <div className="space-y-3 lg:hidden">
+        <h2 className="px-1 font-bold">تصمیم‌های اجرای #{selected ?? "—"}</h2>
+        {decisions.map(({ d, name, sku }) => (
+          <div key={d.id} className="m-row">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <Link href={`/products/${d.productId}`} className="block truncate font-bold text-indigo-700">
+                  {name}
+                </Link>
+                <div className="text-xs text-slate-400">{sku}</div>
+              </div>
+              <span className={`badge ${statusColor[d.status]}`}>{statusLabel[d.status]}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>قیمت نهایی</span>
+              <span className="num font-bold text-emerald-700">{toman(d.finalPrice)}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>مرجع / اصلی</span>
+              <span className="num text-xs">
+                {toman(d.referencePrice)} / {toman(d.basePrice)}
+              </span>
+            </div>
+            <div className="m-row-kv">
+              <span>تخفیف / کمپین / اعتماد</span>
+              <span className="num text-xs">
+                {pct(d.discountPct)} · {campaignLabel[d.campaignType ?? "none"]} · {pct(d.confidence * 100, 0)}
+              </span>
+            </div>
+          </div>
+        ))}
+        {!decisions.length && <div className="empty-state">تصمیمی وجود ندارد</div>}
+      </div>
+      <div className="card hidden lg:block">
         <h2 className="mb-3 font-bold">تصمیم‌های اجرای #{selected ?? "—"}</h2>
         <table className="data">
           <thead>

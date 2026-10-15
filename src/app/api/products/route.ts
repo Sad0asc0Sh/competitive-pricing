@@ -3,6 +3,7 @@ import { products } from "@/db/schema";
 import { parseColleaguePriceListText, resolveSupplyCost } from "@/lib/pricing/sourcing";
 import type { SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig } from "@/lib/services/bootstrap";
+import { isAllowedSourceType } from "@/lib/sources/registry";
 import { desc } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -16,6 +17,9 @@ export async function GET() {
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   if (!body?.sku || !body?.name) return NextResponse.json({ error: "sku و name الزامی است" }, { status: 400 });
+  if (body.sourceType != null && body.sourceType !== "" && !isAllowedSourceType(String(body.sourceType))) {
+    return NextResponse.json({ error: "منبع استعلام نامعتبر است؛ فقط «ترب» پشتیبانی می‌شود" }, { status: 400 });
+  }
   try {
     const { config } = await getProfileConfig(body.profileId ? Number(body.profileId) : null);
     const supplierQuotes: SupplierQuote[] = Array.isArray(body.supplierQuotes)

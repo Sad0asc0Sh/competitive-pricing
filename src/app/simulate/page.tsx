@@ -4,36 +4,15 @@ import { badgeThemeLabel, campaignLabel, strategyLabel } from "@/lib/format";
 import type { CeilingDiscoveryMode, PricingResult, SgeoooleBadgeTheme, SgeoooleCampaignType } from "@/lib/pricing/types";
 import { useState } from "react";
 
-const sampleColleagues = `پخش شرق مشهد, 2320000, مشهد, 9, in, 0
-همکار لاله‌زار تهران, 2290000, تهران, 7, in, 1, 45000
-بازرگانی خراسان, 2350000, مشهد, 8, in, 0
-پخش قدیمی (نامعتبر), 2100000, تهران, 5, in, 14`;
-
-const sampleOffers = `بانه استور (زیر قیمت خرید ما!), 2380000, بانه, 1, online, 4.1
-فروشگاه قدیمی آپدیت‌نشده ۱, 1950000, تهران, 18, online, 4.0
-فروشگاه جا مانده از بازار ۲, 2020000, اصفهان, 2, online, 3.9
-شرق دیجیتال مشهد, 2460000, مشهد, 0, online, 4.9
-پاساژ تک مشهد (حضوری), 2470000, مشهد, 1, in_person, 4.8
-دیجی‌کالا, 2680000, تهران, 0, online, 4.8
-تکنولایف, 2620000, تهران, 0, online, 4.9
-کالاتیک, 2560000, تهران, 0, online, 4.8
-پلازا دیجیتال مشهد, 2590000, مشهد, 1, online, 4.6
-مقداد آی‌تی, 2650000, تهران, 1, online, 4.7
-گران‌فروش پرت ترب, 3650000, تهران, 1, online, 4.2`;
-
 export default function SimulatePage() {
-  const [productName, setProductName] = useState(
-    "دوربین مداربسته تحت شبکه داهوا مدل DH-IPC-HFW1230S-S5 ظرفیت 2 مگاپیکسل",
-  );
-  const [torobTitle, setTorobTitle] = useState(
-    "دوربین مداربسته تحت شبکه داهوا مدل DH-IPC-HFW1230S-S5 ظرفیت 2 مگاپیکسل",
-  );
-  const [colleaguesText, setColleaguesText] = useState(sampleColleagues);
-  const [offersText, setOffersText] = useState(sampleOffers);
-  const [cost, setCost] = useState(2320000);
+  const [productName, setProductName] = useState("");
+  const [torobTitle, setTorobTitle] = useState("");
+  const [colleaguesText, setColleaguesText] = useState("");
+  const [offersText, setOffersText] = useState("");
+  const [cost, setCost] = useState(0);
   const [minMargin, setMinMargin] = useState(3);
   const [current, setCurrent] = useState<string>("");
-  const [sellers, setSellers] = useState(24);
+  const [sellers, setSellers] = useState(0);
 
   // آستانه‌های ناظر بالاسر SubQ SystemOne (پیش‌فرض: زیر 45% رد، 45 تا 80% ریویو، 80% به بالا تایید خودکار)
   const [rejectBelowPct, setRejectBelowPct] = useState(45);
@@ -231,6 +210,7 @@ export default function SimulatePage() {
               dir="ltr"
               value={colleaguesText}
               onChange={(e) => setColleaguesText(e.target.value)}
+              placeholder={"نام همکار, قیمت خرید (تومان), شهر, اولویت 1-10, in|out"}
             />
           </div>
 
@@ -243,6 +223,7 @@ export default function SimulatePage() {
               dir="ltr"
               value={offersText}
               onChange={(e) => setOffersText(e.target.value)}
+              placeholder={"نام فروشگاه, قیمت (تومان), شهر, روزهای گذشته از آخرین تغییر, online|in_person, امتیاز فروشگاه"}
             />
           </div>
 

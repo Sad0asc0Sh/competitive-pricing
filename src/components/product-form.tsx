@@ -104,7 +104,6 @@ export function ProductForm({
         <label className="label">منبع استعلام</label>
         <select className="input" value={v.sourceType} onChange={(e) => set("sourceType", e.target.value)}>
           <option value="torob">ترب (مجهز به Torob MCP و جستجوی خودکار)</option>
-          <option value="mock">شبیه‌ساز بازار ترب (کشوری + مشهد)</option>
         </select>
       </div>
       <div className="md:col-span-2">

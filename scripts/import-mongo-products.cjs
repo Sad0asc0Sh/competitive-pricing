@@ -1,10 +1,18 @@
 const mongoose = require("mongoose");
 const { Pool } = require("pg");
 const path = require("path");
-require("dotenv").config({ path: "/home/debian/apps/ai-driven-competitive-pricing-system/.env" });
+
+// مسیرها از متغیر محیطی خوانده می‌شوند تا اسکریپت به یک سرور/مسیر خاص قفل نباشد؛
+// مقادیر پیش‌فرض همان مسیرهای فعلی سرور دبیان‌اند تا دیپلوهای موجود نشکنند:
+//   PRICING_APP_DIR      پوشه همین سامانه قیمت‌گذاری (حاوی .env)
+//   EKGKALA_BACKEND_DIR  پوشه ekgkala-backend فروشگاه (حاوی .env و models/)
+const PRICING_APP_DIR = process.env.PRICING_APP_DIR || "/home/debian/apps/ai-driven-competitive-pricing-system";
+const EKGKALA_BACKEND_DIR = process.env.EKGKALA_BACKEND_DIR || "/home/debian/apps/ekgkala-project/ekgkala-backend";
+
+require("dotenv").config({ path: path.join(PRICING_APP_DIR, ".env") });
 
 const beEnv = {};
-require("dotenv").config({ path: "/home/debian/apps/ekgkala-project/ekgkala-backend/.env", processEnv: beEnv });
+require("dotenv").config({ path: path.join(EKGKALA_BACKEND_DIR, ".env"), processEnv: beEnv });
 
 async function run() {
   const mongoUri = beEnv.MONGODB_URI || process.env.MONGODB_URI;
@@ -16,8 +24,8 @@ async function run() {
   console.log("Connecting to MongoDB...");
   await mongoose.connect(mongoUri);
 
-  const Product = require("/home/debian/apps/ekgkala-project/ekgkala-backend/models/Product");
-  const Category = require("/home/debian/apps/ekgkala-project/ekgkala-backend/models/Category");
+  const Product = require(path.join(EKGKALA_BACKEND_DIR, "models/Product"));
+  const Category = require(path.join(EKGKALA_BACKEND_DIR, "models/Category"));
 
   console.log("Fetching active products from MongoDB...");
   const mongoProducts = await Product.find({ isActive: true })

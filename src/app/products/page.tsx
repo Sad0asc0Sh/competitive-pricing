@@ -29,7 +29,53 @@ export default async function ProductsPage() {
         <ProductForm />
       </div>
 
-      <div className="card overflow-x-auto">
+      {/* نمای موبایل محصولات: کارت به‌جای جدول ۱۱ ستونه */}
+      <div className="space-y-3 lg:hidden">
+        {rows.map((p, idx) => (
+          <div key={p.id} className="m-row">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <Link href={`/products/${p.id}`} className="block truncate font-bold text-indigo-700">
+                  {p.name}
+                </Link>
+                <div className="text-xs text-slate-400">
+                  کارت #{idx + 1} · {p.sku}
+                  {p.category ? ` · ${p.category}` : ""}
+                </div>
+              </div>
+              <span className={`badge ${statusColor[p.status]}`}>{statusLabel[p.status]}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>منبع استعلام</span>
+              <span>{p.sourceType === "torob" ? "ترب" : p.sourceType}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>کف قطعی فروش</span>
+              <span className="num font-bold text-emerald-700">{toman(p.currentFinalPrice)}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>سقف معیار (خط‌خورده)</span>
+              <span className="num line-through decoration-slate-400">{toman(p.currentBasePrice)}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>تخفیف / سیستم</span>
+              <span className="num font-bold text-rose-600">
+                {pct(p.currentDiscountPct, 0)} · {p.currentCampaignName || campaignLabel[p.currentCampaign ?? "none"]}
+              </span>
+            </div>
+            <div className="m-row-kv">
+              <span>آخرین استعلام</span>
+              <span className="text-xs">{faDate(p.lastCheckedAt)}</span>
+            </div>
+            <div className="mt-3">
+              <RunButton productIds={[p.id]} label="استعلام این کارت" className="btn-secondary w-full" />
+            </div>
+          </div>
+        ))}
+        {!rows.length && <div className="empty-state">محصولی ثبت نشده است</div>}
+      </div>
+
+      <div className="card hidden lg:block">
         <table className="data">
           <thead>
             <tr>
@@ -61,7 +107,7 @@ export default async function ProductsPage() {
                     {p.category ? ` · ${p.category}` : ""}
                   </div>
                 </td>
-                <td>{p.sourceType === "torob" ? "ترب" : p.sourceType === "mock" ? "شبیه‌ساز" : p.sourceType}</td>
+                <td>{p.sourceType === "torob" ? "ترب" : p.sourceType}</td>
                 <td className="num">{toman(p.costPrice || p.currentHardFloorPrice)}</td>
                 <td className="num line-through decoration-slate-400">{toman(p.currentBasePrice)}</td>
                 <td className="num font-bold text-emerald-700">{toman(p.currentFinalPrice)}</td>

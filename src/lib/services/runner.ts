@@ -5,7 +5,7 @@ import { pickCampaign } from "@/lib/pricing/campaigns";
 import { runPricingPipeline } from "@/lib/pricing/engine";
 import { enrichSupervisorWithSubqApi } from "@/lib/pricing/systemone-supervisor";
 import type { RawOffer, SupplierQuote } from "@/lib/pricing/types";
-import { fetchFromSource } from "@/lib/sources/registry";
+import { fetchFromSource, isAllowedSourceType } from "@/lib/sources/registry";
 import { pushToStore } from "@/lib/store/connectors";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { ensureDefaults, getProfileConfig, logActivity } from "./bootstrap";
@@ -67,33 +67,43 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
   const campaigns = await db.select().from(discountCampaigns);
   const allocatedCounts: Record<number, number> = {};
 
-  for (let idx = 0; idx < targets.length; idx++) {
-    const product = targets[idx];
-    const cardIndex = (opts.cardRangeFrom ? Math.max(1, opts.cardRangeFrom) : 1) + idx;
-    try {
-      const decisionId = await priceOneProduct(
-        product,
-        run.id,
-        campaigns,
-        cardIndex,
-        allocatedCounts,
-        opts.manualOffers,
-        opts.manualSupplierQuotes,
-      );
-      summary.decisionIds.push(decisionId.id);
-      if (decisionId.status === "applied") summary.applied++;
-      else if (decisionId.status === "pending_review") summary.pendingReview++;
-      else summary.failed++;
-    } catch (e) {
-      summary.failed++;
-      await logActivity(
-        "runner",
-        `خطا در قیمت‌گذاری محصول ${product.sku}: ${e instanceof Error ? e.message : String(e)}`,
-        { productId: product.id },
-        "error",
-      );
+  // پردازش موازی محدود (پیش‌فرض ۳ محصول هم‌زمان، با PRICING_RUN_CONCURRENCY قابل تنظیم ۱..۸).
+  // تخصیص کمپین (pickCampaign + افزایش allocatedCounts) کاملاً همگام (بدون await در میان) انجام
+  // می‌شود، پس سقف maxCards کمپین‌ها در اجرای موازی هم دقیق می‌ماند؛ با مقدار ۱ رفتار کاملاً ترتیبی قبلی برمی‌گردد.
+  const concurrency = Math.max(1, Math.min(8, Number(process.env.PRICING_RUN_CONCURRENCY ?? 3) || 3));
+  let nextIdx = 0;
+  const worker = async () => {
+    for (;;) {
+      const idx = nextIdx++;
+      if (idx >= targets.length) return;
+      const product = targets[idx];
+      const cardIndex = (opts.cardRangeFrom ? Math.max(1, opts.cardRangeFrom) : 1) + idx;
+      try {
+        const decisionId = await priceOneProduct(
+          product,
+          run.id,
+          campaigns,
+          cardIndex,
+          allocatedCounts,
+          opts.manualOffers,
+          opts.manualSupplierQuotes,
+        );
+        summary.decisionIds.push(decisionId.id);
+        if (decisionId.status === "applied") summary.applied++;
+        else if (decisionId.status === "pending_review") summary.pendingReview++;
+        else summary.failed++;
+      } catch (e) {
+        summary.failed++;
+        await logActivity(
+          "runner",
+          `خطا در قیمت‌گذاری محصول ${product.sku}: ${e instanceof Error ? e.message : String(e)}`,
+          { productId: product.id },
+          "error",
+        );
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, targets.length)) }, () => worker()));
 
   await db
     .update(priceRuns)
@@ -123,6 +133,15 @@ async function priceOneProduct(
   manualOffers?: RawOffer[],
   manualSupplierQuotes?: SupplierQuote[],
 ): Promise<{ id: number; status: string }> {
+  // گارد سیستم واقعی: فقط منبع واقعی ترب (یا پیشنهادهای دستی همین اجرا) مجاز است.
+  // محصولات قدیمی با منبع حذف‌شده/شبیه‌سازی (مثل mock) هرگز تصمیم قیمتی نمی‌گیرند
+  // و قیمتشان به فروشگاه ارسال نمی‌شود؛ اجرا برای آن‌ها با خطای شفاف متوقف می‌شود.
+  if (!manualOffers?.length && !isAllowedSourceType(product.sourceType)) {
+    throw new Error(
+      `منبع «${product.sourceType}» برای محصول ${product.sku} مجاز نیست؛ فقط منبع واقعی «ترب» پشتیبانی می‌شود. منبع محصول را از صفحه محصولات اصلاح کنید.`,
+    );
+  }
+
   const { config } = await getProfileConfig(product.profileId);
   const supplierQuotes = manualSupplierQuotes ?? product.supplierQuotes ?? [];
 
@@ -351,6 +370,9 @@ export async function applyDecision(decisionId: number, campaignEndsAt?: Date | 
   if (!d || !d.finalPrice || !d.basePrice) return { ok: false, message: "تصمیم نامعتبر" };
   const [p] = await db.select().from(products).where(eq(products.id, d.productId)).limit(1);
   if (!p) return { ok: false, message: "محصول یافت نشد" };
+  if (d.source !== "torob" && d.source !== "manual") {
+    return { ok: false, message: `اعمال تصمیم با منبع «${d.source}» ممنوع است؛ فقط تصمیم‌های مبتنی بر داده واقعی ترب یا ورود دستی مجاز به ارسال به فروشگاه‌اند` };
+  }
 
   const effectiveCost = d.effectiveCostPrice ?? p.costPrice ?? 0;
   if (effectiveCost > 0 && d.finalPrice <= effectiveCost) {

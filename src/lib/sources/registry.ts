@@ -1,5 +1,4 @@
 import type { RawOffer, SourceResult } from "@/lib/pricing/types";
-import { mockAdapter } from "./mock";
 import { torobAdapter } from "./torob";
 import type { PriceSourceAdapter, SourceProduct } from "./types";
 
@@ -15,9 +14,19 @@ export function manualSource(offers: RawOffer[], totalSellerCount?: number): Sou
   };
 }
 
+/**
+ * تنها منبع واقعی مجاز در محیط تولید: ترب.
+ * منبع شبیه‌سازی (mock) به‌طور کامل حذف شده است تا هیچ تصمیم قیمتی
+ * بر اساس داده ساختگی گرفته یا به فروشگاه ارسال نشود.
+ */
+export const ALLOWED_SOURCE_TYPES = ["torob"] as const;
+
+export function isAllowedSourceType(sourceType: string): boolean {
+  return (ALLOWED_SOURCE_TYPES as readonly string[]).includes(sourceType);
+}
+
 const adapters: Record<string, PriceSourceAdapter> = {
   torob: torobAdapter,
-  mock: mockAdapter,
 };
 
 export function getAdapter(sourceType: string): PriceSourceAdapter | null {
@@ -35,7 +44,7 @@ export async function fetchFromSource(product: SourceProduct, manualOffers?: Raw
   if (manualOffers && manualOffers.length) return manualSource(manualOffers);
   const adapter = getAdapter(product.sourceType);
   if (!adapter) {
-    return { source: product.sourceType, offers: [], totalSellerCount: 0, fetchedAt: new Date(), ok: false, error: "منبع ناشناخته" };
+    return { source: product.sourceType, offers: [], totalSellerCount: 0, fetchedAt: new Date(), ok: false, error: "منبع ناشناخته یا غیرمجاز (فقط ترب پشتیبانی می‌شود)" };
   }
   try {
     return await adapter.fetchOffers(product);

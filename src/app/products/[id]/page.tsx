@@ -140,7 +140,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       )}
 
       {offers.length > 0 && (
-        <div className="card overflow-x-auto">
+        <div className="card table-wrap">
           <h2 className="mb-3 font-bold">پیشنهادهای رقبا در ترب ({faNum(offers.length)})</h2>
           <table className="data">
             <thead>
@@ -201,7 +201,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         </div>
       )}
 
-      <div className="card overflow-x-auto">
+      <div className="card table-wrap">
         <h2 className="mb-3 font-bold">تاریخچه تصمیم‌ها</h2>
         <table className="data">
           <thead>

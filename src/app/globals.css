@@ -2,60 +2,132 @@
 
 :root {
   font-family: Vazirmatn, "Segoe UI", Tahoma, sans-serif;
+  --brand: #4f46e5;
+  --brand-strong: #4338ca;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   font-family: Vazirmatn, "Segoe UI", Tahoma, sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #c7d2fe;
+  color: #1e1b4b;
+}
+
+/* اسکرول‌بار باریک و هم‌رنگ سیستم */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
 }
 
 .num {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- کارت ---------- */
 .card {
-  @apply rounded-2xl border border-slate-200 bg-white p-5 shadow-sm;
+  @apply rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.05)] sm:p-5;
 }
 
+/* ---------- دکمه‌ها ---------- */
 .btn-primary,
 .btn-secondary,
 .btn-danger,
 .btn-success {
-  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold whitespace-nowrap transition select-none disabled:cursor-not-allowed disabled:opacity-50;
 }
 .btn-primary {
-  @apply bg-indigo-600 text-white hover:bg-indigo-700;
+  @apply bg-indigo-600 text-white shadow-sm shadow-indigo-200 hover:bg-indigo-700 active:bg-indigo-800;
 }
 .btn-secondary {
-  @apply border border-slate-300 bg-white text-slate-800 hover:bg-slate-50;
+  @apply border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50 active:bg-slate-100;
 }
 .btn-danger {
-  @apply bg-rose-600 text-white hover:bg-rose-700;
+  @apply bg-rose-600 text-white shadow-sm shadow-rose-200 hover:bg-rose-700 active:bg-rose-800;
 }
 .btn-success {
-  @apply bg-emerald-600 text-white hover:bg-emerald-700;
+  @apply bg-emerald-600 text-white shadow-sm shadow-emerald-200 hover:bg-emerald-700 active:bg-emerald-800;
 }
 
+/* ---------- فرم ---------- */
 .input {
-  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100;
+  @apply min-h-10 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm transition outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100;
 }
 .label {
-  @apply mb-1 block text-xs font-medium text-slate-600;
+  @apply mb-1.5 block text-xs font-semibold text-slate-600;
 }
 
 .badge {
-  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap;
+}
+
+/* ---------- جدول داده ---------- */
+/* هر جدول باید داخل .table-wrap قرار گیرد تا روی موبایل افقی اسکرول شود و هدر ثابت بماند */
+.table-wrap {
+  @apply -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0;
+  -webkit-overflow-scrolling: touch;
+}
+.card > .table-wrap,
+.card.table-wrap {
+  @apply overflow-x-auto;
 }
 
 table.data {
-  @apply w-full text-sm;
+  @apply w-full border-separate text-sm;
+  border-spacing: 0;
 }
 table.data th {
-  @apply bg-slate-50 px-3 py-2 text-right text-xs font-semibold text-slate-600;
+  @apply sticky top-0 z-10 bg-slate-50 px-3 py-2.5 text-right text-xs font-bold whitespace-nowrap text-slate-600;
 }
 table.data td {
-  @apply border-t border-slate-100 px-3 py-2 align-middle;
+  @apply px-3 py-2.5 align-middle;
+}
+table.data tbody tr {
+  @apply border-t border-slate-100 transition hover:bg-indigo-50/40;
+}
+table.data tbody td {
+  border-top: 1px solid #f1f5f9;
 }
 
+/* ---------- کارت موبایل برای ردیف‌های جدول (نمای جایگزین روی صفحه کوچک) ---------- */
+.m-row {
+  @apply rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.05)];
+}
+.m-row-kv {
+  @apply flex items-center justify-between gap-3 py-1.5 text-sm;
+}
+.m-row-kv > span:first-child {
+  @apply shrink-0 text-xs text-slate-500;
+}
+.m-row-kv > span:last-child {
+  @apply text-left font-medium;
+}
+
+/* ---------- حالت‌های بارگذاری و خالی ---------- */
+.skeleton {
+  @apply animate-pulse rounded-xl bg-slate-100;
+}
+.empty-state {
+  @apply rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center text-sm text-slate-400;
+}
+
+/* ---------- متن مستندات ---------- */
 .prose-fa h2 {
   @apply mt-8 mb-3 text-xl font-bold text-slate-900;
 }

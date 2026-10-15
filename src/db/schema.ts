@@ -39,7 +39,7 @@ export const products = pgTable(
     category: text("category"),
     /** شناسه محصول در فروشگاه (مثلاً _id یا productCode در sgeooole یا ID ووکامرس) */
     storeExternalId: text("store_external_id"),
-    /** منبع استعلام: torob | mock | manual */
+    /** منبع استعلام: torob (تنها منبع واقعی) | manual (ورود دستی هنگام اجرا) */
     sourceType: varchar("source_type", { length: 30 }).default("torob").notNull(),
     torobUrl: text("torob_url"),
     torobPrk: text("torob_prk"),

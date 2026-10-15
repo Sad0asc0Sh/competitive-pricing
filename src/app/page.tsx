@@ -87,7 +87,54 @@ export default async function DashboardPage() {
         })}
       </div>
 
-      <div className="card overflow-x-auto">
+      {/* نمای موبایل آخرین تصمیم‌ها: کارت به‌جای جدول ۱۰ ستونه */}
+      <div className="space-y-3 md:hidden">
+        <h2 className="px-1 font-bold">آخرین تصمیم‌های موتور</h2>
+        {recentDecisions.map(({ d, name, sku }) => (
+          <div key={d.id} className="m-row">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <Link href={`/products/${d.productId}`} className="block truncate font-bold text-indigo-700">
+                  {name}
+                </Link>
+                <div className="text-xs text-slate-400">{sku}</div>
+              </div>
+              <span className={`badge ${statusColor[d.status]}`}>{statusLabel[d.status]}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>کف قطعی ما</span>
+              <span className="num font-bold text-emerald-700">{toman(d.finalPrice)}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>سقف معیار (خط‌خورده)</span>
+              <span className="num line-through decoration-slate-400">{toman(d.basePrice)}</span>
+            </div>
+            <div className="m-row-kv">
+              <span>تخفیف / سیستم</span>
+              <span className="num font-bold text-rose-600">
+                {pct(d.discountPct, 0)} · {campaignLabel[d.campaignType ?? "none"]}
+              </span>
+            </div>
+            <div className="m-row-kv">
+              <span>کف مشهد / ترب</span>
+              <span className="num text-xs">
+                {toman(d.localLowestValid)} / {toman(d.lowestValid)}
+              </span>
+            </div>
+            <div className="m-row-kv">
+              <span>سود خالص</span>
+              <span className="num text-xs">
+                {toman(d.netProfitToman)} ({pct(d.netMarginPct)})
+              </span>
+            </div>
+          </div>
+        ))}
+        {!recentDecisions.length && (
+          <div className="empty-state">هنوز تصمیمی ثبت نشده. از صفحه محصولات یک محصول اضافه کنید یا رنج کارت‌ها را استعلام کنید.</div>
+        )}
+      </div>
+
+      <div className="card hidden md:block">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-bold">
             آخرین تصمیم‌های موتور (کشف سقف واقعی بازار بدون پرت → اعمال درصد تخفیف روی کف رقابتی)
