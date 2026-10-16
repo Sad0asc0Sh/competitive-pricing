@@ -1,3 +1,5 @@
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
+
 module.exports = {
   apps: [
     {
@@ -7,6 +9,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: 3005,
+        TOROB_API_BASE: process.env.TOROB_API_BASE || "",
       },
       autorestart: true,
       max_memory_restart: "250M",
