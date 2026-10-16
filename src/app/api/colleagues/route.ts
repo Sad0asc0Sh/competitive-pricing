@@ -47,7 +47,9 @@ export async function POST(req: Request) {
   if (!body) return NextResponse.json({ error: "بدنه درخواست نامعتبر است" }, { status: 400 });
 
   const defaultSupplier = body.defaultSupplierName?.trim() || "همکار اصلی";
-  const defaultCity = body.defaultSupplierCity?.trim() || "مشهد";
+  // شهر نامشخص را «نامعلوم» نگه می‌داریم و به‌درستی «مشهد» یا هر شهر دیگری جعل نمی‌کنیم
+  // (شهر ساختگی می‌توانست ترجیح همکار همشهری در موتور تامین را منحرف کند).
+  const defaultCity = body.defaultSupplierCity?.trim() || null;
   const defaultCurrency = body.defaultCurrency ?? "auto";
   const now = new Date();
 

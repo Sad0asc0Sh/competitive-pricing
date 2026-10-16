@@ -81,11 +81,14 @@ function Brand() {
 export function AppShell({ children, authEnabled }: { children: ReactNode; authEnabled: boolean }) {
   const pathname = usePathname() ?? "/";
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [prevPathname, setPrevPathname] = useState(pathname);
 
   // با هر جابه‌جایی بین صفحات، دراور موبایل بسته شود
-  useEffect(() => {
-    setDrawerOpen(false);
-  }, [pathname]);
+  // (الگوی رسمی React برای همگام‌سازی state با prop: تنظیم state در حین رندر به‌جای افکت)
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
+    if (drawerOpen) setDrawerOpen(false);
+  }
 
   // قفل اسکرول بدنه + بستن با Escape وقتی دراور باز است
   useEffect(() => {

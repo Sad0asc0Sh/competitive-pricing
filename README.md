@@ -71,7 +71,7 @@ git push -u origin main --force
 ```bash
 cd /home/debian/apps/ai-driven-competitive-pricing-system
 
-# ۱. اجرای فوری ۱۴ تست موتور (حتی قبل از npm install کار می‌کند!)
+# ۱. اجرای فوری ۱۷ تست موتور (حتی قبل از npm install کار می‌کند!)
 node --test tests/pricing-engine.test.cjs
 
 # ۲. کپی فایل تنظیمات محیطی و نصب پکیج‌ها
@@ -88,3 +88,7 @@ npm run build
 sudo -u debian pm2 start ecosystem.config.cjs
 sudo -u debian pm2 save
 ```
+
+> **ثبت توکن‌های AI بدون دست‌زدن به `.env`:** پس از بالا آمدن پنل، از مسیر «تنظیمات → هوش مصنوعی و توکن‌های API» توکن ناظر SubQ SystemOne و هوش مصنوعی مکمل (OpenAI-compatible) را وارد و ذخیره کنید.
+> مقادیر در دیتابیس ذخیره می‌شوند، اولویت بالاتری از `.env` دارند و با دکمه «تست اتصال زنده» همان لحظه صحت توکن و آدرس سرور بررسی می‌شود.
+> بدون توکن SubQ، موتور با «ناظر آنی محلی» کار می‌کند و در حالت «فقط API رسمی»، قطعی ارتباط هرگز به اعمال خودکار قیمت منجر نمی‌شود (پرونده به بخش ریویو می‌رود).

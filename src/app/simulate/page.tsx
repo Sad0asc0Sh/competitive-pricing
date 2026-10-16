@@ -49,17 +49,22 @@ export default function SimulatePage() {
       .split("\n")
       .map((l) => l.split(",").map((s) => s.trim()))
       .filter((p) => p.length >= 2 && Number(p[1]) > 0)
-      .map((p) => ({
-        shopName: p[0],
-        price: Number(p[1]),
-        shopCity: p[2] || "تهران",
-        lastChangedDaysAgo: p[3] ? Number(p[3]) : 0,
-        sellerType: p[4] === "in_person" ? ("in_person" as const) : ("online" as const),
-        isAd: p[4] === "ad",
-        inStock: p[4] !== "out",
-        priceUnreliable: p[4] === "unreliable",
-        shopScore: p[5] ? Number(p[5]) : 4.5,
-      }));
+      .map((p) => {
+        const days = p[3] ? Number(p[3]) : NaN;
+        const score = p[5] ? Number(p[5]) : NaN;
+        return {
+          shopName: p[0],
+          price: Number(p[1]),
+          // مقادیر واردنشده «نامعلوم» می‌مانند (null) و هیچ شهر/امتیاز ساختگی جای‌گذاری نمی‌شود
+          shopCity: p[2] || null,
+          lastChangedDaysAgo: Number.isFinite(days) ? days : null,
+          sellerType: p[4] === "in_person" ? ("in_person" as const) : ("online" as const),
+          isAd: p[4] === "ad",
+          inStock: p[4] !== "out",
+          priceUnreliable: p[4] === "unreliable",
+          shopScore: Number.isFinite(score) ? score : null,
+        };
+      });
 
     const r = await fetch("/api/simulate", {
       method: "POST",
@@ -185,12 +190,17 @@ export default function SimulatePage() {
                     type="button"
                     className="text-[11px] text-rose-600 hover:underline"
                     onClick={() => {
-                      const bad = "پایه و کاور دوربین مداربسته داهوا مدل HFW1230S";
+                      if (!productName.trim()) {
+                        setErr("برای تست گیت تطابق، ابتدا نام محصول خودمان را وارد کنید");
+                        return;
+                      }
+                      // سناریوی تست گیت تطابق هویت: عنوانی کاملاً نامرتبط با کالای ما
+                      const bad = "لوازم جانبی نامرتبط و متفرقه (کالای تستی گیت هویت)";
                       setTorobTitle(bad);
                       run(false, bad);
                     }}
                   >
-                    تست ورودی اشتباه (پایه دوربین → رد زیر ۴۵٪)
+                    تست ورودی اشتباه (کالای نامرتبط → رد شدن گیت تطابق)
                   </button>
                 </div>
                 <input

@@ -3,7 +3,7 @@ import { activityLogs, priceDecisions, priceRuns, products, schedules } from "@/
 import { CardRangeRunner, RunButton } from "@/components/actions";
 import { campaignColor, campaignLabel, faDate, faNum, pct, statusColor, statusLabel, strategyLabel, toman } from "@/lib/format";
 import { ensureDefaults } from "@/lib/services/bootstrap";
-import { getAIStatus } from "@/lib/ai/client";
+import { getAIStatus } from "@/lib/ai/config";
 import { getStoreStatus } from "@/lib/store/connectors";
 import { count, desc, eq, sql } from "drizzle-orm";
 import Link from "next/link";
@@ -32,7 +32,7 @@ export default async function DashboardPage() {
   ]);
 
   const nextRun = sch.map((s) => s.nextRunAt).filter(Boolean).sort((a, b) => a!.getTime() - b!.getTime())[0];
-  const aiStatus = getAIStatus();
+  const aiStatus = await getAIStatus();
   let storeStatus = null;
   try {
     storeStatus = await getStoreStatus();
@@ -48,17 +48,23 @@ export default async function DashboardPage() {
             مرکز فرماندهی قیمت‌گذاری، کشف کف و سقف بازار و ۳ سیستم تخفیف (sgeooole · ترب و مشهد)
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            استعلام خودکار بعدی: <b>{faDate(nextRun)}</b> · هوش مصنوعی:{" "}
-            {aiStatus.aiEnabled ? (
-              <span className="text-emerald-600">فعال ({aiStatus.aiModel})</span>
+            استعلام خودکار بعدی: <b>{faDate(nextRun)}</b> · هوش مصنوعی مکمل:{" "}
+            {aiStatus.ai.configured ? (
+              <span className="text-emerald-600">
+                فعال ({aiStatus.ai.model}
+                {aiStatus.ai.source === "db" ? " · توکن از پنل تنظیمات" : " · توکن از .env"})
+              </span>
             ) : (
-              <span className="text-amber-600">غیرفعال (AI_API_KEY در .env تنظیم نشده)</span>
+              <span className="text-amber-600">غیرفعال — کلید را از صفحه تنظیمات ثبت کنید</span>
             )}{" "}
-            · ناظر SubQ:{" "}
-            {aiStatus.subqEnabled ? (
-              <span className="text-emerald-600">متصل ({aiStatus.subqModel})</span>
+            · ناظر SubQ SystemOne:{" "}
+            {aiStatus.subq.configured ? (
+              <span className="text-emerald-600">
+                متصل ({aiStatus.subq.model}
+                {aiStatus.subq.source === "db" ? " · توکن از پنل تنظیمات" : " · توکن از .env"})
+              </span>
             ) : (
-              <span className="text-slate-500">موتور آنی محلی (SUBQ_API_KEY تنظیم نشده)</span>
+              <span className="text-slate-500">موتور آنی محلی — توکن SubQ از صفحه تنظیمات ثبت نشده</span>
             )}{" "}
             · فروشگاه:{" "}
             {storeStatus?.activeType ? (
@@ -208,7 +214,8 @@ export default async function DashboardPage() {
                 </td>
                 <td className="num">
                   <span className="badge bg-indigo-50 text-indigo-800">
-                    مشهد #{faNum(d.projectedLocalRank ?? 1)} | ترب #{faNum(d.projectedNationalRank ?? 1)}
+                    مشهد {d.projectedLocalRank != null ? `#${faNum(d.projectedLocalRank)}` : "—"} | ترب{" "}
+                    {d.projectedNationalRank != null ? `#${faNum(d.projectedNationalRank)}` : "—"}
                   </span>
                 </td>
                 <td className="num text-xs font-medium">

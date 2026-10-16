@@ -70,7 +70,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   );
   let identityMatchScorePct = 92;
 
-  if (source.productTitle && ctx.productName && ctx.productName !== "شبیه‌سازی") {
+  if (source.productTitle && ctx.productName) {
     const idRej = cfg.supervisor?.gates?.identity_match?.rejectBelowPct ?? cfg.supervisor?.rejectBelowPct ?? 45;
     const idApp = cfg.supervisor?.gates?.identity_match?.approveAbovePct ?? cfg.supervisor?.approveAbovePct ?? 80;
 
@@ -164,9 +164,10 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     data: { ...reasonCounts, localValidBeforeOutlier },
   });
 
-  const lowestRaw = source.offers.length
-    ? Math.min(...source.offers.filter((o) => o.price > 0).map((o) => o.price))
-    : null;
+  const positiveRawPrices = source.offers
+    .map((o) => o.price)
+    .filter((p) => Number.isFinite(p) && p > 0);
+  const lowestRaw = positiveRawPrices.length ? Math.min(...positiveRawPrices) : null;
 
   // ---------- 3) حذف هوشمند داده‌های پرت و فروشندگان غیربه‌روز
   const outlierReport = removeOutliers(offers, cfg.outliers, {
@@ -347,7 +348,9 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         strategy: "no_data",
         confidence: 0,
         needsReview: true,
-        rejectedBySupervisor: true,
+        // فقط وقتی ناظر بالاسر فعال است و خودش رد کرده، «رد توسط ناظر» ثبت می‌شود؛
+        // در غیر این صورت این مورد در دسته «ناموفق/بدون داده» می‌ماند و به‌عنوان رد ناظر نمایش داده نمی‌شود.
+        rejectedBySupervisor: emptySupervisor.enabled && emptySupervisor.verdict === "reject",
         reviewReasons: [...reviewReasons, "نه داده بازار موجود است و نه قیمت خرید/تامین"],
         steps,
       };

@@ -180,6 +180,9 @@ export interface SystemOneSupervisorReport {
   enabled: boolean;
   provider: "subq_systemone_api" | "systemone_local_instant";
   model: string;
+  /** وضعیت اتصال واقعی به API ناظر: غیرفعال | بدون توکن | موفق | خطا */
+  apiStatus?: "disabled" | "not_configured" | "ok" | "error";
+  apiError?: string;
   overallNoul: number;
   overallScorePct: number;
   rejectBelowPct: number;

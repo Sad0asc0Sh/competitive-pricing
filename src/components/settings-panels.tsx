@@ -1,6 +1,7 @@
 "use client";
 
 import type { PricingProfile, Schedule, StoreConnector } from "@/db/schema";
+import type { AIStatus, ProviderStatus } from "@/lib/ai/config";
 import { DEFAULT_PROFILE_CONFIG, type PricingProfileConfig, type SystemOneGateThresholdConfig } from "@/lib/pricing/types";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
@@ -484,6 +485,197 @@ export function ProfileEditor({ profiles }: { profiles: PricingProfile[] }) {
             )}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- هوش مصنوعی و توکن‌های API ---------------- */
+interface ProviderDraft {
+  enabled: boolean;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+}
+
+function sourceLabel(source: ProviderStatus["source"]): string {
+  if (source === "db") return "توکن ذخیره‌شده در پنل (دیتابیس)";
+  if (source === "env") return "توکن از متغیرهای محیطی (.env)";
+  return "بدون توکن";
+}
+
+function ProviderCard({
+  title,
+  desc,
+  status,
+  draft,
+  onChange,
+  onSave,
+  onTest,
+  onClear,
+  pending,
+  keyPlaceholder,
+}: {
+  title: string;
+  desc: string;
+  status: ProviderStatus;
+  draft: ProviderDraft;
+  onChange: (d: ProviderDraft) => void;
+  onSave: () => void;
+  onTest: () => void;
+  onClear: () => void;
+  pending: boolean;
+  keyPlaceholder: string;
+}) {
+  return (
+    <div className={`card ${status.configured ? "border-emerald-300" : "border-amber-300"}`}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="font-bold">{title}</h3>
+        {status.configured ? (
+          <span className="badge bg-emerald-100 text-emerald-700">توکن ثبت شده</span>
+        ) : (
+          <span className="badge bg-amber-100 text-amber-700">بدون توکن</span>
+        )}
+      </div>
+      <p className="mb-3 text-xs leading-5 text-slate-500">{desc}</p>
+      <div className="mb-3 space-y-1 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+        <div>
+          منبع: <b>{sourceLabel(status.source)}</b>
+          {status.apiKeyHint && (
+            <>
+              {" "}
+              · توکن فعلی: <code dir="ltr">{status.apiKeyHint}</code>
+            </>
+          )}
+        </div>
+        <div>
+          آدرس مؤثر: <code dir="ltr">{status.baseUrl}</code> · مدل مؤثر: <code dir="ltr">{status.model}</code>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+          <input type="checkbox" checked={draft.enabled} onChange={(e) => onChange({ ...draft, enabled: e.target.checked })} />
+          <span>{draft.enabled ? "فعال" : "غیرفعال"}</span>
+        </label>
+        <div>
+          <label className="label">توکن API (خالی بگذارید تا تغییر نکند)</label>
+          <input
+            className="input"
+            dir="ltr"
+            type="password"
+            autoComplete="off"
+            placeholder={status.apiKeyHint || keyPlaceholder}
+            value={draft.apiKey}
+            onChange={(e) => onChange({ ...draft, apiKey: e.target.value })}
+          />
+        </div>
+        <div className="grid gap-2 md:grid-cols-2">
+          <div>
+            <label className="label">آدرس سرور (Base URL)</label>
+            <input className="input text-xs" dir="ltr" value={draft.baseUrl} onChange={(e) => onChange({ ...draft, baseUrl: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">مدل</label>
+            <input className="input text-xs" dir="ltr" value={draft.model} onChange={(e) => onChange({ ...draft, model: e.target.value })} />
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button className="btn-primary" disabled={pending} onClick={onSave}>
+          💾 ذخیره
+        </button>
+        <button className="btn-secondary" disabled={pending} onClick={onTest}>
+          🔌 تست اتصال زنده
+        </button>
+        <button className="btn-danger" disabled={pending || status.source !== "db"} onClick={onClear}>
+          پاک‌کردن توکن ذخیره‌شده
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function AISettingsPanel({ initial }: { initial: AIStatus }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [status, setStatus] = useState<AIStatus>(initial);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [ai, setAi] = useState<ProviderDraft>({
+    enabled: initial.ai.enabled,
+    apiKey: "",
+    baseUrl: initial.ai.baseUrl,
+    model: initial.ai.model,
+  });
+  const [subq, setSubq] = useState<ProviderDraft>({
+    enabled: initial.subq.enabled,
+    apiKey: "",
+    baseUrl: initial.subq.baseUrl,
+    model: initial.subq.model,
+  });
+
+  const call = (provider: "ai" | "subq", action: "save" | "test" | "clear", draft: ProviderDraft) =>
+    start(async () => {
+      setMsg(null);
+      const payload =
+        action === "clear"
+          ? { provider, action: "save" as const, clearApiKey: true }
+          : action === "test"
+            ? { provider, action, apiKey: draft.apiKey || undefined, baseUrl: draft.baseUrl, model: draft.model, enabled: draft.enabled }
+            : { provider, action, apiKey: draft.apiKey || undefined, baseUrl: draft.baseUrl, model: draft.model, enabled: draft.enabled };
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; message?: string; all?: AIStatus; status?: ProviderStatus }
+        | null;
+      if (!res.ok) {
+        setMsg({ ok: false, text: data?.error ?? "خطا در ارتباط با سرور" });
+        return;
+      }
+      if (data?.all) setStatus(data.all);
+      if (action === "test") setMsg({ ok: Boolean(data?.ok), text: data?.message ?? "—" });
+      else if (action === "clear") setMsg({ ok: true, text: "توکن ذخیره‌شده پاک شد؛ در صورت وجود، مقدار .env جایگزین می‌شود" });
+      else setMsg({ ok: true, text: "پیکربندی با موفقیت در دیتابیس ذخیره شد" });
+      setAi((s) => ({ ...s, apiKey: "" }));
+      setSubq((s) => ({ ...s, apiKey: "" }));
+      router.refresh();
+    });
+
+  return (
+    <div className="space-y-3">
+      {msg && (
+        <div className={`rounded-lg border p-2 text-xs font-medium ${msg.ok ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-rose-300 bg-rose-50 text-rose-800"}`}>
+          {msg.ok ? "✅ " : "❌ "}
+          {msg.text}
+        </div>
+      )}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ProviderCard
+          title="هوش مصنوعی مکمل (OpenAI-compatible)"
+          desc="برای استخراج پیشنهادها از HTML، نظر دوم روی تصمیم‌های کم‌اعتماد و تأیید تطابق کالا. با هر سرویس سازگار با OpenAI (OpenAI, OpenRouter, Groq, Ollama و ...) کار می‌کند."
+          status={status.ai}
+          draft={ai}
+          onChange={setAi}
+          onSave={() => call("ai", "save", ai)}
+          onTest={() => call("ai", "test", ai)}
+          onClear={() => call("ai", "clear", ai)}
+          pending={pending}
+          keyPlaceholder="sk-..."
+        />
+        <ProviderCard
+          title="ناظر و تصمیم‌گیرنده بالاسر SubQ SystemOne"
+          desc="تصمیم‌گیرنده اصلی موتور (قانون ۳ بازه‌ای رد/ریویو/تأیید خودکار). توکن از این‌جا در دیتابیس ذخیره می‌شود و همان لحظه در همه استعلام‌ها (اجرای زمان‌بندی، دستی و API) استفاده می‌شود."
+          status={status.subq}
+          draft={subq}
+          onChange={setSubq}
+          onSave={() => call("subq", "save", subq)}
+          onTest={() => call("subq", "test", subq)}
+          onClear={() => call("subq", "clear", subq)}
+          pending={pending}
+          keyPlaceholder="SUBQ_API_KEY"
+        />
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { runPricingPipeline } from "@/lib/pricing/engine";
 import { parseColleaguePriceListText } from "@/lib/pricing/sourcing";
 import { enrichSupervisorWithSubqApi } from "@/lib/pricing/systemone-supervisor";
+import { resolveSubqRuntime } from "@/lib/ai/config";
 import type { RawOffer, SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig, mergeConfig } from "@/lib/services/bootstrap";
 import { NextResponse } from "next/server";
@@ -100,7 +101,23 @@ export async function POST(req: Request) {
   );
 
   if (baseCfg.supervisor?.enabled) {
-    result.supervisor = await enrichSupervisorWithSubqApi(result.supervisor, baseCfg.supervisor);
+    const subqRuntime = await resolveSubqRuntime(baseCfg.supervisor);
+    result.supervisor = await enrichSupervisorWithSubqApi(result.supervisor, {
+      ...baseCfg.supervisor,
+      apiKey: subqRuntime.apiKey,
+      baseUrl: subqRuntime.baseUrl,
+      model: subqRuntime.model,
+    });
+    // همگام‌سازی پرچم‌های رد/ریویو با حکم واقعی API ناظر (اگر توکن ثبت شده باشد)
+    result.rejectedBySupervisor = result.supervisor.verdict === "reject";
+    if (result.rejectedBySupervisor) {
+      if (!result.reviewReasons.some((r) => r.startsWith("رد توسط ناظر بالاسر SystemOne"))) {
+        result.reviewReasons.push(
+          `رد توسط ناظر بالاسر SystemOne (امتیاز ${result.supervisor.overallScorePct}% < ${result.supervisor.rejectBelowPct}%)`,
+        );
+      }
+    }
+    if (result.supervisor.verdict !== "approve") result.needsReview = true;
   }
 
   return NextResponse.json(result);

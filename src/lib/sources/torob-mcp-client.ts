@@ -81,6 +81,12 @@ export interface TorobMcpSearchCard {
   details_url: string | null;
 }
 
+/** تبدیل امن هر مقدار ورودی به عدد صحیح نامنفی (NaN/Infinity → 0) */
+function toSafeInt(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+}
+
 /** تبدیل خروجی ابزار `product_details` در `torob-mcp` به لیست `RawOffer[]` موتور قیمت‌گذاری */
 export function convertMcpDetailsToOffers(
   details: TorobMcpProductDetails,
@@ -135,8 +141,8 @@ export function convertMcpDetailsToOffers(
     });
   }
 
-  const onlineCount = Math.max(details.offer_count ?? 0, (details.offers ?? []).length);
-  const inPersonCount = Math.max(details.in_person_count ?? 0, (details.in_person_sellers ?? []).length);
+  const onlineCount = Math.max(toSafeInt(details.offer_count), (details.offers ?? []).length);
+  const inPersonCount = Math.max(toSafeInt(details.in_person_count), (details.in_person_sellers ?? []).length);
 
   return {
     offers,
@@ -275,7 +281,9 @@ export async function fetchViaTorobMcpServer(opts: {
           titleFa: c.name_fa ?? "",
           titleEn: c.name_en ?? null,
           priceToman: c.price_toman,
-          sellerCount: c.shop_count ?? (c.shop_name ? 1 : 5),
+          // اگر کارت جستجوی ترب تعداد فروشنده را برنگرداند، هیچ عدد ساختگی جای‌گذاری نمی‌شود
+          // (null یعنی نامشخص؛ موتور تطبیق آن را «تک‌فروشنده/نامشخص» در نظر می‌گیرد)
+          sellerCount: toSafeInt(c.shop_count) || null,
           available: c.available !== false,
           detailsUrl: c.details_url,
           shopName: c.shop_name,

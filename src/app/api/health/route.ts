@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { getAIStatus } from "@/lib/ai/client";
+import { getAIStatus } from "@/lib/ai/config";
 import { getStoreStatus } from "@/lib/store/connectors";
 import { sql } from "drizzle-orm";
 
@@ -30,7 +30,7 @@ export async function GET() {
     dbOk = false;
   }
 
-  const ai = getAIStatus();
+  const ai = await getAIStatus();
   let store = null;
   try {
     store = await getStoreStatus();
@@ -61,10 +61,14 @@ export async function GET() {
       reachable: torobMcpUrl ? torob.reachable : null,
     },
     ai: {
-      enabled: ai.aiEnabled,
-      model: ai.aiModel,
-      subqEnabled: ai.subqEnabled,
-      subqModel: ai.subqModel,
+      enabled: ai.ai.enabled,
+      configured: ai.ai.configured,
+      source: ai.ai.source,
+      model: ai.ai.model,
+      subqEnabled: ai.subq.enabled,
+      subqConfigured: ai.subq.configured,
+      subqSource: ai.subq.source,
+      subqModel: ai.subq.model,
     },
   });
 }

@@ -34,6 +34,8 @@ export function classifyThreeZoneScore(
   rejectBelowPct: number,
   approveAbovePct: number,
 ): SystemOneVerdict {
+  // Fail-closed: امتیاز نامعتبر (NaN/Infinity/غیرعددی) هرگز نباید از گیت‌ها عبور کند
+  if (!Number.isFinite(scorePct)) return "reject";
   const cleanScore = clamp(scorePct, 0, 100);
   const rej = clamp(rejectBelowPct, 0, 99);
   const app = clamp(approveAbovePct, rej + 1, 100);
@@ -146,7 +148,10 @@ export function evaluateSystemOneSupervisorSync(input: {
   const validCount = input.offers.filter((o) => o.included).length;
   const totalCount = Math.max(1, input.offers.length);
   const keepRatio = validCount / totalCount;
-  const sellerScore = clamp(input.source.totalSellerCount / Math.max(4, input.config.filters.minSellerCount * 2), 0, 1);
+  const totalSellerCount = Number.isFinite(input.source.totalSellerCount)
+    ? Math.max(0, input.source.totalSellerCount)
+    : validCount;
+  const sellerScore = clamp(totalSellerCount / Math.max(4, input.config.filters.minSellerCount * 2), 0, 1);
   const validCountScore = clamp(validCount / Math.max(3, input.config.guards.minValidOffers * 2), 0, 1);
   const dispersionScore = clamp(1 - input.dispersion / 0.22, 0, 1);
   const marketScorePct =
@@ -356,13 +361,30 @@ export function evaluateSystemOneSupervisorSync(input: {
   };
 }
 
+/** متن دلیل گیت پس از ادغام با پاسخ API (تا دلیل و حکم همیشه هم‌خوان باشند) */
+function gateReasonAfterBlend(
+  verdict: SystemOneVerdict,
+  scorePct: number,
+  rejectBelowPct: number,
+  approveAbovePct: number,
+): string {
+  if (verdict === "approve") {
+    return `تایید خودکار با امتیاز ${scorePct}% (≥ ${approveAbovePct}%)`;
+  }
+  if (verdict === "review") {
+    return `ارسال به بازبینی با امتیاز ${scorePct}% (بازه ${rejectBelowPct}%..${approveAbovePct}%)`;
+  }
+  return `رد کامل با امتیاز ${scorePct}% (< ${rejectBelowPct}%)`;
+}
+
 export async function enrichSupervisorWithSubqApi(
   report: SystemOneSupervisorReport,
   supCfg: SystemOneSupervisorConfig,
 ): Promise<SystemOneSupervisorReport> {
-  if (!supCfg.enabled || supCfg.mode === "local_instant_only") return report;
+  if (!supCfg.enabled) return { ...report, apiStatus: "disabled" };
+  if (supCfg.mode === "local_instant_only") return { ...report, apiStatus: "disabled" };
   const apiKey = (supCfg.apiKey || process.env.SUBQ_API_KEY || "").trim();
-  if (!apiKey) return report;
+  if (!apiKey) return { ...report, apiStatus: "not_configured" };
 
   try {
     const apiAnswers = await callSubqSystemOneApi({
@@ -372,25 +394,27 @@ export async function enrichSupervisorWithSubqApi(
       baseUrl: supCfg.baseUrl || DEFAULT_SUBQ_BASE_URL,
       model: supCfg.model || DEFAULT_SUBQ_MODEL,
     });
-    if (!apiAnswers) return report;
+    if (!apiAnswers) throw new Error("پاسخ معتبری از API ناظر SubQ دریافت نشد");
 
     const updatedGates: Record<string, SystemOneGateEvaluation> = { ...report.gates };
     for (const [key, gate] of Object.entries(updatedGates)) {
       const ans = apiAnswers[key];
-      if (ans && typeof ans.noul === "number") {
-        const subqPct = Math.round(ans.noul * 100);
+      if (ans && typeof ans.noul === "number" && Number.isFinite(ans.noul)) {
+        const subqPct = Math.round(clamp(ans.noul, 0, 1) * 100);
         const blendedPct =
           key === "profit_and_rank_safety" && gate.scorePct === 0
             ? 0
             : supCfg.mode === "subq_api_only"
               ? subqPct
               : Math.round(gate.scorePct * 0.5 + subqPct * 0.5);
+        const gateVerdict = classifyThreeZoneScore(blendedPct, gate.rejectBelowPct, gate.approveAbovePct);
 
         updatedGates[key] = {
           ...gate,
           noul: Math.round((blendedPct / 100) * 100) / 100,
           scorePct: blendedPct,
-          verdict: classifyThreeZoneScore(blendedPct, gate.rejectBelowPct, gate.approveAbovePct),
+          verdict: gateVerdict,
+          reason: gateReasonAfterBlend(gateVerdict, blendedPct, gate.rejectBelowPct, gate.approveAbovePct),
         };
       }
     }
@@ -418,16 +442,31 @@ export async function enrichSupervisorWithSubqApi(
     return {
       ...report,
       provider: "subq_systemone_api",
+      apiStatus: "ok",
+      apiError: undefined,
       overallNoul: Math.round((weightedPct / 100) * 100) / 100,
       overallScorePct: weightedPct,
       verdict: overallVerdict,
       gates: updatedGates,
       summary:
-        `ناظر بالاسر SubQ SystemOne (${report.model}): امتیاز کل ${weightedPct}% (noul=${(weightedPct / 100).toFixed(2)}) ` +
+        `ناظر بالاسر SubQ SystemOne API (${report.model}): امتیاز کل ${weightedPct}% (noul=${(weightedPct / 100).toFixed(2)}) ` +
         `[زیر ${report.rejectBelowPct}% = رد | ${report.rejectBelowPct}% تا ${report.approveAbovePct}% = ریویو | بالای ${report.approveAbovePct}% = تایید خودکار] → ` +
         `حکم نهایی: ${verdictFaLabel[overallVerdict]}`,
     };
-  } catch {
-    return report;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (supCfg.mode === "subq_api_only") {
+      // Fail-safe: در حالت «فقط API رسمی»، قطعی ارتباط هرگز نباید به اعمال خودکار منجر شود.
+      return {
+        ...report,
+        apiStatus: "error",
+        apiError: message,
+        verdict: "review",
+        summary:
+          `⚠️ حالت «فقط API رسمی SubQ SystemOne» فعال است ولی ارتباط با API برقرار نشد ` +
+          `(${message}) → برای جلوگیری از تصمیم بدون نظارت، پرونده به بخش ریویو منتقل شد`,
+      };
+    }
+    return { ...report, apiStatus: "error", apiError: message };
   }
 }

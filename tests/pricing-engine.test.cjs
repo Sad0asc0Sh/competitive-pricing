@@ -81,17 +81,18 @@ function loadTsModule(relPath) {
   if (cache.has(fullPath)) return cache.get(fullPath).exports
 
   let code = fs.readFileSync(fullPath, 'utf8')
+  const toImportPath = (fromFile, target) => {
+    let rel = path.relative(path.dirname(fromFile), target).split(path.sep).join('/')
+    if (!rel.startsWith('.')) rel = './' + rel
+    return rel
+  }
   code = code.replace(/from\s+["']@\/lib\/([^"']+)["']/g, (_, p1) => {
     const target = path.resolve(pricingRoot, 'src/lib', p1)
-    let rel = path.relative(path.dirname(fullPath), target)
-    if (!rel.startsWith('.')) rel = './' + rel
-    return `from "${rel}"`
+    return `from "${toImportPath(fullPath, target)}"`
   })
   code = code.replace(/from\s+["']@\/db\/([^"']+)["']/g, (_, p1) => {
     const target = path.resolve(pricingRoot, 'src/db', p1)
-    let rel = path.relative(path.dirname(fullPath), target)
-    if (!rel.startsWith('.')) rel = './' + rel
-    return `from "${rel}"`
+    return `from "${toImportPath(fullPath, target)}"`
   })
 
   const transformed = { code: transpileTsToCjs(code, fullPath) }
@@ -135,6 +136,7 @@ const { calibrateCeilingForExactFloor } = loadTsModule('src/lib/pricing/discount
 const { pickCampaign } = loadTsModule('src/lib/pricing/campaigns.ts')
 const { selectBestTorobSearchMatch, evaluateTorobCandidate } = loadTsModule('src/lib/pricing/matcher.ts')
 const { classifyThreeZoneScore, buildSubqSystemOneRequestBody } = loadTsModule('src/lib/pricing/systemone-supervisor.ts')
+const { computeConfidence } = loadTsModule('src/lib/pricing/confidence.ts')
 const { parseTorobJson } = loadTsModule('src/lib/sources/torob.ts')
 const { convertMcpDetailsToOffers, analyzeMcpPriceHistory } = loadTsModule('src/lib/sources/torob-mcp-client.ts')
 
@@ -808,4 +810,61 @@ test('۱۴. ناظر بالاسر SubQ SystemOne (مدل subq-snap-preview و ن
   assert.ok(rejectedRes.supervisor.gates.identity_match.scorePct < 45)
   assert.equal(rejectedRes.supervisor.verdict, 'reject')
   assert.equal(rejectedRes.rejectedBySupervisor, true)
+})
+
+test('۱۵. مقاوم‌سازی ناظر بالاسر (Fail-Closed): امتیاز نامعتبر NaN/Infinity هرگز نباید تایید خودکار یا ریویو بگیرد', () => {
+  // ورودی خراب (NaN، بی‌نهایت، undefined، رشته غیرعددی) باید قطعاً «رد» شود تا هیچ تصمیم مخربی عبور نکند
+  assert.equal(classifyThreeZoneScore(NaN, 45, 80), 'reject')
+  assert.equal(classifyThreeZoneScore(Infinity, 45, 80), 'reject')
+  assert.equal(classifyThreeZoneScore(-Infinity, 45, 80), 'reject')
+  assert.equal(classifyThreeZoneScore(undefined, 45, 80), 'reject')
+  assert.equal(classifyThreeZoneScore(Number('abc'), 45, 80), 'reject')
+  // ورودی سالم هم مثل قبل کار می‌کند
+  assert.equal(classifyThreeZoneScore(90, 45, 80), 'approve')
+  assert.equal(classifyThreeZoneScore(60, 45, 80), 'review')
+})
+
+test('۱۶. اعتماد (Confidence) با ورودی‌های خراب مالی/بازاری هیچ‌گاه NaN تولید نمی‌کند', () => {
+  const bad = computeConfidence(
+    { count: NaN, dispersion: Infinity },
+    { totalSellerCount: NaN, offersTotal: Infinity },
+    DEFAULT_PROFILE_CONFIG,
+  )
+  assert.ok(Number.isFinite(bad.score), 'امتیاز اعتماد باید عدد متناهی باشد')
+  assert.equal(bad.score, 0)
+  Object.values(bad.breakdown).forEach((v) => assert.ok(Number.isFinite(v)))
+})
+
+test('۱۷. حریم ایمنی «بدون داده»: نه قیمت ساختگی، نه رد جعلی ناظر، نه کرش با قیمت‌های غیرمثبت', () => {
+  // الف) نبود کامل داده بازار و نبود قیمت خرید: خروجی no_data است، هیچ رد «ناظر» ثبت نمی‌شود
+  const cfgDisabledSupervisor = {
+    ...DEFAULT_PROFILE_CONFIG,
+    supervisor: { ...DEFAULT_PROFILE_CONFIG.supervisor, enabled: false },
+  }
+  const noData = runPricingPipeline(
+    { source: 'torob', productTitle: 'کالای تستی بدون داده', offers: [], totalSellerCount: 0, fetchedAt: now, ok: false },
+    { productId: 0, productName: 'کالای تستی بدون داده', costPrice: 0, supplierQuotes: [], config: cfgDisabledSupervisor, now },
+  )
+  assert.equal(noData.finalPrice, null)
+  assert.equal(noData.rejectedBySupervisor, false, 'بدون فعال بودن ناظر، هیچ «رد توسط ناظر» جعلی نباید ثبت شود')
+  assert.equal(noData.needsReview, true)
+
+  // ب) پیشنهادهای با قیمت صفر/منفی (داده خراب منبع): به‌جای Math.min(...[]) → Infinity، باید null برگردد
+  const zeroPriced = runPricingPipeline(
+    {
+      source: 'torob',
+      productTitle: 'کالای تستی قیمت صفر',
+      offers: [
+        { shopName: 'فروشگاه خراب الف', price: 0, inStock: true },
+        { shopName: 'فروشگاه خراب ب', price: -5000, inStock: true },
+      ],
+      totalSellerCount: 2,
+      fetchedAt: now,
+      ok: true,
+    },
+    { productId: 0, productName: 'کالای تستی قیمت صفر', costPrice: 1000000, supplierQuotes: [], config: cfgDisabledSupervisor, now },
+  )
+  assert.equal(zeroPriced.lowestRaw, null, 'کمترین قیمت خام باید null باشد نه Infinity')
+  const allNumbers = [zeroPriced.lowestRaw, zeroPriced.lowestValid, zeroPriced.marketMedian, zeroPriced.finalPrice]
+  allNumbers.forEach((v) => assert.ok(v === null || Number.isFinite(v), 'هیچ عددی نباید Infinity/NaN باشد'))
 })

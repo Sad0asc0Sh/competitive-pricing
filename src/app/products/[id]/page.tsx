@@ -8,6 +8,11 @@ import { notFound } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
+/** فاصله روز از آخرین تغییر قیمت — خارج از رندر کامپوننت تا خروجی پایدار بماند */
+function daysAgo(date: Date | string): number {
+  return Math.round((Date.now() - new Date(date).getTime()) / 86400000);
+}
+
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const [p] = await db.select().from(products).where(eq(products.id, Number(id))).limit(1);
@@ -182,9 +187,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                   <td className="num text-xs">{o.shopScore ? faNum(o.shopScore, 1) : "—"}</td>
                   <td className={`num ${o.included ? "font-medium" : "line-through"}`}>{toman(o.price)}</td>
                   <td className="text-xs">
-                    {o.lastChangedAt
-                      ? `${faNum(Math.round((Date.now() - new Date(o.lastChangedAt).getTime()) / 86400000))} روز پیش`
-                      : "—"}
+                    {o.lastChangedAt ? `${faNum(daysAgo(o.lastChangedAt))} روز پیش` : "—"}
                   </td>
                   <td className="num text-xs">{o.included ? faNum(o.weight, 2) : "—"}</td>
                   <td>

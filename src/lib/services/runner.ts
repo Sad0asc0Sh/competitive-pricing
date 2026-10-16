@@ -1,14 +1,21 @@
 import { db } from "@/db";
 import { competitorOffers, discountCampaigns, priceDecisions, priceRuns, products, type Product } from "@/db/schema";
 import { reviewDecisionWithAI } from "@/lib/ai/client";
+import { resolveSubqRuntime } from "@/lib/ai/config";
 import { pickCampaign } from "@/lib/pricing/campaigns";
 import { runPricingPipeline } from "@/lib/pricing/engine";
 import { enrichSupervisorWithSubqApi } from "@/lib/pricing/systemone-supervisor";
-import type { RawOffer, SupplierQuote } from "@/lib/pricing/types";
+import type { PricingResult, RawOffer, SupplierQuote } from "@/lib/pricing/types";
 import { fetchFromSource, isAllowedSourceType } from "@/lib/sources/registry";
 import { pushToStore } from "@/lib/store/connectors";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { ensureDefaults, getProfileConfig, logActivity } from "./bootstrap";
+
+/** تبدیل ایمن مقادیر موتور به عدد صحیح/اعشاری معتبر قبل از درج در دیتابیس (NaN/Infinity هرگز درج نشود) */
+const safeInt = (v: number | null | undefined): number | null =>
+  v == null || !Number.isFinite(v) ? null : Math.round(v);
+const safeReal = (v: number | null | undefined, fallback = 0): number =>
+  v == null || !Number.isFinite(v) ? fallback : v;
 
 export interface RunOptions {
   trigger: "manual" | "schedule" | "api";
@@ -44,6 +51,10 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
     opts.productIds?.length && opts.trigger !== "schedule"
       ? await db.select().from(products).where(inArray(products.id, opts.productIds)).orderBy(asc(products.id))
       : await db.select().from(products).where(and(...conds)).orderBy(asc(products.id));
+
+  // گارد سیستم واقعی: محصولات «متوقف‌شده» (paused) هرگز حتی با اجرای دستی/API قیمت‌گذاری نمی‌شوند
+  // (محصولات needs_review با اجرای دستی مجازند تا پس از اصلاح منبع/قیمت دوباره استعلام شوند).
+  targets = targets.filter((p) => p.status !== "paused");
 
   if (opts.cardRangeFrom || opts.cardRangeTo) {
     const startIdx = Math.max(0, (opts.cardRangeFrom ?? 1) - 1);
@@ -124,6 +135,73 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
   return summary;
 }
 
+const SUPERVISOR_REASON_PREFIXES = [
+  "رد توسط ناظر بالاسر SystemOne",
+  "ناظر بالاسر SystemOne تصمیم را در بازه ریویو قرار داد",
+];
+
+/**
+ * پس از دریافت پاسخ واقعی API ناظر (enrichment)، حکم/دلایل/گام ثبت‌شده را دوباره همگام می‌کند
+ * تا منطق «رد کامل ↔ ریویو ↔ اعمال خودکار» دقیقاً بر اساس پاسخ زندهٔ ناظر اعمال شود
+ * و چیزی در دیتابیس/صفحه ریویو ناهمخوان نماند.
+ */
+function syncSupervisorAfterEnrichment(result: PricingResult, sourceOk: boolean): void {
+  const sup = result.supervisor;
+  result.reviewReasons = result.reviewReasons.filter(
+    (r) => !SUPERVISOR_REASON_PREFIXES.some((p) => r.startsWith(p)),
+  );
+  if (sup.verdict === "reject") {
+    result.reviewReasons.push(
+      `رد توسط ناظر بالاسر SystemOne (امتیاز ${sup.overallScorePct}% < ${sup.rejectBelowPct}%)`,
+    );
+  } else if (sup.verdict === "review") {
+    result.reviewReasons.push(
+      `ناظر بالاسر SystemOne تصمیم را در بازه ریویو قرار داد (${sup.overallScorePct}% بین ${sup.rejectBelowPct}% و ${sup.approveAbovePct}%)`,
+    );
+  }
+
+  result.rejectedBySupervisor = sup.verdict === "reject";
+  result.needsReview =
+    result.reviewReasons.length > 0 ||
+    !sourceOk ||
+    result.supply.effectiveCostPrice <= 0 ||
+    result.rejectedBySupervisor ||
+    sup.verdict !== "approve";
+
+  const level: "info" | "warn" | "error" =
+    sup.verdict === "reject" ? "error" : sup.verdict === "review" ? "warn" : "info";
+  const apiBadge =
+    sup.apiStatus === "ok"
+      ? `API زنده SubQ (${sup.model})`
+      : sup.apiStatus === "error"
+        ? `خطای اتصال API ناظر: ${sup.apiError ?? "نامشخص"}`
+        : sup.apiStatus === "not_configured"
+          ? "توکن SubQ ثبت نشده — موتور آنی محلی فعال است"
+          : "موتور آنی محلی (بدون فراخوانی API)";
+  const stepLog = {
+    step: "supervisor",
+    title: "ناظر و تصمیم‌گیرنده بالاسر (SubQ SystemOne — ۴ مقیاس)",
+    message:
+      `${sup.summary} | وضعیت اتصال: ${apiBadge} | ` +
+      Object.values(sup.gates)
+        .map((g) => `${g.key}: ${g.scorePct}% (noul=${g.noul.toFixed(2)} → ${g.verdict})`)
+        .join(" · "),
+    level,
+    data: {
+      overallScorePct: sup.overallScorePct,
+      overallNoul: sup.overallNoul,
+      verdict: sup.verdict,
+      gates: sup.gates,
+      apiStatus: sup.apiStatus ?? null,
+      apiError: sup.apiError ?? null,
+    },
+  };
+
+  const idx = result.steps.findIndex((s) => s.step === "supervisor");
+  if (idx >= 0) result.steps[idx] = stepLog;
+  else result.steps.push(stepLog);
+}
+
 async function priceOneProduct(
   product: Product,
   runId: number,
@@ -173,15 +251,17 @@ async function priceOneProduct(
     config,
   });
 
-  // در صورتی که کلید SUBQ_API_KEY تنظیم شده باشد، ناظر بالاسر با API زنده SubQ SystemOne نیز غنی‌سازی می‌شود
+  // ناظر بالاسر با توکن واقعی (پنل تنظیمات/دیتابیس یا env) همین‌جا به API زنده SubQ SystemOne وصل می‌شود؛
+  // توکن/آدرس سرور/مدل از پنل تنظیمات (دیتابیس) با اولویت بالاتر از پروفایل و env خوانده می‌شود.
   if (config.supervisor.enabled) {
-    result.supervisor = await enrichSupervisorWithSubqApi(result.supervisor, config.supervisor);
-    if (result.supervisor.verdict === "reject") {
-      result.rejectedBySupervisor = true;
-      result.needsReview = true;
-    } else if (result.supervisor.verdict === "review") {
-      result.needsReview = true;
-    }
+    const subqRuntime = await resolveSubqRuntime(config.supervisor);
+    result.supervisor = await enrichSupervisorWithSubqApi(result.supervisor, {
+      ...config.supervisor,
+      apiKey: subqRuntime.apiKey,
+      baseUrl: subqRuntime.baseUrl,
+      model: subqRuntime.model,
+    });
+    syncSupervisorAfterEnrichment(result, source.ok);
   }
 
   if (config.ai.enabled && result.finalPrice && result.confidence < config.ai.reviewBelowConfidence) {
@@ -283,11 +363,12 @@ async function priceOneProduct(
   // - بین 45% تا 80% (review): وضعیت "pending_review" (ارسال به بخش ریویو)
   // - بالای 80% (approve): در صورت رعایت خط قرمز سود و فعال بودن autoApply، وضعیت "applied" (ادامه کار و اعمال خودکار)
   let status: string;
-  if (!result.finalPrice) {
-    status = "failed";
-  } else if (result.rejectedBySupervisor) {
+  if (result.rejectedBySupervisor) {
+    // رد کامل ناظر بالاسر (حتی اگر قیمتی تولید نشده باشد) → وضعیت rejected و ورود به فهرست ردشده‌ها
     status = "rejected";
-  } else if ( strictlyAboveCost && !result.needsReview && product.autoApply) {
+  } else if (!result.finalPrice) {
+    status = "failed";
+  } else if (strictlyAboveCost && !result.needsReview && product.autoApply) {
     status = "applied";
   } else {
     status = "pending_review";
@@ -299,31 +380,31 @@ async function priceOneProduct(
       runId,
       productId: product.id,
       source: source.source,
-      offersTotal: result.offersTotal,
-      offersUsed: result.offersUsed,
-      effectiveCostPrice: result.supply.effectiveCostPrice,
-      hardFloorPrice: result.supply.hardFloorPrice,
-      lowestRaw: result.lowestRaw,
-      lowestValid: result.lowestValid,
-      localLowestValid: result.position.localLowestPrice,
-      marketMedian: result.marketMedian,
-      marketMean: result.marketMean,
-      referencePrice: result.referencePrice,
-      monitoredMarketCeiling: result.floorCeiling.monitoredMarketCeiling,
-      basePrice: result.basePrice,
-      finalPrice: result.finalPrice,
-      discountPct: result.discountPct,
+      offersTotal: safeInt(result.offersTotal) ?? 0,
+      offersUsed: safeInt(result.offersUsed) ?? 0,
+      effectiveCostPrice: safeInt(result.supply.effectiveCostPrice),
+      hardFloorPrice: safeInt(result.supply.hardFloorPrice),
+      lowestRaw: safeInt(result.lowestRaw),
+      lowestValid: safeInt(result.lowestValid),
+      localLowestValid: safeInt(result.position.localLowestPrice),
+      marketMedian: safeInt(result.marketMedian),
+      marketMean: safeInt(result.marketMean),
+      referencePrice: safeInt(result.referencePrice),
+      monitoredMarketCeiling: safeInt(result.floorCeiling.monitoredMarketCeiling),
+      basePrice: safeInt(result.basePrice),
+      finalPrice: safeInt(result.finalPrice),
+      discountPct: safeReal(result.discountPct),
       campaignType,
       campaignName,
       badgeTheme,
       showInFeatured,
       strategy: result.strategy,
       competitionTier: result.position.competitionTier,
-      projectedNationalRank: result.position.projectedNationalRank,
-      projectedLocalRank: result.position.projectedLocalRank,
-      netProfitToman: result.position.netProfitToman,
-      netMarginPct: result.position.netMarginPct,
-      confidence: result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence,
+      projectedNationalRank: safeInt(result.position.projectedNationalRank),
+      projectedLocalRank: safeInt(result.position.projectedLocalRank),
+      netProfitToman: safeInt(result.position.netProfitToman),
+      netMarginPct: safeReal(result.position.netMarginPct),
+      confidence: safeReal(result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence),
       status,
       steps: result.steps,
     })
@@ -424,6 +505,16 @@ export async function applyDecision(
     return {
       ok: false,
       message: `خطای خط قرمز سود: قیمت فروش (${d.finalPrice.toLocaleString("fa-IR")}) نمی‌تواند کمتر یا مساوی قیمت خرید/تامین (${effectiveCost.toLocaleString("fa-IR")}) باشد`,
+    };
+  }
+
+  // بازبینی دوباره خط قرمز فروش در «لحظه اعمال»: ممکن است قیمت تامین/خط قرمز پس از ساخت تصمیم تغییر کرده باشد؛
+  // بدون force انسانی هرگز اجازه نمی‌دهیم قیمتی زیر خط قرمز جدید به فروشگاه ارسال شود.
+  const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p.currentHardFloorPrice ?? 0);
+  if (effectiveFloor > 0 && d.finalPrice < effectiveFloor && !opts?.force) {
+    return {
+      ok: false,
+      message: `خط قرمز فروش بروزرسانی شده است: قیمت نهایی (${d.finalPrice.toLocaleString("fa-IR")}) از خط قرمز فعلی (${effectiveFloor.toLocaleString("fa-IR")}) کمتر است. ابتدا استعلام جدید بگیرید یا با تأیید اجباری (force) اعمال کنید.`,
     };
   }
 

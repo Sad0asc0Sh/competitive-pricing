@@ -1,8 +1,10 @@
+import { getAIConfig } from "@/lib/ai/config";
 import type { RawOffer } from "@/lib/pricing/types";
 
 /**
  * لایه هوش مصنوعی — سازگار با هر API شبیه OpenAI (OpenAI, OpenRouter, Groq, Ollama, ...)
- *  env:
+ *
+ * توکن/آدرس/مدل از پنل تنظیمات (دیتابیس) یا در نبود آن از env خوانده می‌شود:
  *   AI_API_KEY      کلید (اجباری برای فعال‌سازی)
  *   AI_BASE_URL     پیش‌فرض https://api.openai.com/v1
  *   AI_MODEL        پیش‌فرض gpt-4o-mini
@@ -13,45 +15,23 @@ import type { RawOffer } from "@/lib/pricing/types";
  *  3) تأیید تطابق محصول (آیا لیستینگ ترب همان کالای ماست؟)
  */
 
-export function aiEnabled(): boolean {
-  return Boolean((process.env.AI_API_KEY ?? "").trim());
-}
-
-export function subqEnabled(): boolean {
-  return Boolean((process.env.SUBQ_API_KEY ?? "").trim());
-}
-
-/** وضعیت تجمیعی هوش مصنوعی برای داشبورد، تنظیمات و /api/health (بدون افشای توکن) */
-export function getAIStatus(): {
-  aiEnabled: boolean;
-  aiBaseUrl: string;
-  aiModel: string;
-  subqEnabled: boolean;
-  subqBaseUrl: string;
-  subqModel: string;
-} {
-  return {
-    aiEnabled: aiEnabled(),
-    aiBaseUrl: (process.env.AI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, ""),
-    aiModel: process.env.AI_MODEL ?? "gpt-4o-mini",
-    subqEnabled: subqEnabled(),
-    subqBaseUrl: (process.env.SUBQ_BASE_URL ?? "https://api.subq.ai/v1").replace(/\/+$/, ""),
-    subqModel: process.env.SUBQ_MODEL ?? "subq-snap-preview",
-  };
+/** آیا هوش مصنوعی مکمل فعال و دارای توکن واقعی است؟ */
+export async function aiEnabled(): Promise<boolean> {
+  const cfg = await getAIConfig();
+  return cfg.enabled && Boolean(cfg.apiKey);
 }
 
 async function chat(messages: { role: "system" | "user"; content: string }[], jsonMode = true): Promise<string | null> {
-  if (!aiEnabled()) return null;
-  const base = (process.env.AI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
-  const model = process.env.AI_MODEL ?? "gpt-4o-mini";
+  const cfg = await getAIConfig();
+  if (!cfg.enabled || !cfg.apiKey) return null;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
-    const res = await fetch(`${base}/chat/completions`, {
+    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.AI_API_KEY}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
       body: JSON.stringify({
-        model,
+        model: cfg.model,
         temperature: 0,
         messages,
         ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
