@@ -134,11 +134,11 @@ const { parsePersianRelativeDate, applyValidityFilters } = loadTsModule('src/lib
 const { runPricingPipeline } = loadTsModule('src/lib/pricing/engine.ts')
 const { calibrateCeilingForExactFloor } = loadTsModule('src/lib/pricing/discount.ts')
 const { pickCampaign } = loadTsModule('src/lib/pricing/campaigns.ts')
-const { selectBestTorobSearchMatch, evaluateTorobCandidate } = loadTsModule('src/lib/pricing/matcher.ts')
+const { selectBestTorobSearchMatch, evaluateTorobCandidate, extractModelAndSpecTokens, isInternalOrDatabaseId } = loadTsModule('src/lib/pricing/matcher.ts')
 const { classifyThreeZoneScore, buildSubqSystemOneRequestBody } = loadTsModule('src/lib/pricing/systemone-supervisor.ts')
 const { computeConfidence } = loadTsModule('src/lib/pricing/confidence.ts')
 const { parseTorobJson } = loadTsModule('src/lib/sources/torob.ts')
-const { convertMcpDetailsToOffers, analyzeMcpPriceHistory } = loadTsModule('src/lib/sources/torob-mcp-client.ts')
+const { convertMcpDetailsToOffers, analyzeMcpPriceHistory, extractSellerCountFromMcpCard } = loadTsModule('src/lib/sources/torob-mcp-client.ts')
 
 const now = new Date('2026-10-14T08:00:00Z')
 
@@ -867,4 +867,49 @@ test('۱۷. حریم ایمنی «بدون داده»: نه قیمت ساختگ�
   assert.equal(zeroPriced.lowestRaw, null, 'کمترین قیمت خام باید null باشد نه Infinity')
   const allNumbers = [zeroPriced.lowestRaw, zeroPriced.lowestValid, zeroPriced.marketMedian, zeroPriced.finalPrice]
   allNumbers.forEach((v) => assert.ok(v === null || Number.isFinite(v), 'هیچ عددی نباید Infinity/NaN باشد'))
+})
+
+
+test('۱۸. گارد ضد تشخیص اشتباه کارت: نادیده گرفتن شناسه مونگو (_id) و KY-XXXX و عدم تایید خودکار کالای بدون کد مدل روی کارت مدل‌دار ترب', () => {
+  assert.equal(isInternalOrDatabaseId('67f8a9b0c1d2e3f4a5b6c7d8'), true)
+  assert.equal(isInternalOrDatabaseId('KY-408129'), true)
+  assert.equal(isInternalOrDatabaseId('DH-IPC-HFW1230S'), false)
+
+  const fp = extractModelAndSpecTokens('دوربین مداربسته دام دید در شب رنگی', '67f8a9b0c1d2e3f4a5b6c7d8')
+  assert.equal(fp.modelTokens.length, 0, 'شناسه ۲۴ کاراکتری مونگو هرگز نباید به عنوان کد مدل فنی استخراج شود')
+
+  // کالای صرفاً فارسی بدون کد مدل در برابر کارت ترب با مدل خاص -> نباید تایید خودکار (>= 80) بگیرد؛ باید به ریویو یا رد برود
+  const evalRes = evaluateTorobCandidate(
+    {
+      productName: 'دوربین مداربسته دام دید در شب',
+      sku: 'KY-102030',
+      anchorPriceToman: 1500000,
+    },
+    {
+      prk: 'prk-random-cam',
+      titleFa: 'دوربین مداربسته دام هایک ویژن مدل DS-2CE56D0T-IRMF دید در شب',
+      priceToman: 1480000,
+      sellerCount: 9,
+      available: true,
+    },
+    4,
+  )
+  assert.notEqual(evalRes.verdict, 'approve', 'کالای بدون کد مدل نباید روی یک مدل خاص ترب تایید خودکار بگیرد')
+  assert.ok(evalRes.score < 80, `امتیاز باید زیر 80 باشد ولی ${evalRes.score} بود`)
+})
+
+test('۱۹. استخراج دقیق تعداد فروشنده از متن فارسی کارت جستجوی Torob MCP', () => {
+  assert.equal(
+    extractSellerCountFromMcpCard({
+      prk: 'p1',
+      name_fa: 'تست',
+      name_en: null,
+      price_toman: 1000,
+      available: true,
+      shop_name: 'در ۱۴ فروشگاه',
+      url: 'https://torob.com/p/p1/',
+      details_url: null,
+    }),
+    14,
+  )
 })

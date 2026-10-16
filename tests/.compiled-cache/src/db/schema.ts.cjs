@@ -36,7 +36,7 @@ const products = (0, _pgCore.pgTable)("products", {
   category: (0, _pgCore.text)("category"),
   /** شناسه محصول در فروشگاه (مثلاً _id یا productCode در sgeooole یا ID ووکامرس) */
   storeExternalId: (0, _pgCore.text)("store_external_id"),
-  /** منبع استعلام: torob | mock | manual */
+  /** منبع استعلام: torob (تنها منبع واقعی) | manual (ورود دستی هنگام اجرا) */
   sourceType: (0, _pgCore.varchar)("source_type", {
     length: 30
   }).default("torob").notNull(),

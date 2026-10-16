@@ -23,7 +23,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "رمز عبور نادرست است" }, { status: 401 });
   }
   const token = await createSessionToken();
-  const isHttps = (req.headers.get("x-forwarded-proto") ?? new URL(req.url).protocol.replace(":", "")) === "https";
+  const forwardedProto = req.headers.get("x-forwarded-proto") ?? "";
+  const originHeader = req.headers.get("origin") ?? req.headers.get("referer") ?? "";
+  const isHttps =
+    process.env.FORCE_SECURE_COOKIE === "true" ||
+    (forwardedProto === "https" && originHeader.startsWith("https://"));
   const res = NextResponse.json({ ok: true, authEnabled: true });
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,

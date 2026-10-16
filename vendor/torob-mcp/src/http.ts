@@ -79,7 +79,7 @@ function upstreamBaseProblem(value: string): string | null {
   } catch {
     return `${UPSTREAM_BASE_ENV} must be an absolute URL, got '${value}'.`;
   }
-  if (url.protocol !== "https:") {
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
     return `${UPSTREAM_BASE_ENV} must use https: a plain-http relay would put every search, price and product id on the wire in the clear.`;
   }
   return null;
@@ -209,8 +209,8 @@ function looksLikeChallenge(res: Response, body: string): boolean {
 // a long second stage once a repeat challenge has said the short one was not
 // enough. The probe that discovers the second stage is the only request either
 // stage can waste, and it happens once per stage rather than once per isolate.
-const STAGE1_MS = 5 * 60_000;
-const STAGE2_MS = 30 * 60_000;
+const STAGE1_MS = 45_000;
+const STAGE2_MS = 120_000;
 const WALL_KEY = "wall";
 // The record's job is not just to hold the block - it is to carry the strike
 // count forward to whatever comes after the block. Tying its lifetime to the

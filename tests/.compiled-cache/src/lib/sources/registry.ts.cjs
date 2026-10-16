@@ -21,12 +21,14 @@ function manualSource(offers, totalSellerCount) {
     error: offers.length ? undefined : "هیچ پیشنهادی وارد نشده"
   };
 }
+
 /**
  * تنها منبع واقعی مجاز در محیط تولید: ترب.
  * منبع شبیه‌سازی (mock) به‌طور کامل حذف شده است تا هیچ تصمیم قیمتی
  * بر اساس داده ساختگی گرفته یا به فروشگاه ارسال نشود.
  */
-const ALLOWED_SOURCE_TYPES = exports.ALLOWED_SOURCE_TYPES = ["torob"];
+const ALLOWED_SOURCE_TYPES = ["torob"];
+exports.ALLOWED_SOURCE_TYPES = ALLOWED_SOURCE_TYPES;
 function isAllowedSourceType(sourceType) {
   return ALLOWED_SOURCE_TYPES.includes(sourceType);
 }

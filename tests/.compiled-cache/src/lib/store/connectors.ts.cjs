@@ -5,6 +5,7 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.buildSgeoooleRequestPayload = buildSgeoooleRequestPayload;
 exports.getActiveConnector = getActiveConnector;
+exports.getStoreStatus = getStoreStatus;
 exports.pushToStore = pushToStore;
 var _db = require("@/db");
 var _schema = require("../../db/schema");
@@ -142,9 +143,10 @@ const sgeooole = {
         message: `sgeooole PUT HTTP ${putRes.status}`
       };
     }
+    const errText = await res.text().catch(() => "");
     return {
       ok: false,
-      message: `sgeooole HTTP ${res.status}`
+      message: `sgeooole HTTP ${res.status}${errText ? ` — ${errText.slice(0, 300)}` : ""}`
     };
   }
 };
@@ -240,33 +242,84 @@ async function getActiveConnector() {
   const rows = await _db.db.select().from(_schema.storeConnectors).where((0, _drizzleOrm.eq)(_schema.storeConnectors.active, true)).limit(1);
   return rows[0] ?? null;
 }
+
+/** وضعیت اتصال فروشگاه برای داشبورد و /api/health (بدون افشای سکرت) */
+async function getStoreStatus() {
+  try {
+    const active = await getActiveConnector();
+    if (active && active.type !== "none") {
+      return {
+        activeType: active.type,
+        activeName: active.name,
+        envFallback: false,
+        baseUrl: active.type === "sgeooole" ? String(active.config?.baseUrl ?? "") : "",
+        lastError: active.lastError ?? null
+      };
+    }
+  } catch {
+    // ادامه به بررسی env
+  }
+  const envBase = (process.env.SGEOOOLE_API_URL ?? "").replace(/\/$/, "");
+  const envKey = (process.env.SGEOOOLE_PRICING_SECRET ?? "").trim();
+  return {
+    activeType: null,
+    activeName: null,
+    envFallback: Boolean(envBase && envKey),
+    baseUrl: envBase,
+    lastError: null
+  };
+}
 async function pushToStore(payload) {
   const connector = await getActiveConnector();
-  if (!connector || connector.type === "none") return {
+  if (connector && connector.type !== "none") {
+    const adapter = adapters[connector.type];
+    if (!adapter) return {
+      ok: false,
+      message: `کانکتور ناشناخته: ${connector.type}`
+    };
+    try {
+      const r = await adapter.push(connector.config, payload);
+      await _db.db.update(_schema.storeConnectors).set({
+        lastPushAt: new Date(),
+        lastError: r.ok ? null : r.message
+      }).where((0, _drizzleOrm.eq)(_schema.storeConnectors.id, connector.id));
+      return r;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await _db.db.update(_schema.storeConnectors).set({
+        lastError: msg
+      }).where((0, _drizzleOrm.eq)(_schema.storeConnectors.id, connector.id));
+      return {
+        ok: false,
+        message: msg
+      };
+    }
+  }
+  // سیستم واقعی بدون داده ساختگی: اگر کانکتوری در دیتابیس فعال نیست ولی
+  // متغیرهای محیطی فروشگاه (SGEOOOLE_API_URL + SGEOOOLE_PRICING_SECRET) تنظیم‌اند،
+  // مستقیم از env به sgeooole پوش کن تا قیمت‌ها واقعاً به سایت برسند.
+  const envBase = (process.env.SGEOOOLE_API_URL ?? "").trim();
+  const envKey = (process.env.SGEOOOLE_PRICING_SECRET ?? process.env.STORE_WEBHOOK_SECRET ?? "").trim();
+  if (envBase && envKey) {
+    try {
+      const r = await sgeooole.push({
+        baseUrl: envBase,
+        apiKey: envKey
+      }, payload);
+      return r.ok ? {
+        ...r,
+        message: `${r.message} (via env fallback)`
+      } : r;
+    } catch (e) {
+      return {
+        ok: false,
+        message: e instanceof Error ? e.message : String(e)
+      };
+    }
+  }
+  return {
     ok: true,
     skipped: true,
-    message: "کانکتور فروشگاه فعال نیست (فقط ثبت داخلی)"
+    message: "کانکتور فروشگاه فعال نیست و SGEOOOLE_API_URL تنظیم نشده (فقط ثبت داخلی)"
   };
-  const adapter = adapters[connector.type];
-  if (!adapter) return {
-    ok: false,
-    message: `کانکتور ناشناخته: ${connector.type}`
-  };
-  try {
-    const r = await adapter.push(connector.config, payload);
-    await _db.db.update(_schema.storeConnectors).set({
-      lastPushAt: new Date(),
-      lastError: r.ok ? null : r.message
-    }).where((0, _drizzleOrm.eq)(_schema.storeConnectors.id, connector.id));
-    return r;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await _db.db.update(_schema.storeConnectors).set({
-      lastError: msg
-    }).where((0, _drizzleOrm.eq)(_schema.storeConnectors.id, connector.id));
-    return {
-      ok: false,
-      message: msg
-    };
-  }
 }

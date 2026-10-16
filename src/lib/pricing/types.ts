@@ -1,5 +1,5 @@
 /**
- * تایپ‌های مشترک موتور قیمت‌گذاری هوشمند (نسخه ۳.۵ — مجهز به ناظر بالاسر SubQ SystemOne،
+ * تایپ‌های مشترک موتور قیمت‌گذاری هوشمند (نسخه ۳.۶ — مجهز به ناظر بالاسر SubQ SystemOne،
  * کشف کف و سقف واقعی بازار، کالیبراسیون دقیق سقف به کف، مدیریت ۳ سیستم تخفیف sgeooole و اعمال روی رنج کارت‌ها)
  */
 
@@ -415,6 +415,7 @@ export interface DecisionStepLog {
 export interface PricingContext {
   productId: number;
   productName: string;
+  sku?: string | null;
   costPrice: number;
   supplierQuotes?: SupplierQuote[];
   minMarginPctOverride?: number | null;

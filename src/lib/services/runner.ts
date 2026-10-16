@@ -38,6 +38,7 @@ export interface RunSummary {
   pendingReview: number;
   failed: number;
   decisionIds: number[];
+  lastError?: string | null;
 }
 
 export async function runPricing(opts: RunOptions): Promise<RunSummary> {
@@ -52,8 +53,6 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
       ? await db.select().from(products).where(inArray(products.id, opts.productIds)).orderBy(asc(products.id))
       : await db.select().from(products).where(and(...conds)).orderBy(asc(products.id));
 
-  // گارد سیستم واقعی: محصولات «متوقف‌شده» (paused) هرگز حتی با اجرای دستی/API قیمت‌گذاری نمی‌شوند
-  // (محصولات needs_review با اجرای دستی مجازند تا پس از اصلاح منبع/قیمت دوباره استعلام شوند).
   targets = targets.filter((p) => p.status !== "paused");
 
   if (opts.cardRangeFrom || opts.cardRangeTo) {
@@ -74,13 +73,11 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
     pendingReview: 0,
     failed: 0,
     decisionIds: [],
+    lastError: null,
   };
   const campaigns = await db.select().from(discountCampaigns);
   const allocatedCounts: Record<number, number> = {};
 
-  // پردازش موازی محدود (پیش‌فرض ۳ محصول هم‌زمان، با PRICING_RUN_CONCURRENCY قابل تنظیم ۱..۸).
-  // تخصیص کمپین (pickCampaign + افزایش allocatedCounts) کاملاً همگام (بدون await در میان) انجام
-  // می‌شود، پس سقف maxCards کمپین‌ها در اجرای موازی هم دقیق می‌ماند؛ با مقدار ۱ رفتار کاملاً ترتیبی قبلی برمی‌گردد.
   const concurrency = Math.max(1, Math.min(8, Number(process.env.PRICING_RUN_CONCURRENCY ?? 3) || 3));
   let nextIdx = 0;
   const worker = async () => {
@@ -90,7 +87,7 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
       const product = targets[idx];
       const cardIndex = (opts.cardRangeFrom ? Math.max(1, opts.cardRangeFrom) : 1) + idx;
       try {
-        const decisionId = await priceOneProduct(
+        const decisionOut = await priceOneProduct(
           product,
           run.id,
           campaigns,
@@ -99,15 +96,22 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
           opts.manualOffers,
           opts.manualSupplierQuotes,
         );
-        summary.decisionIds.push(decisionId.id);
-        if (decisionId.status === "applied") summary.applied++;
-        else if (decisionId.status === "pending_review") summary.pendingReview++;
-        else summary.failed++;
+        summary.decisionIds.push(decisionOut.id);
+        if (decisionOut.status === "applied") summary.applied++;
+        else if (decisionOut.status === "pending_review") summary.pendingReview++;
+        else {
+          summary.failed++;
+          if (decisionOut.errorHint && !summary.lastError) {
+            summary.lastError = decisionOut.errorHint;
+          }
+        }
       } catch (e) {
         summary.failed++;
+        const errMsg = e instanceof Error ? e.message : String(e);
+        if (!summary.lastError) summary.lastError = errMsg;
         await logActivity(
           "runner",
-          `خطا در قیمت‌گذاری محصول ${product.sku}: ${e instanceof Error ? e.message : String(e)}`,
+          `خطا در قیمت‌گذاری محصول ${product.sku}: ${errMsg}`,
           { productId: product.id },
           "error",
         );
@@ -140,11 +144,6 @@ const SUPERVISOR_REASON_PREFIXES = [
   "ناظر بالاسر SystemOne تصمیم را در بازه ریویو قرار داد",
 ];
 
-/**
- * پس از دریافت پاسخ واقعی API ناظر (enrichment)، حکم/دلایل/گام ثبت‌شده را دوباره همگام می‌کند
- * تا منطق «رد کامل ↔ ریویو ↔ اعمال خودکار» دقیقاً بر اساس پاسخ زندهٔ ناظر اعمال شود
- * و چیزی در دیتابیس/صفحه ریویو ناهمخوان نماند.
- */
 function syncSupervisorAfterEnrichment(result: PricingResult, sourceOk: boolean): void {
   const sup = result.supervisor;
   result.reviewReasons = result.reviewReasons.filter(
@@ -210,10 +209,7 @@ async function priceOneProduct(
   allocatedCounts: Record<number, number>,
   manualOffers?: RawOffer[],
   manualSupplierQuotes?: SupplierQuote[],
-): Promise<{ id: number; status: string }> {
-  // گارد سیستم واقعی: فقط منبع واقعی ترب (یا پیشنهادهای دستی همین اجرا) مجاز است.
-  // محصولات قدیمی با منبع حذف‌شده/شبیه‌سازی (مثل mock) هرگز تصمیم قیمتی نمی‌گیرند
-  // و قیمتشان به فروشگاه ارسال نمی‌شود؛ اجرا برای آن‌ها با خطای شفاف متوقف می‌شود.
+): Promise<{ id: number; status: string; errorHint?: string | null }> {
   if (!manualOffers?.length && !isAllowedSourceType(product.sourceType)) {
     throw new Error(
       `منبع «${product.sourceType}» برای محصول ${product.sku} مجاز نیست؛ فقط منبع واقعی «ترب» پشتیبانی می‌شود. منبع محصول را از صفحه محصولات اصلاح کنید.`,
@@ -242,6 +238,7 @@ async function priceOneProduct(
   const result = runPricingPipeline(source, {
     productId: product.id,
     productName: product.name,
+    sku: product.sku,
     costPrice: product.costPrice,
     supplierQuotes,
     minMarginPctOverride: product.minMarginPct,
@@ -251,8 +248,6 @@ async function priceOneProduct(
     config,
   });
 
-  // ناظر بالاسر با توکن واقعی (پنل تنظیمات/دیتابیس یا env) همین‌جا به API زنده SubQ SystemOne وصل می‌شود؛
-  // توکن/آدرس سرور/مدل از پنل تنظیمات (دیتابیس) با اولویت بالاتر از پروفایل و env خوانده می‌شود.
   if (config.supervisor.enabled) {
     const subqRuntime = await resolveSubqRuntime(config.supervisor);
     result.supervisor = await enrichSupervisorWithSubqApi(result.supervisor, {
@@ -294,8 +289,6 @@ async function priceOneProduct(
         result.needsReview = true;
         result.reviewReasons.push(`AI تصمیم را رد کرد: ${review.reasoning}`);
       } else if (review.verdict === "adjust") {
-        // منطق اصلاح‌شده adjust: پیشنهاد AI هرگز مستقیم اعمال نمی‌شود؛ فقط به ریویو می‌رود.
-        // اگر پیشنهاد AI زیر خط قرمز سود باشد، مثل reject رفتار می‌کنیم.
         const suggested = review.suggestedFinalPrice;
         const floor = result.supply.hardFloorPrice;
         const cost = result.supply.effectiveCostPrice;
@@ -312,13 +305,48 @@ async function priceOneProduct(
     }
   }
 
+  // گارد امنیتی مضاعف برای جلوگیری از تشخیص اشتباه کارت و اعمال خودکار کالاهای بدون قیمت خرید:
+  // اگر محصول فاقد قیمت خرید همکار است (usedMarketConsensusFloor) و هنوز لینک/PRK ترب برای آن توسط مدیر تایید نشده است (!product.torobPrk)،
+  // بار اول حتماً به صف بازبینی (pending_review) می‌رود تا کارت پیدا شده در ترب توسط مدیر تایید شود و سرخود وارد کمپین‌های سایت نگردد!
+  const unverifiedFirstSearchWithoutCost =
+    !product.torobPrk && !product.torobUrl && result.supply.usedMarketConsensusFloor;
+  if (unverifiedFirstSearchWithoutCost && !result.rejectedBySupervisor) {
+    result.needsReview = true;
+    result.reviewReasons.push(
+      "اولین استعلام خودکار بدون لینک ترب و بدون قیمت خرید همکار — نیازمند یک‌بار تایید کارت ترب در صف بازبینی",
+    );
+  }
+
+  const strictlyAboveCost =
+    result.finalPrice != null &&
+    result.supply.effectiveCostPrice > 0 &&
+    result.finalPrice >= result.supply.hardFloorPrice &&
+    result.finalPrice > result.supply.effectiveCostPrice;
+
+  let status: string;
+  if (result.rejectedBySupervisor) {
+    status = "rejected";
+  } else if (!result.finalPrice) {
+    status = "failed";
+  } else if (strictlyAboveCost && !result.needsReview && product.autoApply) {
+    status = "applied";
+  } else {
+    status = "pending_review";
+  }
+
   let campaignType = "none";
   let campaignName: string | null = null;
   let badgeTheme = "green-orange";
   let showInFeatured = false;
   let campaignEndsAt: Date | null = null;
 
-  if (result.discountPct != null && result.finalPrice) {
+  // تخصیص کمپین فقط زمانی انجام می‌شود که تصمیم رد یا خطادار نباشد!
+  if (
+    status !== "rejected" &&
+    status !== "failed" &&
+    result.discountPct != null &&
+    result.finalPrice
+  ) {
     const pick = pickCampaign(campaigns, {
       discountPct: result.discountPct,
       category: product.category,
@@ -335,7 +363,7 @@ async function priceOneProduct(
     badgeTheme = pick.badgeTheme;
     showInFeatured = pick.showInFeatured;
     campaignEndsAt = pick.endsAt;
-    if (pick.campaignId != null && pick.type !== "none") {
+    if (status === "applied" && pick.campaignId != null && pick.type !== "none") {
       allocatedCounts[pick.campaignId] = (allocatedCounts[pick.campaignId] ?? 0) + 1;
     }
     result.steps.push({
@@ -350,28 +378,6 @@ async function priceOneProduct(
         cardIndex,
       },
     });
-  }
-
-  const strictlyAboveCost =
-    result.finalPrice != null &&
-    result.supply.effectiveCostPrice > 0 &&
-    result.finalPrice >= result.supply.hardFloorPrice &&
-    result.finalPrice > result.supply.effectiveCostPrice;
-
-  // اعمال دقیق حکم ۳ بازه‌ای ناظر بالاسر (SystemOne Supervisor):
-  // - زیر 45% (reject): وضعیت "rejected" (رد کامل، وارد سایت نمی‌شود)
-  // - بین 45% تا 80% (review): وضعیت "pending_review" (ارسال به بخش ریویو)
-  // - بالای 80% (approve): در صورت رعایت خط قرمز سود و فعال بودن autoApply، وضعیت "applied" (ادامه کار و اعمال خودکار)
-  let status: string;
-  if (result.rejectedBySupervisor) {
-    // رد کامل ناظر بالاسر (حتی اگر قیمتی تولید نشده باشد) → وضعیت rejected و ورود به فهرست ردشده‌ها
-    status = "rejected";
-  } else if (!result.finalPrice) {
-    status = "failed";
-  } else if (strictlyAboveCost && !result.needsReview && product.autoApply) {
-    status = "applied";
-  } else {
-    status = "pending_review";
   }
 
   const [decision] = await db
@@ -434,6 +440,9 @@ async function priceOneProduct(
     );
   }
 
+  // قفل کردن PRK در دیتابیس فقط زمانی که تصمیم اعمال شده یا گیت تطابق هویت بالای آستانه تایید خودکار (approve) باشد!
+  const identityApproved = result.supervisor.gates.identity_match?.verdict === "approve";
+
   await db
     .update(products)
     .set({
@@ -447,11 +456,8 @@ async function priceOneProduct(
         ? "کشف هوشمند از ترب (قیمت‌گذار معیار)"
         : result.supply.selectedQuote?.supplierName ?? product.selectedSupplierName ?? null,
       ...(result.supply.hardFloorPrice > 0 ? { currentHardFloorPrice: result.supply.hardFloorPrice } : {}),
-      // قفل کردن PRK در دیتابیس فقط زمانی که گیت هویت ناظر (identity_match) رد نشده باشد!
-      ...(source.prk && !product.torobPrk && result.supervisor.gates.identity_match?.verdict !== "reject"
-        ? { torobPrk: source.prk }
-        : {}),
-      ...(source.detailsUrl && !product.torobDetailsUrl && result.supervisor.gates.identity_match?.verdict !== "reject"
+      ...(source.prk && !product.torobPrk && identityApproved ? { torobPrk: source.prk } : {}),
+      ...(source.detailsUrl && !product.torobDetailsUrl && identityApproved
         ? { torobDetailsUrl: source.detailsUrl }
         : {}),
       ...(status === "pending_review" ? { status: "needs_review" } : {}),
@@ -462,7 +468,7 @@ async function priceOneProduct(
     await applyDecision(decision.id, campaignEndsAt);
   }
 
-  return { id: decision.id, status };
+  return { id: decision.id, status, errorHint: source.error ?? null };
 }
 
 /** آیا تصمیم توسط ناظر SystemOne رد شده؟ (وضعیت rejected یا لاگ supervisor با verdict=reject) */
@@ -491,8 +497,6 @@ export async function applyDecision(
   if (d.source !== "torob" && d.source !== "manual") {
     return { ok: false, message: `اعمال تصمیم با منبع «${d.source}» ممنوع است؛ فقط تصمیم‌های مبتنی بر داده واقعی ترب یا ورود دستی مجاز به ارسال به فروشگاه‌اند` };
   }
-  // منطق اصلاح‌شده رد/ریویو: تصمیم ردشده توسط ناظر بالاسر هرگز (حتی با تأیید انسانی اشتباهی)
-  // به فروشگاه ارسال نمی‌شود، مگر با force صریح که در لاگ ثبت می‌شود.
   if (isSupervisorRejected({ status: d.status, steps: (d.steps ?? []) as { step: string; message?: string }[] }) && !opts?.force) {
     return {
       ok: false,
@@ -508,8 +512,6 @@ export async function applyDecision(
     };
   }
 
-  // بازبینی دوباره خط قرمز فروش در «لحظه اعمال»: ممکن است قیمت تامین/خط قرمز پس از ساخت تصمیم تغییر کرده باشد؛
-  // بدون force انسانی هرگز اجازه نمی‌دهیم قیمتی زیر خط قرمز جدید به فروشگاه ارسال شود.
   const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p.currentHardFloorPrice ?? 0);
   if (effectiveFloor > 0 && d.finalPrice < effectiveFloor && !opts?.force) {
     return {
@@ -528,6 +530,7 @@ export async function applyDecision(
       currentCampaignName: d.campaignName,
       currentBadgeTheme: d.badgeTheme ?? "green-orange",
       currentShowInFeatured: d.showInFeatured ?? false,
+       ...(d.source === "torob" && !p.torobPrk ? {} : {}),
       lastDecisionId: d.id,
       status: "active",
       updatedAt: new Date(),
@@ -578,7 +581,106 @@ export async function applyDecision(
 export async function rejectDecision(decisionId: number): Promise<void> {
   const [d] = await db.select().from(priceDecisions).where(eq(priceDecisions.id, decisionId)).limit(1);
   if (!d) return;
-  await db.update(priceDecisions).set({ status: "rejected" }).where(eq(priceDecisions.id, decisionId));
+  await db
+    .update(priceDecisions)
+    .set({ status: "rejected", campaignType: "none", campaignName: null, showInFeatured: false })
+    .where(eq(priceDecisions.id, decisionId));
   await db.update(products).set({ status: "active", updatedAt: new Date() }).where(eq(products.id, d.productId));
   await logActivity("apply", `تصمیم #${decisionId} رد شد`, { decisionId });
+}
+
+/**
+ * پاک‌سازی فوری کارت‌هایی که به اشتباه در دسته ۳ (فرصت‌های زمان‌دار / timed_sale) قرار گرفته‌اند
+ * + حذف آن‌ها از کالکشن Sale در بک‌اند فروشگاه (ekgkala-backend) و ریست قفل ترب
+ */
+export async function cleanupWrongTimedSaleCards(opts?: {
+  productId?: number;
+}): Promise<{ cleanedCount: number; cleanedProducts: string[]; storeResetResults: string[]; mcpReset: boolean }> {
+  const targetRows = opts?.productId
+    ? await db.select().from(products).where(eq(products.id, opts.productId))
+    : await db.select().from(products).where(eq(products.currentCampaign, "timed_sale"));
+
+  const cleanedProducts: string[] = [];
+  const storeResetResults: string[] = [];
+
+  for (const p of targetRows) {
+    const safePrice = p.currentFinalPrice || p.currentBasePrice || 0;
+    await db
+      .update(products)
+      .set({
+        currentCampaign: "none",
+        currentCampaignName: null,
+        currentDiscountPct: 0,
+        currentShowInFeatured: false,
+        currentBasePrice: safePrice > 0 ? safePrice : p.currentBasePrice,
+        // اگر محصول قیمت خرید نداشت و به اشتباه به یک PRK ترب قفل شده بود، قفل PRK را آزاد کن تا دوباره تمیز استعلام شود
+        ...(p.costPrice <= 0 ? { torobPrk: null, torobDetailsUrl: null, autoApply: false } : {}),
+        status: "active",
+        updatedAt: new Date(),
+      })
+      .where(eq(products.id, p.id));
+
+    await db
+      .update(priceDecisions)
+      .set({
+        campaignType: "none",
+        campaignName: null,
+        showInFeatured: false,
+        ...(p.costPrice <= 0 ? { status: "rejected" } : {}),
+      })
+      .where(eq(priceDecisions.productId, p.id));
+
+    cleanedProducts.push(`${p.name} (${p.sku})`);
+
+    if (safePrice > 0) {
+      const pushRes = await pushToStore({
+        productId: p.id,
+        sku: p.sku,
+        storeExternalId: p.storeExternalId,
+        effectiveCostPrice: p.costPrice > 0 ? p.costPrice : Math.round(safePrice * 0.85),
+        hardFloorPrice: p.currentHardFloorPrice ?? 0,
+        monitoredMarketCeiling: safePrice,
+        basePrice: safePrice,
+        finalPrice: safePrice,
+        discountPct: 0,
+        campaignType: "none",
+        campaignName: null,
+        badgeTheme: "green-orange",
+        showInFeatured: false,
+        campaignEndsAt: null,
+        decisionId: p.lastDecisionId ?? 0,
+        confidence: 1,
+      });
+      storeResetResults.push(`${p.sku}: ${pushRes.message}`);
+    }
+  }
+
+  // غیرفعال کردن کمپین پیش‌فرض timed_sale اگر به صورت خودکار همه کارت‌های ۱ تا ۱۰۰ را با ۳٪ تخفیف می‌گرفت
+  await db
+    .update(discountCampaigns)
+    .set({ active: false, minDiscountPct: 10, cardRangeFrom: 21, cardRangeTo: 50 })
+    .where(and(eq(discountCampaigns.type, "timed_sale"), eq(discountCampaigns.minDiscountPct, 3)));
+
+  // ریست قفل ضدربات (Circuit Breaker Wall) روی سرور torob-mcp در صورت فعال بودن
+  let mcpReset = false;
+  const mcpUrl = (process.env.TOROB_MCP_URL ?? "http://127.0.0.1:3005/mcp").replace(/\/mcp\/?$/, "");
+  try {
+    const r = await fetch(`${mcpUrl}/reset`, { method: "POST", cache: "no-store" });
+    mcpReset = r.ok;
+  } catch {
+    mcpReset = false;
+  }
+
+  await logActivity(
+    "cleanup",
+    `پاک‌سازی کمپین‌های زمان‌دار اشتباه انجام شد: ${cleanedProducts.length} کارت بازگردانی شد`,
+    { cleanedProducts, storeResetResults, mcpReset },
+  );
+
+  return {
+    cleanedCount: cleanedProducts.length,
+    cleanedProducts,
+    storeResetResults,
+    mcpReset,
+  };
 }

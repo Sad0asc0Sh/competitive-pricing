@@ -77,6 +77,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     const identityCheck = evaluateTorobCandidate(
       {
         productName: ctx.productName,
+        sku: ctx.sku,
         anchorPriceToman: supply.effectiveCostPrice > 0 ? supply.effectiveCostPrice : ctx.currentFinalPrice,
         rejectBelowPct: idRej,
         approveAbovePct: idApp,
@@ -348,8 +349,6 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         strategy: "no_data",
         confidence: 0,
         needsReview: true,
-        // فقط وقتی ناظر بالاسر فعال است و خودش رد کرده، «رد توسط ناظر» ثبت می‌شود؛
-        // در غیر این صورت این مورد در دسته «ناموفق/بدون داده» می‌ماند و به‌عنوان رد ناظر نمایش داده نمی‌شود.
         rejectedBySupervisor: emptySupervisor.enabled && emptySupervisor.verdict === "reject",
         reviewReasons: [...reviewReasons, "نه داده بازار موجود است و نه قیمت خرید/تامین"],
         steps,

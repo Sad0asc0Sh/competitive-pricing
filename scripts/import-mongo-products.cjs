@@ -2,10 +2,6 @@ const mongoose = require("mongoose");
 const { Pool } = require("pg");
 const path = require("path");
 
-// مسیرها از متغیر محیطی خوانده می‌شوند تا اسکریپت به یک سرور/مسیر خاص قفل نباشد؛
-// مقادیر پیش‌فرض همان مسیرهای فعلی سرور دبیان‌اند تا دیپلوهای موجود نشکنند:
-//   PRICING_APP_DIR      پوشه همین سامانه قیمت‌گذاری (حاوی .env)
-//   EKGKALA_BACKEND_DIR  پوشه ekgkala-backend فروشگاه (حاوی .env و models/)
 const PRICING_APP_DIR = process.env.PRICING_APP_DIR || "/home/debian/apps/ai-driven-competitive-pricing-system";
 const EKGKALA_BACKEND_DIR = process.env.EKGKALA_BACKEND_DIR || "/home/debian/apps/ekgkala-project/ekgkala-backend";
 
@@ -17,7 +13,7 @@ require("dotenv").config({ path: path.join(EKGKALA_BACKEND_DIR, ".env"), process
 async function run() {
   const mongoUri = beEnv.MONGODB_URI || process.env.MONGODB_URI;
   if (!mongoUri) throw new Error("MONGODB_URI not found");
-  
+
   const pgUrl = process.env.DATABASE_URL;
   if (!pgUrl) throw new Error("DATABASE_URL not found");
 
@@ -39,12 +35,18 @@ async function run() {
   const client = await pool.connect();
 
   let imported = 0;
-  let skipped = 0;
   const seenSkus = new Set();
 
   try {
     for (const p of mongoProducts) {
-      let rawSku = (p.sku && String(p.sku).trim()) || (p.productCode && String(p.productCode).trim()) || String(p._id);
+      // هرگز از ObjectId هگزادسیمال ۲۴ کاراکتری به عنوان کد مدل فنی (sku) خام استفاده نشود
+      const cleanSku = p.sku && String(p.sku).trim();
+      const cleanCode = p.productCode && String(p.productCode).trim();
+      let rawSku = cleanSku || cleanCode || `KY-${String(p._id).slice(-6).toUpperCase()}`;
+      if (/^[a-f0-9]{24}$/i.test(rawSku)) {
+        rawSku = `KY-${rawSku.slice(-6).toUpperCase()}`;
+      }
+
       let sku = rawSku;
       let counter = 1;
       while (seenSkus.has(sku.toLowerCase())) {
@@ -53,12 +55,16 @@ async function run() {
       seenSkus.add(sku.toLowerCase());
 
       const name = p.name ? String(p.name).trim() : `محصول ${sku}`;
-      const category = (p.category && p.category.name) ? String(p.category.name).trim() : null;
-      const storeExternalId = (p.productCode && String(p.productCode).trim()) || String(p._id);
+      const category = p.category && p.category.name ? String(p.category.name).trim() : null;
+      const storeExternalId = cleanCode || String(p._id);
       const costPrice = Math.max(0, Math.round(Number(p.costPrice) || 0));
       const basePrice = Math.max(0, Math.round(Number(p.price) || 0));
       const discount = Math.max(0, Number(p.discount) || 0);
       const finalPrice = discount > 0 ? Math.round(basePrice * (1 - discount / 100)) : basePrice;
+
+      // گارد کلیدی: محصولاتی که هنوز قیمت خرید همکار (costPrice) ندارند، با autoApply = false ایمپورت می‌شوند
+      // تا هیچ کارتی بدون تایید مدیر در صف بازبینی به صورت خودکار وارد کمپین‌های تخفیف نشود!
+      const autoApply = costPrice > 0;
 
       const query = `
         INSERT INTO products (
@@ -76,9 +82,7 @@ async function run() {
           name = EXCLUDED.name,
           category = EXCLUDED.category,
           store_external_id = EXCLUDED.store_external_id,
-          current_base_price = EXCLUDED.current_base_price,
-          current_final_price = EXCLUDED.current_final_price,
-          current_discount_pct = EXCLUDED.current_discount_pct,
+          auto_apply = CASE WHEN EXCLUDED.cost_price > 0 THEN products.auto_apply ELSE false END,
           updated_at = NOW()
         RETURNING id;
       `;
@@ -94,8 +98,8 @@ async function run() {
         finalPrice,
         discount,
         "auto",
-        true,
-        true,
+        false,
+        autoApply,
         "active",
         JSON.stringify([]),
       ];
@@ -104,7 +108,7 @@ async function run() {
       imported++;
     }
 
-    console.log(`Successfully imported/updated ${imported} products into PostgreSQL.`);
+    console.log(`Successfully imported/updated ${imported} products into PostgreSQL (costless products safely set to auto_apply = false).`);
   } finally {
     client.release();
     await pool.end();

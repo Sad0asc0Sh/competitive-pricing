@@ -1,0 +1,261 @@
+// torob-mcp (Cloudflare Workers): stateless Streamable HTTP at /mcp.
+// Keyless, so there is nothing to wire per request beyond a fresh Server.
+//
+// Torob's edge answers some clients with an arCAPTCHA page (HTTP 490) instead
+// of JSON, and it scores a client by where the call comes from rather than by
+// what it sends. Measured 2026-10-09: from an ordinary connection, five request
+// shapes (this server's headers, a full Chrome set, the site's own cookies, and
+// no cookies) all answered JSON, as did twelve searches 1.5s apart; from
+// Cloudflare's network, three calls in a minute drew a 274KB challenge page.
+// A Worker's subrequests also carry Cloudflare's `Cf-Worker` header, which
+// names the worker and cannot be stripped. And an address can be refused
+// outright with nothing wrong at all: measured 2026-10-12, from a datacenter
+// address one request answered in full and the next one, 40 seconds later, was
+// challenged - still challenged after five idle minutes. So a hosted copy will
+// be challenged from time to time whatever this file does, and no setting here
+// changes that: http.ts turns a 490 into an actionable error rather than an
+// empty result, keeps the calls behind it from spending requests, and can be
+// pointed at a relay the operator controls with the TOROB_API_BASE variable
+// below - which may help, and does not guarantee anything.
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { DEMO_NOTE } from "./config.js";
+import { FONT_BIN } from "./fonts.js";
+import { setHostedDemo, setUpstreamBase } from "./http.js";
+import { LANDING, MCP_PAGE } from "./landing.js";
+import { OG_IMAGE } from "./og-image.js";
+import {
+clientKeyOf,
+
+RATE_LIMIT_WINDOW_MS,
+
+rateLimitFor,
+verdictFor } from
+"./rate-limit.js";
+import { buildServer, VERSION } from "./server.js";
+
+// This hosted copy answers at most RATE_LIMIT_MAX (rate-limit.ts) /mcp calls a
+// minute per client IP, so a script cannot use the public service as an unmetered
+// price API. The count lives in the Durable Object below - one per client, so it
+// is the same number whatever colo the call arrives in - and the module that
+// holds it is imported by this file alone: the server core has no such limit,
+// and neither has a self-hosted run.
+
+// Parity with index.ts: browser MCP clients need CORS, and the endpoint is
+// keyless read-only, so a permissive allow-origin leaks nothing.
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "content-type, mcp-session-id, mcp-protocol-version, authorization",
+  "Access-Control-Max-Age": "86400"
+};
+
+function withCors(res) {
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(CORS_HEADERS)) if (!headers.has(k)) headers.set(k, v);
+  return new Response(res.body, { status: res.status, headers });
+}
+
+// A caller that can read its own count does not have to guess where the line is.
+function withRate(res, verdict) {
+  const headers = new Headers(res.headers);
+  headers.set("x-ratelimit-limit", String(verdict.limit));
+  headers.set("x-ratelimit-remaining", String(verdict.remaining));
+  return new Response(res.body, { status: res.status, headers });
+}
+
+// 429 with a JSON-RPC error body, so an MCP client sees a reason rather than a
+// transport failure it cannot explain. The limit is ours, not Torob's, and the
+// message says so: nothing about this is upstream throttling.
+function tooManyRequests(verdict) {
+  return withCors(
+  new Response(
+  JSON.stringify({
+    jsonrpc: "2.0",
+    id: null,
+    error: {
+      code: -32029,
+      message:
+      `Too many requests: this service answers at most ${verdict.limit} /mcp calls a minute per client, ` +
+      `and the window resets in ${verdict.retry_after_seconds} second(s). The limit belongs to this hosted ` +
+      `quick-test copy - a self-hosted run has none.${DEMO_NOTE}`
+    }
+  }),
+  {
+    status: 429,
+    headers: {
+      "content-type": "application/json",
+      "retry-after": String(verdict.retry_after_seconds),
+      "x-ratelimit-limit": String(verdict.limit),
+      "x-ratelimit-remaining": "0"
+    }
+  }));
+
+
+}
+
+// The third argument is the Worker's own ExecutionContext. A tool that learns a
+// product shares it through the per-colo cache, and only `waitUntil` keeps that
+// write alive after the response has been sent.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// One instance per client IP (`idFromName`), which makes the count exact and
+// global where a per-colo cache is neither: measured against the live Worker, a
+// fifty-call burst stayed at "19 remaining" on the cache version because the
+// calls were spread over two colos. The window is kept in storage, so an
+// eviction between two calls cannot hand the caller a fresh window mid-minute.
+// It has no timers and no alarms: its entire job is to answer "how many so far".
+export class RateLimiter {
+  constructor(state) {this.state = state;}
+
+  async fetch() {
+    const now = Date.now();
+    const bucket = Math.floor(now / RATE_LIMIT_WINDOW_MS);
+    const stored = (await this.state.storage.get("window")) ?? {};
+    const used = stored.bucket === bucket ? Math.max(0, Math.round(Number(stored.count) || 0)) : 0;
+    const verdict = verdictFor(used, now);
+    if (verdict.allowed) await this.state.storage.put("window", { bucket, count: used + 1 });
+    return Response.json(verdict);
+  }
+}
+
+export default {
+  async fetch(req, env, ctx) {
+    const url = new URL(req.url);
+    // This copy is the quick-test one: every message it can stop a caller on
+    // says so and points at the version without a limit.
+    setHostedDemo(true);
+    try {
+      setUpstreamBase(env?.TOROB_API_BASE);
+    } catch (err) {
+      // A misconfigured relay must not look like Torob being down: name it.
+      return withCors(
+      new Response(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }), {
+        status: 500,
+        headers: { "content-type": "application/json" }
+      }));
+
+    }
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+    if (req.method === "POST" && url.pathname === "/mcp") {
+      // The limit covers this endpoint only. The landing page, the connect page,
+      // the fonts and /health stay free, so a browser is never locked out of the
+      // page that explains what happened.
+      const verdict = await rateLimitFor(clientKeyOf(req), env?.RATE_LIMITER);
+      if (!verdict.allowed) return tooManyRequests(verdict);
+      const server = buildServer(ctx);
+      const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      try {
+        await server.connect(transport);
+        const res = await transport.handleRequest(req);
+        // Plain text/event-stream decodes as latin-1 in naive clients
+        // (PowerShell included) - the charset keeps Persian titles intact.
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("text/event-stream") && !ct.includes("charset")) {
+          const headers = new Headers(res.headers);
+          headers.set("content-type", `${ct}; charset=utf-8`);
+          return withRate(withCors(new Response(res.body, { status: res.status, headers })), verdict);
+        }
+        return withRate(withCors(res), verdict);
+      } catch (err) {
+        // SDK parses the body itself; surface the cause in logs
+        // (Workers-safe: no node: imports) and always close both.
+        console.error("torob-mcp /mcp error:", err instanceof Error ? err.message : String(err));
+        try {await transport.close();} catch {/* ignore */}
+        try {await server.close();} catch {/* ignore */}
+        // Every answer to a /mcp POST reports the budget, this one included.
+        return withRate(withCors(new Response("Bad request", { status: 400 })), verdict);
+      }
+    }
+    // HEAD answers what GET would, with headers and no body: a proxy or health
+    // check that probes with HEAD used to fall through to 404, which reads as
+    // "this is not an MCP endpoint" when it is one.
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/mcp") {
+      // The transport rule: GET on the MCP endpoint either streams
+      // `text/event-stream` or answers 405 - anything else is wrong
+      // (modelcontextprotocol.io, "Listening for Messages from the Server").
+      //
+      // This used to be 200 + HTML, which a client does not read as an error -
+      // it reads it as a stream that opened and immediately ended. The official
+      // TypeScript SDK takes 200 as success, hands the HTML to an SSE parser
+      // that discards every line, watches the reader finish, and schedules a
+      // reconnect with its attempt counter hard-coded to 0 - so `maxRetries: 2`
+      // never applies. One GET a second per client session, for as long as the
+      // process lives: 232,748 requests on 2026-10-08 and 233,327 on 2026-10-10,
+      // all of this plan's 100,000/day. Caching never could have helped - there
+      // is no edge cache in front of workers.dev, and a cache hit would have
+      // been billed anyway. Every known client stops cleanly on 405; the SDK
+      // handles it with `return` and the comment "This is an expected case
+      // that should not trigger an error".
+      //
+      // A browser is the one client that asks for text/html, and it still gets
+      // the page.
+      const accept = (req.headers.get("accept") || "").toLowerCase();
+      const wantsPage = accept.includes("text/html") && !accept.includes("text/event-stream");
+      return withCors(
+      new Response(
+      req.method === "HEAD" ? null : wantsPage ? MCP_PAGE : "Method Not Allowed: this server is stateless, POST to /mcp.",
+      {
+        status: wantsPage ? 200 : 405,
+        headers: wantsPage ?
+        { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } :
+        { allow: "POST", "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }
+      }));
+
+
+    }
+    if (req.method === "GET" && url.pathname === "/health") {
+      // The version is part of health on purpose: the docs advertise the
+      // version the CHANGELOG names, so a deployment that lags the repo must
+      // be visible to a single curl instead of only to an MCP initialize
+      // handshake.
+      return withCors(Response.json({ ok: true, service: "torob-mcp", version: VERSION }));
+    }
+    if (req.method === "GET" && url.pathname === "/og.png") {
+      return withCors(
+      // .buffer is a plain ArrayBuffer over the decoded bytes; the cast
+      // goes through unknown because newer TS versions no longer treat a
+      // Uint8Array's backing buffer as assignable.
+      new Response(OG_IMAGE.buffer, {
+        headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" }
+      }));
+
+    }
+    // The landing page's own text face, so the site looks the same on a device
+    // that has no Persian font installed.
+    const font = url.pathname.match(/^\/doran-(\d{3})\.woff2$/);
+    if (req.method === "GET" && font && FONT_BIN[Number(font[1])]) {
+      return withCors(
+      new Response(FONT_BIN[Number(font[1])].buffer, {
+        headers: { "content-type": "font/woff2", "cache-control": "public, max-age=31536000, immutable" }
+      }));
+
+    }
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "")) {
+      return new Response(LANDING, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" }
+      });
+    }
+    return withCors(new Response("Not found. POST /mcp for MCP.", { status: 404 }));
+  }
+};

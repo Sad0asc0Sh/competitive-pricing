@@ -64,9 +64,11 @@ export async function ensureDefaults(): Promise<void> {
       {
         name: "فروش ویژه زمان‌دار (مالی و تخفیف + منتخب‌ها)",
         type: "timed_sale",
-        active: true,
+        // پیش‌فرض غیرفعال تا هیچ کارتی با تخفیف ۵٪ به صورت ناخواسته وارد بخش «مالی و تخفیف» نشود؛
+        // مدیر می‌تواند در صفحه کمپین‌ها رنج کارت و نام دلخواه را تنظیم و فعال کند.
+        active: false,
         priority: 8,
-        minDiscountPct: 3,
+        minDiscountPct: 10,
         maxDiscountPct: 45,
         activeHours: [],
         activeDays: [],
@@ -74,8 +76,8 @@ export async function ensureDefaults(): Promise<void> {
         durationHours: 72,
         badgeTheme: "green-orange",
         showInFeatured: true,
-        cardRangeFrom: 1,
-        cardRangeTo: 100,
+        cardRangeFrom: 21,
+        cardRangeTo: 50,
         maxCards: 0,
         minPriceToman: 0,
         maxPriceToman: 0,

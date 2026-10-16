@@ -1,10 +1,9 @@
 /**
  * لایه «رفتار انسان‌نما» برای خزش:
- *  - تأخیر تصادفی بین درخواست‌ها (jitter)
+ *  - تأخیر تصادفی کوتاه بین درخواست‌ها (jitter) بدون فریز کردن درخواست‌های پنل وب
  *  - چرخش User-Agent و هدرهای مرورگر واقعی
  *  - محدودیت نرخ per-host
- *  - تلاش مجدد با backoff نمایی
- *  - پشتیبانی از پروکسی (از طریق env: CRAWL_PROXY_URL — در نسخه Playwright)
+ *  - تلاش مجدد سریع با تایم‌اوت کنترل‌شده
  */
 
 const USER_AGENTS = [
@@ -43,8 +42,8 @@ export function browserHeaders(referer?: string): Record<string, string> {
   };
 }
 
-/** قبل از هر درخواست: رعایت فاصله حداقلی per-host + تأخیر تصادفی */
-export async function politeDelay(host: string, minMs = 1500, maxMs = 4500): Promise<void> {
+/** قبل از هر درخواست: رعایت فاصله کوتاه per-host بدون کند کردن پنل */
+export async function politeDelay(host: string, minMs = 200, maxMs = 550): Promise<void> {
   const last = lastRequestAt.get(host) ?? 0;
   const since = Date.now() - last;
   const wait = randomBetween(minMs, maxMs);
@@ -57,8 +56,8 @@ export async function fetchWithRetry(
   init: RequestInit,
   opts: { retries?: number; timeoutMs?: number } = {},
 ): Promise<Response> {
-  const retries = opts.retries ?? 2;
-  const timeoutMs = opts.timeoutMs ?? 15000;
+  const retries = opts.retries ?? 1;
+  const timeoutMs = opts.timeoutMs ?? 7000;
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const ctrl = new AbortController();
@@ -66,6 +65,10 @@ export async function fetchWithRetry(
     try {
       const res = await fetch(url, { ...init, signal: ctrl.signal, cache: "no-store" });
       clearTimeout(t);
+      if (res.status === 490) {
+        // چالش امنیتی ترب با تلاش مجدد فوری بدتر می‌شود؛ بلافاصله برگردان
+        return res;
+      }
       if (res.status === 429 || res.status >= 500) {
         lastErr = new Error(`HTTP ${res.status}`);
       } else {
@@ -75,7 +78,9 @@ export async function fetchWithRetry(
       clearTimeout(t);
       lastErr = e;
     }
-    await sleep(randomBetween(800, 2000) * Math.pow(2, attempt));
+    if (attempt < retries) {
+      await sleep(randomBetween(300, 700));
+    }
   }
   throw lastErr instanceof Error ? lastErr : new Error("درخواست ناموفق");
 }

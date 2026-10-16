@@ -5,6 +5,7 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.extractPrk = extractPrk;
 exports.fetchTorobPriceTrendV4 = fetchTorobPriceTrendV4;
+exports.getTorobApiBase = getTorobApiBase;
 exports.looksLikeTorobChallenge = looksLikeTorobChallenge;
 exports.normalizeTorobInPersonSeller = normalizeTorobInPersonSeller;
 exports.normalizeTorobSeller = normalizeTorobSeller;
@@ -146,7 +147,7 @@ async function searchTorobProductV4(query, targetPrk, opts) {
   if (!cleanQuery) return null;
   try {
     const apiBase = getTorobApiBase();
-    await (0, _humanize.politeDelay)("api.torob.com", 800, 1800);
+    await (0, _humanize.politeDelay)("api.torob.com", 150, 400);
     const params = new URLSearchParams({
       q: cleanQuery,
       page: "0",
@@ -156,8 +157,18 @@ async function searchTorobProductV4(query, targetPrk, opts) {
     const res = await (0, _humanize.fetchWithRetry)(`${apiBase}/v4/base-product/search/?${params.toString()}`, {
       headers: (0, _humanize.browserHeaders)("https://torob.com/")
     });
+    const bodyText = await res.text();
+    const ct = res.headers.get("content-type") ?? "";
+    if (looksLikeTorobChallenge(res.status, ct, bodyText)) {
+      return {
+        prk: null,
+        detailsUrl: null,
+        title: null,
+        challenged: true
+      };
+    }
     if (!res.ok) return null;
-    const raw = await res.json();
+    const raw = JSON.parse(bodyText);
     const rows = Array.isArray(raw.results) ? raw.results : [];
     if (!rows.length) return null;
     if (targetPrk) {
@@ -175,7 +186,7 @@ async function searchTorobProductV4(query, targetPrk, opts) {
     const candidates = rows.map(r => {
       const prk = str(r.random_key).trim();
       if (!prk) return null;
-      const shopText = str(r.shop_text ?? "");
+      const shopText = str(r.shop_text ?? "").replace(/[۰-۹]/g, d => String.fromCharCode(d.charCodeAt(0) - 1728)).replace(/[٠-٩]/g, d => String.fromCharCode(d.charCodeAt(0) - 1584));
       const sellerCountMatch = shopText.match(/(\d+)/);
       const sellerCount = num(r.shop_count ?? r.sellers_count) || (sellerCountMatch ? Number(sellerCountMatch[1]) : 1);
       return {
@@ -194,7 +205,15 @@ async function searchTorobProductV4(query, targetPrk, opts) {
       sku: opts?.sku,
       anchorPriceToman: opts?.anchorPriceToman
     }, candidates);
-    if (!outcome.best) return null;
+    if (!outcome.best) {
+      return {
+        prk: null,
+        detailsUrl: null,
+        title: null,
+        rejectedAll: true,
+        matchExplanation: outcome.explanation
+      };
+    }
     return {
       prk: outcome.best.candidate.prk,
       detailsUrl: outcome.best.candidate.detailsUrl ?? null,
@@ -212,8 +231,8 @@ async function fetchTorobPriceTrendV4(prk) {
     const res = await (0, _humanize.fetchWithRetry)(`${apiBase}/v4/base-product/price-chart/?prk=${encodeURIComponent(prk)}`, {
       headers: (0, _humanize.browserHeaders)(`https://torob.com/p/${prk}/`)
     }, {
-      retries: 1,
-      timeoutMs: 8000
+      retries: 0,
+      timeoutMs: 4000
     });
     if (!res.ok) return null;
     const raw = await res.json();
@@ -275,8 +294,10 @@ const torobAdapter = {
         anchorPriceToman,
         now: fetchedAt
       });
-      if (mcpResult && mcpResult.ok) {
-        return mcpResult;
+      if (mcpResult) {
+        if (mcpResult.ok || mcpResult.meta?.challenged || mcpResult.meta?.rejectedInSearch) {
+          return mcpResult;
+        }
       }
     }
 
@@ -287,7 +308,31 @@ const torobAdapter = {
         sku: product.sku,
         anchorPriceToman
       });
-      if (discovered) {
+      if (discovered?.challenged) {
+        return {
+          source: "torob",
+          prk,
+          offers: [],
+          totalSellerCount: 0,
+          fetchedAt,
+          ok: false,
+          error: "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای استعلام از سرور خارج از کشور، آدرس Relay/Worker ایرانی را در TOROB_API_BASE تنظیم کنید.",
+          meta: {
+            challenged: true
+          }
+        };
+      }
+      if (discovered?.rejectedAll) {
+        return {
+          source: "torob",
+          offers: [],
+          totalSellerCount: 0,
+          fetchedAt,
+          ok: false,
+          error: discovered.matchExplanation ?? "هیچ کارتی در ترب با مشخصات و کد مدل محصول مطابقت نداشت"
+        };
+      }
+      if (discovered && discovered.prk) {
         prk = prk ?? discovered.prk;
         detailsUrl = detailsUrl ?? discovered.detailsUrl;
         matchMeta = {
@@ -309,7 +354,7 @@ const torobAdapter = {
     const pageUrl = product.torobUrl ?? `https://torob.com/p/${prk}/`;
     const apiBase = getTorobApiBase();
     try {
-      await (0, _humanize.politeDelay)("api.torob.com");
+      await (0, _humanize.politeDelay)("api.torob.com", 150, 400);
       const targetApiUrl = detailsUrl && detailsUrl.startsWith("http") ? detailsUrl.replace(/^https?:\/\/api\.torob\.com/, apiBase) : `${apiBase}/v4/base-product/details/?prk=${encodeURIComponent(prk)}&source=next_desktop`;
       const res = await (0, _humanize.fetchWithRetry)(targetApiUrl, {
         headers: (0, _humanize.browserHeaders)(pageUrl)
@@ -324,7 +369,10 @@ const torobAdapter = {
           totalSellerCount: 0,
           fetchedAt,
           ok: false,
-          error: "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای رفع آن از پروکسی/Relay ایرانی (TOROB_API_BASE) یا سرور torob-mcp استفاده کنید."
+          error: "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای رفع آن از پروکسی/Relay ایرانی (TOROB_API_BASE) استفاده کنید.",
+          meta: {
+            challenged: true
+          }
         };
       }
       if (res.ok) {
@@ -357,7 +405,7 @@ const torobAdapter = {
     // --- لایه ۲: HTML صفحه + __NEXT_DATA__
     let html = "";
     try {
-      await (0, _humanize.politeDelay)("torob.com");
+      await (0, _humanize.politeDelay)("torob.com", 150, 400);
       const res = await (0, _humanize.fetchWithRetry)(pageUrl, {
         headers: {
           ...(0, _humanize.browserHeaders)(),
@@ -365,6 +413,9 @@ const torobAdapter = {
           "Sec-Fetch-Dest": "document",
           "Sec-Fetch-Mode": "navigate"
         }
+      }, {
+        retries: 0,
+        timeoutMs: 5000
       });
       html = await res.text();
       const nd = extractNextData(html);
@@ -393,7 +444,7 @@ const torobAdapter = {
     }
 
     // --- لایه ۳: استخراج با هوش مصنوعی از HTML
-    if (html) {
+    if (html && !looksLikeTorobChallenge(200, "text/html", html)) {
       const ai = await (0, _client.extractOffersWithAI)(html, product.name);
       if (ai && ai.offers.length) {
         return {
@@ -418,7 +469,7 @@ const torobAdapter = {
       totalSellerCount: 0,
       fetchedAt,
       ok: false,
-      error: "دسترسی به ترب ممکن نشد (مسدودسازی IP یا تغییر ساختار). می‌توانید TOROB_MCP_URL یا TOROB_API_BASE را تنظیم کنید."
+      error: "دسترسی به ترب ممکن نشد (مسدودسازی IP دیتاسنتر خارجی توسط ترب). می‌توانید TOROB_API_BASE را تنظیم کنید."
     };
   }
 };

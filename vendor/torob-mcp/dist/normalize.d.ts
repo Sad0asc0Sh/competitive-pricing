@@ -1,0 +1,15 @@
+import { ZWNJ, faFold, faSearchVariants } from "fa-text-utils";
+export { ZWNJ, faFold, faSearchVariants };
+export declare function foldKey(v: unknown): string;
+export declare function searchTerm(v: unknown): string;
+export declare function str(v: unknown, fallback?: string): string;
+export declare function num(v: unknown, fallback: number): number;
+export declare function short(s: unknown, n?: number): string | null;
+export declare function clampLimit(v: unknown, def?: number, max?: number): number;
+export declare function clampPage(v: unknown, max?: number): number;
+export declare function pageClampNote(v: unknown, max?: number): Record<string, unknown>;
+export declare function tomanFromText(s: unknown): number | null;
+export declare function toman(v: unknown): number | null;
+export declare function availableFrom(price: number | null): boolean;
+export declare function formatToman(n: number | null): string | null;
+export declare function productUrl(path: unknown, prk: unknown): string | null;

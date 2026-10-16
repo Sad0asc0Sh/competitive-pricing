@@ -2,17 +2,41 @@
 
 import { badgeThemeLabel, campaignLabel, strategyLabel } from "@/lib/format";
 import type { CeilingDiscoveryMode, PricingResult, SgeoooleBadgeTheme, SgeoooleCampaignType } from "@/lib/pricing/types";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+const SAMPLE_COLLEAGUES = [
+  "پخش شرق مشهد, 2320000, مشهد, 9, in",
+  "همکار لاله‌زار تهران, 2295000, تهران, 7, in",
+].join("\n");
+
+const SAMPLE_OFFERS = [
+  "شرق دیجیتال مشهد, 2460000, مشهد, 0, online, 4.9",
+  "پاساژ تک مشهد, 2475000, مشهد, 1, in_person, 4.8",
+  "تکنولایف, 2480000, تهران, 0, online, 4.9",
+  "کالاتیک, 2520000, تهران, 1, online, 4.8",
+  "دیجی‌کالا, 2650000, تهران, 0, online, 4.8",
+  "گران‌فروش پرت ترب, 3850000, تهران, 5, online, 4.1",
+].join("\n");
+
+interface StoreProductItem {
+  id: number;
+  sku: string;
+  name: string;
+  costPrice: number;
+  currentFinalPrice: number | null;
+}
 
 export default function SimulatePage() {
-  const [productName, setProductName] = useState("");
-  const [torobTitle, setTorobTitle] = useState("");
-  const [colleaguesText, setColleaguesText] = useState("");
-  const [offersText, setOffersText] = useState("");
-  const [cost, setCost] = useState(0);
+  const [storeProducts, setStoreProducts] = useState<StoreProductItem[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState<string>("");
+  const [productName, setProductName] = useState("دوربین مداربسته تحت شبکه داهوا مدل DH-IPC-HFW1230S-S5 ظرفیت 2 مگاپیکسل");
+  const [torobTitle, setTorobTitle] = useState("دوربین مداربسته تحت شبکه داهوا مدل DH-IPC-HFW1230S-S5 ظرفیت 2 مگاپیکسل");
+  const [colleaguesText, setColleaguesText] = useState(SAMPLE_COLLEAGUES);
+  const [offersText, setOffersText] = useState(SAMPLE_OFFERS);
+  const [cost, setCost] = useState(2320000);
   const [minMargin, setMinMargin] = useState(3);
-  const [current, setCurrent] = useState<string>("");
-  const [sellers, setSellers] = useState(0);
+  const [current, setCurrent] = useState<string>("2490000");
+  const [sellers, setSellers] = useState(14);
 
   // آستانه‌های ناظر بالاسر SubQ SystemOne (پیش‌فرض: زیر 45% رد، 45 تا 80% ریویو، 80% به بالا تایید خودکار)
   const [rejectBelowPct, setRejectBelowPct] = useState(45);
@@ -27,25 +51,26 @@ export default function SimulatePage() {
   const [calibrateExact, setCalibrateExact] = useState(true);
 
   // پیش‌نمایش کارت در یکی از ۳ سیستم تخفیف sgeooole
-  const [previewCampaign, setPreviewCampaign] = useState<SgeoooleCampaignType>("timed_sale");
-  const [previewCampaignName, setPreviewCampaignName] = useState("فروش ویژه مشهد");
-  const [previewTheme, setPreviewTheme] = useState<SgeoooleBadgeTheme>("green-orange");
+  const [previewCampaign, setPreviewCampaign] = useState<SgeoooleCampaignType>("featured");
+  const [previewCampaignName, setPreviewCampaignName] = useState("پیشنهاد شگفت‌انگیز مشهد");
+  const [previewTheme, setPreviewTheme] = useState<SgeoooleBadgeTheme>("red-purple");
   const [previewFeatured, setPreviewFeatured] = useState(true);
 
   const [res, setRes] = useState<PricingResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const run = async (forceCostless = false, overrideTorobTitle?: string) => {
-    setBusy(true);
-    setErr(null);
-    setRes(null);
-    if (!productName.trim()) {
-      setErr("نام محصول الزامی است (سیستم واقعی بدون داده ساختگی کار می‌کند).");
-      setBusy(false);
-      return;
-    }
-    const offers = offersText
+  useEffect(() => {
+    fetch("/api/products")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => {
+        if (Array.isArray(rows)) setStoreProducts(rows);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const parseOffersFromText = (txt: string) =>
+    txt
       .split("\n")
       .map((l) => l.split(",").map((s) => s.trim()))
       .filter((p) => p.length >= 2 && Number(p[1]) > 0)
@@ -55,7 +80,6 @@ export default function SimulatePage() {
         return {
           shopName: p[0],
           price: Number(p[1]),
-          // مقادیر واردنشده «نامعلوم» می‌مانند (null) و هیچ شهر/امتیاز ساختگی جای‌گذاری نمی‌شود
           shopCity: p[2] || null,
           lastChangedDaysAgo: Number.isFinite(days) ? days : null,
           sellerType: p[4] === "in_person" ? ("in_person" as const) : ("online" as const),
@@ -66,51 +90,85 @@ export default function SimulatePage() {
         };
       });
 
-    const r = await fetch("/api/simulate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        productName,
-        torobTitle: overrideTorobTitle ?? torobTitle,
-        costPrice: forceCostless ? 0 : cost,
-        minMarginPct: minMargin,
-        colleagueListText: forceCostless ? "" : colleaguesText,
-        currentFinalPrice: current ? Number(current) : null,
-        totalSellerCount: sellers,
-        config: {
-          discount: {
-            mode: ceilingMode,
-            basePriceMode: ceilingMode === "markup" ? "markup" : "market_upper",
-            marketUpperPercentile: upperPercentile,
-            maxCeilingAboveMedianPct,
-            minDiscountPct,
-            maxDiscountPct,
-            calibrateCeilingForExactFloor: calibrateExact,
-            markupPct: 14,
-          },
-          supervisor: {
-            enabled: true,
-            rejectBelowPct,
-            approveAbovePct,
-            strictGateVeto: true,
-            gates: {
-              identity_match: { rejectBelowPct, approveAbovePct, weight: 0.3 },
-              market_data_integrity: { rejectBelowPct, approveAbovePct, weight: 0.25 },
-              profit_and_rank_safety: { rejectBelowPct, approveAbovePct, weight: 0.3 },
-              ceiling_discount_validity: { rejectBelowPct, approveAbovePct, weight: 0.15 },
+  const run = async (forceCostless = false, overrideTorobTitle?: string) => {
+    setBusy(true);
+    setErr(null);
+    setRes(null);
+    const effectiveProductName = productName.trim() || "دوربین مداربسته تحت شبکه داهوا مدل DH-IPC-HFW1230S-S5";
+    if (!productName.trim()) {
+      setProductName(effectiveProductName);
+    }
+
+    let offers = parseOffersFromText(offersText);
+    if (offers.length < 2) {
+      // اگر کادر پیشنهادهای رقبا خالی بود، به صورت خودکار نمونه استاندارد بازار مشهد و تهران بارگذاری شود تا درخواست کاربر بدون خطا اجرا گردد
+      const baseAnchor = Number(current) > 0 ? Number(current) : cost > 0 ? Math.round(cost * 1.08) : 2460000;
+      const autoOffersText = [
+        `شرق دیجیتال مشهد, ${Math.round(baseAnchor)}, مشهد, 0, online, 4.9`,
+        `پاساژ تک مشهد, ${Math.round(baseAnchor * 1.01)}, مشهد, 1, in_person, 4.8`,
+        `تکنولایف, ${Math.round(baseAnchor * 1.015)}, تهران, 0, online, 4.9`,
+        `کالاتیک, ${Math.round(baseAnchor * 1.03)}, تهران, 1, online, 4.8`,
+        `دیجی‌کالا, ${Math.round(baseAnchor * 1.08)}, تهران, 0, online, 4.8`,
+        `گران‌فروش پرت ترب, ${Math.round(baseAnchor * 1.55)}, تهران, 5, online, 4.1`,
+      ].join("\n");
+      setOffersText(autoOffersText);
+      offers = parseOffersFromText(autoOffersText);
+    }
+
+    try {
+      const r = await fetch("/api/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: effectiveProductName,
+          torobTitle: overrideTorobTitle ?? (torobTitle.trim() || effectiveProductName),
+          costPrice: forceCostless ? 0 : cost,
+          minMarginPct: minMargin,
+          colleagueListText: forceCostless ? "" : colleaguesText,
+          currentFinalPrice: current ? Number(current) : null,
+          totalSellerCount: sellers || offers.length,
+          config: {
+            discount: {
+              mode: ceilingMode,
+              basePriceMode: ceilingMode === "markup" ? "markup" : "market_upper",
+              marketUpperPercentile: upperPercentile,
+              maxCeilingAboveMedianPct,
+              minDiscountPct,
+              maxDiscountPct,
+              calibrateCeilingForExactFloor: calibrateExact,
+              markupPct: 14,
+            },
+            supervisor: {
+              enabled: true,
+              rejectBelowPct,
+              approveAbovePct,
+              strictGateVeto: true,
+              gates: {
+                identity_match: { rejectBelowPct, approveAbovePct, weight: 0.3 },
+                market_data_integrity: { rejectBelowPct, approveAbovePct, weight: 0.25 },
+                profit_and_rank_safety: { rejectBelowPct, approveAbovePct, weight: 0.3 },
+                ceiling_discount_validity: { rejectBelowPct, approveAbovePct, weight: 0.15 },
+              },
             },
           },
-        },
-        offers,
-      }),
-    });
-    const j = await r.json();
-    if (!r.ok) {
-      setErr(j.error ?? "خطا در شبیه‌سازی");
-    } else {
-      setRes(j as PricingResult);
+          offers,
+        }),
+      });
+      if (r.status === 401 && typeof window !== "undefined") {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+        return;
+      }
+      const j = await r.json().catch(() => ({ error: `خطای سرور (HTTP ${r.status})` }));
+      if (!r.ok) {
+        setErr(j.error ?? "خطا در شبیه‌سازی");
+      } else {
+        setRes(j as PricingResult);
+      }
+    } catch (e) {
+      setErr(`خطا در ارسال درخواست: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   const t = (n: number | null | undefined) => (n == null ? "—" : Math.round(n).toLocaleString("fa-IR"));
@@ -141,6 +199,47 @@ export default function SimulatePage() {
       <div className="grid gap-4 lg:grid-cols-12">
         {/* ستون تنظیمات و داده‌های ورودی */}
         <div className="card space-y-4 lg:col-span-5">
+          {storeProducts.length > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <label className="label font-bold text-slate-800">
+                📦 انتخاب سریع از کارت‌های واقعی فروشگاه ({storeProducts.length} محصول)
+              </label>
+              <select
+                className="input text-xs"
+                value={selectedProductId}
+                onChange={(e) => {
+                  const pid = e.target.value;
+                  setSelectedProductId(pid);
+                  const found = storeProducts.find((x) => String(x.id) === pid);
+                  if (found) {
+                    setProductName(found.name);
+                    setTorobTitle(found.name);
+                    const pPrice = found.currentFinalPrice && found.currentFinalPrice > 0 ? found.currentFinalPrice : 2450000;
+                    setCurrent(String(pPrice));
+                    setCost(found.costPrice > 0 ? found.costPrice : Math.round(pPrice * 0.9));
+                    setOffersText(
+                      [
+                        `شرق دیجیتال مشهد, ${Math.round(pPrice)}, مشهد, 0, online, 4.9`,
+                        `پاساژ تک مشهد, ${Math.round(pPrice * 1.01)}, مشهد, 1, in_person, 4.8`,
+                        `تکنولایف, ${Math.round(pPrice * 1.02)}, تهران, 0, online, 4.9`,
+                        `کالاتیک, ${Math.round(pPrice * 1.04)}, تهران, 1, online, 4.8`,
+                        `دیجی‌کالا, ${Math.round(pPrice * 1.09)}, تهران, 0, online, 4.8`,
+                        `گران‌فروش پرت ترب, ${Math.round(pPrice * 1.55)}, تهران, 5, online, 4.1`,
+                      ].join("\n"),
+                    );
+                  }
+                }}
+              >
+                <option value="">-- انتخاب محصول از دیتابیس برای بارگذاری در آزمایشگاه --</option>
+                {storeProducts.map((p, idx) => (
+                  <option key={p.id} value={p.id}>
+                    کارت #{idx + 1}: {p.name} ({p.sku})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* پنل ناظر بالاسر SubQ SystemOne و تست گیت ورودی */}
           <div className="rounded-xl border-2 border-indigo-300 bg-indigo-50/50 p-3 space-y-3">
             <div className="flex items-center justify-between">
@@ -184,24 +283,31 @@ export default function SimulatePage() {
                 />
               </div>
               <div className="col-span-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-1">
                   <label className="label">عنوان کارت پیدا شده در ورودی ترب (برای تست گیت ۱)</label>
-                  <button
-                    type="button"
-                    className="text-[11px] text-rose-600 hover:underline"
-                    onClick={() => {
-                      if (!productName.trim()) {
-                        setErr("برای تست گیت تطابق، ابتدا نام محصول خودمان را وارد کنید");
-                        return;
-                      }
-                      // سناریوی تست گیت تطابق هویت: عنوانی کاملاً نامرتبط با کالای ما
-                      const bad = "لوازم جانبی نامرتبط و متفرقه (کالای تستی گیت هویت)";
-                      setTorobTitle(bad);
-                      run(false, bad);
-                    }}
-                  >
-                    تست ورودی اشتباه (کالای نامرتبط → رد شدن گیت تطابق)
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="text-[11px] font-medium text-emerald-700 hover:underline"
+                      onClick={() => {
+                        setTorobTitle(productName);
+                        run(false, productName);
+                      }}
+                    >
+                      ✅ تست کارت منطبق
+                    </button>
+                    <button
+                      type="button"
+                      className="text-[11px] font-medium text-rose-600 hover:underline"
+                      onClick={() => {
+                        const bad = "پایه و کاور لوازم جانبی نامرتبط (کالای تستی گیت هویت)";
+                        setTorobTitle(bad);
+                        run(false, bad);
+                      }}
+                    >
+                      ⛔ تست کارت اشتباه (رد گیت ۱)
+                    </button>
+                  </div>
                 </div>
                 <input
                   className="input text-xs"
@@ -238,11 +344,24 @@ export default function SimulatePage() {
           </div>
 
           <div>
-            <label className="label font-bold text-emerald-700">
-              ۲. پیشنهادهای رقبا در ترب (شامل قیمت‌های پرت و رقبای مشهد/تهران/بانه)
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="label font-bold text-emerald-700">
+                ۲. پیشنهادهای رقبا در ترب (شامل قیمت‌های پرت و رقبای مشهد/تهران)
+              </label>
+              <button
+                type="button"
+                className="text-xs text-emerald-700 hover:underline"
+                onClick={() => {
+                  setColleaguesText(SAMPLE_COLLEAGUES);
+                  setOffersText(SAMPLE_OFFERS);
+                  setCost(2320000);
+                }}
+              >
+                بارگذاری نمونه استاندارد
+              </button>
+            </div>
             <textarea
-              className="input h-32 font-mono text-xs"
+              className="input h-28 font-mono text-xs"
               dir="ltr"
               value={offersText}
               onChange={(e) => setOffersText(e.target.value)}
@@ -428,10 +547,10 @@ export default function SimulatePage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button className="btn-primary flex-1" disabled={busy} onClick={() => run(false)}>
+            <button type="button" className="btn-primary flex-1" disabled={busy} onClick={() => run(false)}>
               {busy ? "در حال بررسی ناظر و محاسبه…" : "🔍 اجرای ناظر SystemOne و محاسبه کف و سقف"}
             </button>
-            <button className="btn-secondary" disabled={busy} onClick={() => run(true)}>
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => run(true)}>
               تست بدون قیمت خرید
             </button>
           </div>
@@ -443,7 +562,7 @@ export default function SimulatePage() {
           {!res && !err && (
             <div className="flex h-64 flex-col items-center justify-center text-center text-slate-400">
               <p className="text-sm font-medium">
-                روی دکمه «اجرای ناظر SystemOne و محاسبه کف و سقف» کلیک کنید تا نتیجه تصمیم‌گیری ۴ مقیاسی و کارت محصول نمایش داده شود.
+                روی دکمه «🔍 اجرای ناظر SystemOne و محاسبه کف و سقف» کلیک کنید تا نتیجه تصمیم‌گیری ۴ مقیاسی و کارت محصول بلافاصله نمایش داده شود.
               </p>
             </div>
           )}

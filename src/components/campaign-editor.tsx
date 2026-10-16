@@ -32,9 +32,9 @@ const toDraft = (c?: DiscountCampaign): Draft => ({
   id: c?.id,
   name: c?.name ?? "",
   type: c?.type ?? "timed_sale",
-  active: c?.active ?? true,
+  active: c?.active ?? false,
   priority: c?.priority ?? 10,
-  minDiscountPct: c?.minDiscountPct ?? 5,
+  minDiscountPct: c?.minDiscountPct ?? 10,
   maxDiscountPct: c?.maxDiscountPct ?? 45,
   activeHours: (c?.activeHours ?? []).join(","),
   activeDays: (c?.activeDays ?? []).join(","),
@@ -43,7 +43,7 @@ const toDraft = (c?: DiscountCampaign): Draft => ({
   badgeTheme: c?.badgeTheme ?? (c?.type === "flash" ? "gold-red" : c?.type === "featured" ? "red-purple" : "green-orange"),
   showInFeatured: c?.showInFeatured ?? (c?.type !== "flash"),
   cardRangeFrom: c?.cardRangeFrom ?? 1,
-  cardRangeTo: c?.cardRangeTo ?? 50,
+  cardRangeTo: c?.cardRangeTo ?? 10,
   maxCards: c?.maxCards ?? 0,
   minPriceToman: c?.minPriceToman ?? 0,
   maxPriceToman: c?.maxPriceToman ?? 0,
@@ -56,56 +56,117 @@ export function CampaignEditor({ campaigns }: { campaigns: DiscountCampaign[] })
   const [drafts, setDrafts] = useState<Draft[]>([...campaigns.map((c) => toDraft(c)), toDraft()]);
   const [pending, start] = useTransition();
   const [runMsg, setRunMsg] = useState<Record<string, string>>({});
+  const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
 
   const update = (i: number, patch: Partial<Draft>) =>
     setDrafts((d) => d.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
-  const save = (d: Draft) =>
+  const save = (d: Draft, key: string) =>
     start(async () => {
-      await fetch("/api/campaigns", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(d),
-      });
-      router.refresh();
-      if (!d.id) setDrafts((ds) => ds.map((x) => (x === d ? toDraft() : x)));
+      try {
+        const res = await fetch("/api/campaigns", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(d),
+        });
+        if (res.status === 401 && typeof window !== "undefined") {
+          window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+          return;
+        }
+        const j = await res.json().catch(() => ({}));
+        setRunMsg((m) => ({
+          ...m,
+          [key]: res.ok ? "✅ تنظیمات کمپین با موفقیت ذخیره شد" : `❌ ${j.error ?? "خطا در ذخیره کمپین"}`,
+        }));
+        router.refresh();
+        if (!d.id && res.ok) setDrafts((ds) => ds.map((x) => (x === d ? toDraft() : x)));
+      } catch (e) {
+        setRunMsg((m) => ({
+          ...m,
+          [key]: `❌ خطا در ارتباط با سرور: ${e instanceof Error ? e.message : String(e)}`,
+        }));
+      }
     });
 
   const remove = (id: number) =>
     start(async () => {
-      await fetch("/api/campaigns", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-      setDrafts((ds) => ds.filter((x) => x.id !== id));
-      router.refresh();
+      try {
+        await fetch("/api/campaigns", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        setDrafts((ds) => ds.filter((x) => x.id !== id));
+        router.refresh();
+      } catch {
+        // ignore
+      }
     });
 
   const runOnCardRange = (d: Draft, key: string) =>
     start(async () => {
       setRunMsg((m) => ({ ...m, [key]: "در حال استعلام سقف و کف و اعمال تخفیف روی رنج کارت‌ها…" }));
-      const res = await fetch("/api/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          cardRangeFrom: d.cardRangeFrom,
-          cardRangeTo: d.cardRangeTo,
-          category: d.categories.split(",")[0]?.trim() || undefined,
-        }),
-      });
-      const j = await res.json();
-      setRunMsg((m) => ({
-        ...m,
-        [key]: res.ok
-          ? `انجام شد: ${j.applied} کارت اعمال شد | ${j.pendingReview} بازبینی | ${j.failed} خطا`
-          : j.error ?? "خطا در اجرا",
-      }));
-      router.refresh();
+      try {
+        const res = await fetch("/api/runs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cardRangeFrom: d.cardRangeFrom,
+            cardRangeTo: d.cardRangeTo,
+            category: d.categories.split(",")[0]?.trim() || undefined,
+          }),
+        });
+        if (res.status === 401 && typeof window !== "undefined") {
+          window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+          return;
+        }
+        const j = await res.json().catch(() => ({}));
+        const errTail = j.lastError ? ` — علت خطا: ${j.lastError}` : "";
+        setRunMsg((m) => ({
+          ...m,
+          [key]: res.ok
+            ? `انجام شد: ${j.applied ?? 0} کارت اعمال شد | ${j.pendingReview ?? 0} در صف بازبینی | ${j.failed ?? 0} رد/خطا${errTail}`
+            : j.error ?? "خطا در اجرا",
+        }));
+        router.refresh();
+      } catch (e) {
+        setRunMsg((m) => ({
+          ...m,
+          [key]: `خطا در ارسال درخواست: ${e instanceof Error ? e.message : String(e)}`,
+        }));
+      }
+    });
+
+  const cleanupTimedSales = () =>
+    start(async () => {
+      setCleanupMsg("در حال پاک‌سازی کارت‌های اشتباه دسته ۳ و بازگردانی در فروشگاه…");
+      try {
+        const res = await fetch("/api/campaigns/cleanup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const j = await res.json().catch(() => ({}));
+        setCleanupMsg(j.message ?? j.error ?? "پاک‌سازی انجام شد");
+        router.refresh();
+      } catch (e) {
+        setCleanupMsg(`خطا: ${e instanceof Error ? e.message : String(e)}`);
+      }
     });
 
   return (
     <div className="space-y-5">
+      {/* نوار پاک‌سازی فوری کارت اشتباه دسته ۳ */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3.5">
+        <div className="text-xs leading-5 text-amber-950">
+          <b>🛡️ محافظت از دسته ۳ (فرصت‌های زمان‌دار مالی و تخفیف):</b> اگر از تست‌های قبلی کارتی بدون قیمت خرید به اشتباه وارد دسته ۳ شده است، با کلیک روی دکمه روبه‌رو هم از دیتابیس پنل و هم از بخش «مالی و تخفیف» سایت پاک‌سازی و به حالت عادی برگردانده می‌شود.
+        </div>
+        <button type="button" className="btn-secondary text-xs font-bold" disabled={pending} onClick={cleanupTimedSales}>
+          🧹 پاک‌سازی فوری کارت‌های اشتباه دسته ۳ + ریست قفل ترب
+        </button>
+        {cleanupMsg && <div className="w-full text-xs font-bold text-indigo-900">{cleanupMsg}</div>}
+      </div>
+
       {/* راهنمای بصری ۳ سیستم تخفیف فروشگاه sgeooole */}
       <div className="grid gap-3 md:grid-cols-3">
         <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">
@@ -229,7 +290,7 @@ export function CampaignEditor({ campaigns }: { campaigns: DiscountCampaign[] })
                   🎯 هدف‌گیری رنج کارت‌ها و شرایط اعمال تخفیف (سقف معیار به کف رقابتی)
                 </span>
                 <span className="text-xs text-slate-500">
-                  می‌توانید این کمپین را دقیقاً روی یک بازه از کارت‌های محصول (مثلاً کارت ۱ تا ۱۰) محدود کنید
+                  می‌توانید این کمپین را دقیقاً روی یک بازه از کارت‌های محصول (مثلاً کارت ۱ تا ۵) محدود کنید
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
@@ -389,11 +450,12 @@ export function CampaignEditor({ campaigns }: { campaigns: DiscountCampaign[] })
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <button className="btn-primary" disabled={pending || !d.name} onClick={() => save(d)}>
+                <button type="button" className="btn-primary" disabled={pending || !d.name} onClick={() => save(d, key)}>
                   {d.id ? "💾 ذخیره تنظیمات کمپین" : "➕ افزودن کمپین جدید"}
                 </button>
                 {d.id && (
                   <button
+                    type="button"
                     className="btn-secondary"
                     disabled={pending}
                     onClick={() => runOnCardRange(d, key)}
@@ -403,7 +465,7 @@ export function CampaignEditor({ campaigns }: { campaigns: DiscountCampaign[] })
                   </button>
                 )}
                 {d.id && (
-                  <button className="btn-danger" disabled={pending} onClick={() => remove(d.id!)}>
+                  <button type="button" className="btn-danger" disabled={pending} onClick={() => remove(d.id!)}>
                     حذف
                   </button>
                 )}

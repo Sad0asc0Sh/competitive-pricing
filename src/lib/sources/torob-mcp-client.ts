@@ -87,6 +87,22 @@ function toSafeInt(v: unknown): number {
   return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
 }
 
+/** استخراج تعداد فروشنده از فیلد `shop_count` یا متن فارسی `shop_name` کارت ترب (مثلاً «در ۱۲ فروشگاه») */
+export function extractSellerCountFromMcpCard(card: TorobMcpSearchCard): number | null {
+  const explicit = toSafeInt(card.shop_count);
+  if (explicit > 0) return explicit;
+  if (!card.shop_name) return null;
+  const normalized = String(card.shop_name)
+    .replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1728))
+    .replace(/[٠-٩]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1584));
+  const m = normalized.match(/(\d+)\s*فروشگاه/);
+  if (m) {
+    const count = Number(m[1]);
+    if (Number.isFinite(count) && count > 0) return count;
+  }
+  return 1;
+}
+
 /** تبدیل خروجی ابزار `product_details` در `torob-mcp` به لیست `RawOffer[]` موتور قیمت‌گذاری */
 export function convertMcpDetailsToOffers(
   details: TorobMcpProductDetails,
@@ -188,13 +204,19 @@ export function analyzeMcpPriceHistory(chart: {
   };
 }
 
-/** فراخوانی یک ابزار روی سرور HTTP مربوط به `torob-mcp` (پروتکل JSON-RPC 2.0) */
-export async function callTorobMcpTool<T = unknown>(
+export interface McpToolCallOutcome<T = unknown> {
+  data: T | null;
+  errorText?: string;
+  challenged?: boolean;
+}
+
+/** فراخوانی یک ابزار روی سرور HTTP مربوط به `torob-mcp` به همراه تشخیص دقیق خطای کپچا/490 */
+export async function callTorobMcpToolWithDiag<T = unknown>(
   mcpEndpointUrl: string,
   toolName: string,
   args: Record<string, unknown>,
-  timeoutMs = 15000,
-): Promise<T | null> {
+  timeoutMs = 8000,
+): Promise<McpToolCallOutcome<T>> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -217,7 +239,9 @@ export async function callTorobMcpTool<T = unknown>(
       cache: "no-store",
     });
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return { data: null, errorText: `MCP HTTP ${res.status}` };
+    }
     const rawText = await res.text();
     let payloadText = rawText;
     if (rawText.includes("data:")) {
@@ -231,16 +255,37 @@ export async function callTorobMcpTool<T = unknown>(
 
     const rpc = JSON.parse(payloadText) as {
       result?: { isError?: boolean; content?: { type?: string; text?: string }[] };
+      error?: { message?: string };
     };
-    if (!rpc.result || rpc.result.isError) return null;
-    const textBlock = rpc.result.content?.find((c) => c.type === "text")?.text;
-    if (!textBlock) return null;
-    return JSON.parse(textBlock) as T;
-  } catch {
-    return null;
+    if (rpc.error) {
+      return { data: null, errorText: rpc.error.message ?? "MCP RPC error" };
+    }
+    if (!rpc.result) {
+      return { data: null, errorText: "Empty MCP response" };
+    }
+    const textBlock = rpc.result.content?.find((c) => c.type === "text")?.text ?? "";
+    if (rpc.result.isError) {
+      const challenged = /challenged|490|captcha|bot challenge/i.test(textBlock);
+      return { data: null, errorText: textBlock || "خطای ابزار torob-mcp", challenged };
+    }
+    if (!textBlock) return { data: null };
+    return { data: JSON.parse(textBlock) as T };
+  } catch (e) {
+    return { data: null, errorText: e instanceof Error ? e.message : String(e) };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** فراخوانی یک ابزار روی سرور HTTP مربوط به `torob-mcp` (پروتکل JSON-RPC 2.0) */
+export async function callTorobMcpTool<T = unknown>(
+  mcpEndpointUrl: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  timeoutMs = 8000,
+): Promise<T | null> {
+  const out = await callTorobMcpToolWithDiag<T>(mcpEndpointUrl, toolName, args, timeoutMs);
+  return out.data;
 }
 
 /**
@@ -263,12 +308,26 @@ export async function fetchViaTorobMcpServer(opts: {
 
   // اگر prk نداریم، تا ۲۴ نتیجه اول را از torob-mcp گرفته و با موتور ۷ لایه تطبیق هویت پایش می‌کنیم
   if (!prk && opts.productName) {
-    const searchRes = await callTorobMcpTool<{ products?: TorobMcpSearchCard[] }>(
+    const searchOut = await callTorobMcpToolWithDiag<{ products?: TorobMcpSearchCard[] }>(
       opts.mcpUrl,
       "search_products",
       { query: opts.productName, limit: 24, sort: "popularity" },
     );
-    const cards = (searchRes?.products ?? []).filter((p) => p.prk);
+
+    if (searchOut.challenged) {
+      return {
+        source: "torob",
+        offers: [],
+        totalSellerCount: 0,
+        fetchedAt: now,
+        ok: false,
+        error:
+          "فایروال ترب روی آی‌پی دیتاسنتر سرور چالش امنیتی (HTTP 490 / arCAPTCHA) فعال کرده است. برای استعلام بدون محدودیت از سرور خارج از ایران، آدرس Relay/Worker ایرانی را در متغیر TOROB_API_BASE تنظیم کنید یا از دکمه «ریست قفل ترب» استفاده نمایید.",
+        meta: { challenged: true, mcpError: searchOut.errorText },
+      };
+    }
+
+    const cards = (searchOut.data?.products ?? []).filter((p) => p.prk);
     if (cards.length > 0) {
       const matchOutcome = selectBestTorobSearchMatch(
         {
@@ -281,9 +340,7 @@ export async function fetchViaTorobMcpServer(opts: {
           titleFa: c.name_fa ?? "",
           titleEn: c.name_en ?? null,
           priceToman: c.price_toman,
-          // اگر کارت جستجوی ترب تعداد فروشنده را برنگرداند، هیچ عدد ساختگی جای‌گذاری نمی‌شود
-          // (null یعنی نامشخص؛ موتور تطبیق آن را «تک‌فروشنده/نامشخص» در نظر می‌گیرد)
-          sellerCount: toSafeInt(c.shop_count) || null,
+          sellerCount: extractSellerCountFromMcpCard(c),
           available: c.available !== false,
           detailsUrl: c.details_url,
           shopName: c.shop_name,
@@ -294,13 +351,23 @@ export async function fetchViaTorobMcpServer(opts: {
         detailsUrl = matchOutcome.best.candidate.detailsUrl ?? detailsUrl;
         matchExplanation = matchOutcome.explanation;
         matchScore = matchOutcome.best.score;
+      } else {
+        return {
+          source: "torob",
+          offers: [],
+          totalSellerCount: 0,
+          fetchedAt: now,
+          ok: false,
+          error: matchOutcome.explanation,
+          meta: { rejectedInSearch: true },
+        };
       }
     }
   }
 
   if (!prk) return null;
 
-  const details = await callTorobMcpTool<TorobMcpProductDetails>(
+  const detailsOut = await callTorobMcpToolWithDiag<TorobMcpProductDetails>(
     opts.mcpUrl,
     "product_details",
     {
@@ -311,6 +378,21 @@ export async function fetchViaTorobMcpServer(opts: {
     },
   );
 
+  if (detailsOut.challenged) {
+    return {
+      source: "torob",
+      prk,
+      offers: [],
+      totalSellerCount: 0,
+      fetchedAt: now,
+      ok: false,
+      error:
+        "فایروال ترب روی آی‌پی دیتاسنتر سرور چالش امنیتی (HTTP 490 / arCAPTCHA) فعال کرده است. برای رفع آن متغیر TOROB_API_BASE را تنظیم کنید.",
+      meta: { challenged: true, mcpError: detailsOut.errorText },
+    };
+  }
+
+  const details = detailsOut.data;
   if (!details || (!details.offers?.length && !details.in_person_sellers?.length)) {
     return null;
   }
@@ -320,6 +402,7 @@ export async function fetchViaTorobMcpServer(opts: {
     opts.mcpUrl,
     "price_history",
     { prk, ...(detailsUrl ? { details_url: detailsUrl } : {}), months: 6 },
+    4000,
   );
 
   return {

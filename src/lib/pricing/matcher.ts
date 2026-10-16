@@ -103,7 +103,69 @@ const PERSIAN_STOPWORDS = new Set([
   "به",
   "از",
   "و",
+  "یا",
+  "تا",
+  "برای",
+  "مناسب",
+  "نوع",
+  "طرح",
 ]);
+
+/** کلمات عمومی دسته‌بندی که به تنهایی نباید باعث تایید خودکار (Approve >= 80%) شوند */
+const GENERIC_CATEGORY_WORDS = new Set([
+  "دوربین",
+  "مداربسته",
+  "مدار",
+  "بسته",
+  "دستگاه",
+  "دیجیتال",
+  "شبکه",
+  "تحت",
+  "امنیتی",
+  "سیستم",
+  "پکیج",
+  "تصویر",
+  "دید",
+  "شب",
+  "رنگی",
+  "فلزی",
+  "پلاستیکی",
+  "دام",
+  "بولت",
+  "کیس",
+  "بزرگ",
+  "کوچک",
+  "نسل",
+  "سنسور",
+  "چشمی",
+  "هوشمند",
+  "بیسیم",
+  "بی",
+  "سیم",
+  "وارم",
+  "لایت",
+  "ضد",
+  "اب",
+  "آب",
+  "پشتیبانی",
+  "قابلیت",
+  "میکروفون",
+  "میکروفن",
+  "داخلی",
+  "خارجی",
+  "صدا",
+  "ضبط",
+]);
+
+/** تشخیص شناسه‌های داخلی دیتابیس/فروشگاه که کد مدل سازنده نیستند (مثل MongoDB ObjectId یا KY-XXXX) */
+export function isInternalOrDatabaseId(token: string): boolean {
+  const clean = token.trim();
+  if (!clean) return true;
+  if (/^[a-f0-9]{24}$/i.test(clean)) return true; // MongoDB ObjectId
+  if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(clean)) return true; // UUID
+  if (/^(ky|sku|prd|id|item|code|ekg)[-_]?\d+(?:[-_]\d+)?$/i.test(clean)) return true;
+  return false;
+}
 
 export function normalizeProductText(input: string | null | undefined): string {
   if (!input) return "";
@@ -125,13 +187,16 @@ export function extractModelAndSpecTokens(text: string, sku?: string | null): {
   modelTokens: string[];
   numericSpecs: string[];
   words: string[];
+  distinctiveWords: string[];
 } {
-  const combined = normalizeProductText(`${text} ${sku ?? ""}`);
+  const safeSku = sku && !isInternalOrDatabaseId(sku) ? sku : "";
+  const combined = normalizeProductText(`${text} ${safeSku}`);
   const rawTokens = combined.split(" ").filter(Boolean);
 
   const modelTokens = new Set<string>();
   const numericSpecs = new Set<string>();
   const words = new Set<string>();
+  const distinctiveWords = new Set<string>();
 
   const specRegex = /\b(\d+)\s*(mp|مگاپیکسل|مگا|کانال|ch|channel|tb|ترابایت|گیگ|gb|متر|امپر|آمپر|ولت)\b/gi;
   let m: RegExpExecArray | null;
@@ -149,7 +214,13 @@ export function extractModelAndSpecTokens(text: string, sku?: string | null): {
   for (const tok of rawTokens) {
     const clean = tok.replace(/^[.-]+|[.-]+$/g, "");
     if (!clean || clean.length < 2) continue;
-    if (/^ky-\d+$/i.test(clean)) continue;
+    if (isInternalOrDatabaseId(clean)) continue;
+
+    // اگر توکن دقیقاً یکی از مشخصات عددی استاندارد است (مثل 2mp, 4tb, 8ch)، به عنوان کد مدل یکتا ذخیره نشود
+    if (/^\d+(mp|ch|tb|gb)$/i.test(clean)) {
+      numericSpecs.add(clean.toLowerCase());
+      continue;
+    }
 
     const hasLatin = /[a-z]/i.test(clean);
     const hasDigit = /\d/.test(clean);
@@ -157,7 +228,7 @@ export function extractModelAndSpecTokens(text: string, sku?: string | null): {
     if (hasLatin && hasDigit && clean.length >= 3) {
       modelTokens.add(clean);
       for (const part of clean.split(/[-_]/)) {
-        if (part.length >= 3 && /[a-z]/i.test(part) && /\d/.test(part)) {
+        if (part.length >= 3 && /[a-z]/i.test(part) && /\d/.test(part) && !/^\d+(mp|ch|tb|gb)$/i.test(part)) {
           modelTokens.add(part);
         }
       }
@@ -165,6 +236,9 @@ export function extractModelAndSpecTokens(text: string, sku?: string | null): {
       modelTokens.add(clean);
     } else if (!PERSIAN_STOPWORDS.has(clean)) {
       words.add(clean);
+      if (!GENERIC_CATEGORY_WORDS.has(clean) && !/^\d+$/.test(clean)) {
+        distinctiveWords.add(clean);
+      }
     }
   }
 
@@ -172,6 +246,7 @@ export function extractModelAndSpecTokens(text: string, sku?: string | null): {
     modelTokens: [...modelTokens],
     numericSpecs: [...numericSpecs],
     words: [...words],
+    distinctiveWords: [...distinctiveWords],
   };
 }
 
@@ -291,16 +366,40 @@ export function evaluateTorobCandidate(
   const wordCoverage =
     targetFp.words.length > 0 ? matchedWords / targetFp.words.length : 0.7;
 
-  let score = Math.round(wordCoverage * 45);
+  let matchedDistinctive = 0;
+  for (const dw of targetFp.distinctiveWords) {
+    if (candNorm.includes(dw)) matchedDistinctive++;
+  }
+  const distinctiveCoverage =
+    targetFp.distinctiveWords.length > 0
+      ? matchedDistinctive / targetFp.distinctiveWords.length
+      : wordCoverage;
+
+  // اگر محصول فقط فارسی است و کلمات اختصاصی/برند آن اصلاً در کارت ترب نیست، رد شود
+  if (
+    targetFp.modelTokens.length === 0 &&
+    targetFp.distinctiveWords.length >= 2 &&
+    matchedDistinctive === 0
+  ) {
+    return makeRejected(
+      22,
+      `عدم تطابق کلمات کلیدی و برند محصول («${targetFp.distinctiveWords.join("، ")}» در کارت ترب یافت نشد)`,
+    );
+  }
+
+  let score = Math.round((wordCoverage * 0.5 + distinctiveCoverage * 0.5) * 45);
 
   if (targetFp.modelTokens.length > 0) {
     const modelRatio = matchedModelTokens.length / targetFp.modelTokens.length;
     score += Math.round(modelRatio * 40);
     if (matchedModelTokens.length > 0) {
       notes.push(`تطابق دقیق کد مدل: ${matchedModelTokens.join(", ").toUpperCase()}`);
+    } else {
+      notes.push(`کد مدل (${targetFp.modelTokens.join(", ")}) در عنوان ترب ذکر نشده — نیازمند بازبینی`);
     }
   } else {
-    score += Math.round(wordCoverage * 40);
+    // محصول سایت فاقد کد مدل انگلیسی است:
+    score += Math.round(distinctiveCoverage * 38);
   }
 
   if (candidate.available !== false) {
@@ -330,6 +429,21 @@ export function evaluateTorobCandidate(
       score += 5;
       notes.push("هم‌خوانی عالی قیمت با لنگر محصول");
     }
+  }
+
+  // گارد نهایی پس از تمام امتیازهای تشویقی:
+  // اگر کالای سایت فاقد کد مدل انگلیسی باشد ولی کارت ترب دارای کد مدل فنی مشخص باشد (یا نام کالای سایت فقط شامل کلمات عمومی باشد)،
+  // سقف امتیاز در بازه ریویو (حداکثر approveAbovePct - 6) قفل می‌شود تا هرگز بدون تایید انسانی اعمال خودکار نشود!
+  if (
+    targetFp.modelTokens.length === 0 &&
+    (candFp.modelTokens.length > 0 || targetFp.distinctiveWords.length === 0)
+  ) {
+    score = Math.min(score, Math.max(rejectBelowPct + 5, approveAbovePct - 6));
+    notes.push(
+      candFp.modelTokens.length > 0
+        ? `محصول سایت فاقد کد مدل انگلیسی است ولی کارت ترب مدل «${candFp.modelTokens.join(", ").toUpperCase()}» دارد — نیازمند تایید انسانی در ریویو`
+        : "نام محصول فقط شامل کلمات عمومی دسته‌بندی است و کد مدل یکتا ندارد — نیازمند تایید انسانی در ریویو",
+    );
   }
 
   score = Math.max(0, Math.min(100, score));
