@@ -104,9 +104,12 @@ export function removeOutliers(
     o.highTrust = o.credible;
   }
 
-  // ۲) مرجع = میانه وزنی فقط از «به‌روز + معتبر»؛ اگر کمتر از ۲ عضو بود از کل پول included
+  // ۲) مرجع = میانه وزنی فقط از «به‌روز + معتبر»؛ اما تنها وقتی این زیرمجموعه «نماینده» است:
+  //    حداقل max(۳، ۴۰٪ کل پیشنهادهای موجود). وگرنه مرجع از کل پول ساخته می‌شود تا
+  //    یک یا دو ارزان‌فروش تازه، مرجع را پایین نکشند و بدنه‌ی سالم بازار «گران‌فروش پرت» نشود.
   const stablePool = included.filter((o) => o.fresh && o.credible);
-  const refPool = stablePool.length >= 2 ? stablePool : included;
+  const minStablePool = Math.max(3, Math.ceil(included.length * 0.4));
+  const refPool = stablePool.length >= minStablePool ? stablePool : included;
   const stableRef = weightedMedianInt(refPool);
   if (stableRef == null) {
     return {
@@ -121,9 +124,12 @@ export function removeOutliers(
     };
   }
 
-  // ۳) سقف پایین بدگمانی (R1) و سقف بالای سخت
+  // ۳) سقف پایین بدگمانی (R1) و سقف بالای سخت.
+  //    سمت بالا هرگز تنگ‌تر از ۱۰٪ بالای مرجع نیست؛ در نمونه‌های کوچک IQR/MAD ناپایدار است
+  //    و حذف «گران‌فروش پرت» نباید به قیمت حذف بدنه‌ی عادی تمام شود.
   const bandLo = stableRef * (1 - Math.max(0, cfg.suspectLowBandPct) / 100);
-  const bandHi = stableRef * (1 + Math.max(0, cfg.hardBandPct) / 100);
+  const highBandPct = Math.max(10, Math.max(0, cfg.hardBandPct));
+  const bandHi = stableRef * (1 + highBandPct / 100);
 
   // ۴) ساخت خوشه‌ها بر اساس فاصله قیمتی (٪) بین همسایه‌ها
   const sorted = [...included].sort((a, b) => a.price - b.price);
@@ -209,6 +215,8 @@ export function removeOutliers(
     } else if (cfg.method === "mad" && normMad > 0) {
       hi = Math.min(bandHi, m + cfg.madK * normMad);
     }
+    // سمت بالا: پیشنهاد تنها وقتی «پرت» است که دست‌کم ۱۰٪ بالای میانه باشد
+    hi = Math.max(hi, m * 1.1);
     for (const o of rest) {
       if (o.price > hi) {
         markHigh(o, `داده پرت بالای آماری (${cfg.method.toUpperCase()})`);

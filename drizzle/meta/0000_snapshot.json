@@ -571,7 +571,7 @@
           "type": "varchar(20)",
           "primaryKey": false,
           "notNull": true,
-          "default": "'4.1.0'"
+          "default": "'4.1.1'"
         },
         "market_conflict": {
           "name": "market_conflict",

@@ -12,11 +12,12 @@ import { reviewDecisionWithAI } from "@/lib/ai/client";
 import { resolveSubqRuntime } from "@/lib/ai/config";
 import { pickCampaign } from "@/lib/pricing/campaigns";
 import { runPricingPipeline } from "@/lib/pricing/engine";
+import { summarizeOwnPriceHistory } from "@/lib/pricing/own-price-history";
 import { enrichSupervisorWithSubqApi } from "@/lib/pricing/systemone-supervisor";
 import type { PricingResult, RawOffer, SupplierQuote } from "@/lib/pricing/types";
 import { fetchFromSource, isAllowedSourceType } from "@/lib/sources/registry";
 import { pushToStore } from "@/lib/store/connectors";
-import { and, asc, eq, gte, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import { ensureDefaults, getProfileConfig, logActivity } from "./bootstrap";
 
 /** تبدیل ایمن مقادیر موتور به عدد صحیح/اعشاری معتبر قبل از درج در دیتابیس (NaN/Infinity هرگز درج نشود) */
@@ -92,8 +93,9 @@ async function tryLockProduct(productId: number): Promise<boolean> {
     );
     return (res.rows?.length ?? 0) > 0;
   } catch {
-    // در نبود ستون/خطا، قفل نرم مجاز به سقوط مسیر معمولی است
-    return true;
+    // ۴.۱.۱: پس از مهاجرت 0001، نبود ستون یا هر خطای قفل نباید fail-open شود.
+    // محصول در این اجرا skip می‌شود تا هرگز دو اجرای هم‌زمان روی یک محصول قیمت نگذارند.
+    return false;
   }
 }
 
@@ -105,48 +107,112 @@ async function unlockProduct(productId: number): Promise<void> {
   }
 }
 
-/** مرجع تخفیف بخش رو. (P3): بالاترین قیمت خودی دوام‌یافته در پنجره ۷ روزی + میانگین ۷ روزی */
+/**
+ * مرجع تخفیف بخش رو. (P3): بالاترین قیمت خودیِ «دوام‌یافته» در پنجره ۷ روزی + میانگین ۷ روزی.
+ * ۴.۱.۱: دوام از فاصله‌ی هر ردیف تا ردیف بعدی سنجیده می‌شود (نه قدمت خود ردیف)، و فقط
+ * تصمیم‌های `pushed` که واقعاً به فروشگاه رسیده‌اند مرجع‌اند؛ `skipped` هرگز.
+ */
 async function computeOwnDiscountContext(
   productId: number,
   windowDays: number,
   holdHours: number,
 ): Promise<OwnDiscountContext> {
-  const since = new Date(Date.now() - Math.max(1, windowDays) * 86_400_000);
-  const holdCutoff = new Date(Date.now() - Math.max(0, holdHours) * 3_600_000);
+  const now = new Date();
+  const since = new Date(now.getTime() - Math.max(1, windowDays) * 86_400_000);
   try {
     const rows = await db
       .select({
         finalPrice: priceDecisions.finalPrice,
-        basePrice: priceDecisions.basePrice,
         createdAt: priceDecisions.createdAt,
+        pushStatus: priceDecisions.pushStatus,
       })
       .from(priceDecisions)
       .where(
         and(
           eq(priceDecisions.productId, productId),
-          inArray(priceDecisions.status, ["applied"]),
-          inArray(priceDecisions.pushStatus, ["pushed", "skipped"]),
+          eq(priceDecisions.status, "applied"),
+          eq(priceDecisions.pushStatus, "pushed"),
           gte(priceDecisions.createdAt, since),
         ),
       )
       .orderBy(asc(priceDecisions.createdAt));
 
-    const finals = rows.map((r) => r.finalPrice).filter((v): v is number => v != null && v > 0);
-    const stableRows = rows.filter((r) => r.createdAt <= holdCutoff && (r.finalPrice ?? 0) > 0);
-    const ownStableHigh7d = stableRows.length
-      ? Math.max(...stableRows.map((r) => Math.round(r.finalPrice!)))
-      : null;
-    const ownAvg7d = finals.length
-      ? Math.round(finals.reduce((a, b) => a + b, 0) / finals.length)
-      : null;
-    return { ownStableHigh7d, ownAvg7d };
+    return summarizeOwnPriceHistory(rows, { now, holdHours, windowDays });
   } catch {
     return { ownStableHigh7d: null, ownAvg7d: null };
   }
 }
 
+/**
+ * بازیابی تصمیم‌های «applied»ی که push آن‌ها (به‌دلیل کرش وسط اجرا) ثبت نشده است.
+ * ۴.۱.۱: در شروع هر اجرا، ردیف‌های applied با push_status IS NULL و قدیمی‌تر از ۱۰ دقیقه
+ * دوباره push می‌شوند؛ اگر تصمیم دیگر معتبر نباشد، صریحاً failed علامت می‌خورند.
+ */
+async function recoverStuckAppliedDecisions(): Promise<number> {
+  const cutoff = new Date(Date.now() - 10 * 60_000);
+  try {
+    const stuck = await db
+      .select()
+      .from(priceDecisions)
+      .where(
+        and(
+          eq(priceDecisions.status, "applied"),
+          isNull(priceDecisions.pushStatus),
+          lt(priceDecisions.createdAt, cutoff),
+        ),
+      )
+      .orderBy(asc(priceDecisions.id))
+      .limit(50);
+
+    for (const d of stuck) {
+      // اگر تصمیم جدیدتری برای همین محصول با موفقیت push شده، بازپخش تصمیم قدیمی
+      // قیمت فروشگاه را عقب می‌برد؛ قدیمی را failed (superseded) علامت می‌زنیم.
+      const [newerPushed] = await db
+        .select({ id: priceDecisions.id })
+        .from(priceDecisions)
+        .where(
+          and(
+            eq(priceDecisions.productId, d.productId),
+            eq(priceDecisions.status, "applied"),
+            eq(priceDecisions.pushStatus, "pushed"),
+            gt(priceDecisions.id, d.id),
+          ),
+        )
+        .limit(1);
+      if (newerPushed) {
+        await db
+          .update(priceDecisions)
+          .set({
+            pushStatus: "failed",
+            pushError: `تصمیم جدیدتر #${newerPushed.id} قبلاً push شده است (recovery superseded)`,
+            pushedAt: new Date(),
+          })
+          .where(eq(priceDecisions.id, d.id));
+        continue;
+      }
+
+      const res = await applyDecision(d.id, null);
+      if (!res.ok) {
+        await db
+          .update(priceDecisions)
+          .set({ pushStatus: "failed", pushError: res.message, pushedAt: new Date() })
+          .where(eq(priceDecisions.id, d.id));
+      }
+    }
+    if (stuck.length) {
+      await logActivity("runner", `بازیابی ${stuck.length} تصمیم appliedِ بدون push_status انجام شد`, {
+        decisionIds: stuck.map((d) => d.id),
+      });
+    }
+    return stuck.length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function runPricing(opts: RunOptions): Promise<RunSummary> {
   await ensureDefaults();
+  await recoverStuckAppliedDecisions();
 
   const conds = [eq(products.status, "active")];
   if (opts.productIds?.length) conds.push(inArray(products.id, opts.productIds));
@@ -323,12 +389,27 @@ async function runExpiryGuard(
     if (remainingMs <= 0 || remainingMs > horizonMs) continue;
 
     const safePrice = p.currentFinalPrice || p.currentBasePrice || 0;
+    const realCost = p.costPrice > 0 ? p.costPrice : 0;
+    const hardFloor = p.currentHardFloorPrice ?? 0;
+
+    // ۴.۱.۱: هرگز هزینه‌ی ساختگی (قیمت × ۰٫۸۵) به فروشگاه نرود؛ اگر نه هزینه واقعی
+    // داریم و نه خط قرمز، push نمی‌کنیم (سند فروشگاه با داده نادرست آلوده نمی‌شود).
+    if (safePrice <= 0 || (realCost <= 0 && hardFloor <= 0)) {
+      await logActivity(
+        "runner",
+        `گارد انقضا: برای محصول ${p.sku} هزینه واقعی/خط قرمز موجود نیست — push «بدون کمپین» انجام نشد`,
+        { productId: p.id, runId, safePrice, realCost, hardFloor },
+        "warn",
+      );
+      continue;
+    }
+
     const pushRes = await pushToStore({
       productId: p.id,
       sku: p.sku,
       storeExternalId: p.storeExternalId,
-      effectiveCostPrice: p.costPrice > 0 ? p.costPrice : Math.round(safePrice * 0.85),
-      hardFloorPrice: p.currentHardFloorPrice ?? 0,
+      ...(realCost > 0 ? { effectiveCostPrice: realCost } : {}),
+      hardFloorPrice: hardFloor,
       monitoredMarketCeiling: safePrice,
       basePrice: safePrice,
       finalPrice: safePrice,
@@ -651,7 +732,7 @@ async function priceOneProduct(
       netProfitToman: safeInt(result.position.netProfitToman),
       netMarginPct: safeReal(result.position.netMarginPct),
       confidence: safeReal(result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence),
-      engineVersion: config.engine?.version ?? "4.1.0",
+      engineVersion: config.engine?.version ?? "4.1.1",
       marketConflict: result.marketConflict ?? false,
       referenceKind: result.discountReferenceKind ?? "none",
       floorConfirmed: result.floorConfirmed ?? false,
@@ -687,12 +768,12 @@ async function priceOneProduct(
   // قفل کردن PRK در دیتابیس فقط زمانی که تصمیم اعمال شده یا گیت تطابق هویت بالای آستانه تایید خودکار (approve) باشد!
   const identityApproved = result.supervisor.gates.identity_match?.verdict === "approve";
 
-  // P0-1 (M2): spread حذف شد — ژست write-back قیمت خرید همگانی ممنوع؛
-  // تنها «seed» قیمتی خرید وقتی انبار خالی است و «قیمت ریپلیس بالاتر» در replacementCost ثبت می‌شود.
+  // P0-1 (M2): write-back قیمت خرید ممنوع. قیمت همکار فقط در replacementCost ثبت می‌شود؛
+  // costPrice (هزینه موجودی) هرگز از لیست همکار بازنویسی نمی‌شود (INV-2).
   const lowestQuoteCost = result.supply.lowestQuoteCost;
-  const shouldSeedCost = product.costPrice <= 0 && (lowestQuoteCost ?? 0) > 0;
-  const shouldRaiseReplacement =
-    (lowestQuoteCost ?? 0) > product.costPrice && !!result.supply.selectedQuote?.supplierName;
+  const shouldStoreReplacement =
+    (lowestQuoteCost ?? 0) > 0 &&
+    (product.costPrice <= 0 || lowestQuoteCost! > product.costPrice);
 
   await db
     .update(products)
@@ -700,13 +781,12 @@ async function priceOneProduct(
       lastCheckedAt: new Date(),
       lastDecisionId: decision.id,
       updatedAt: new Date(),
-      ...(shouldSeedCost || shouldRaiseReplacement
+      ...(shouldStoreReplacement
         ? {
             replacementCost: Math.round(lowestQuoteCost!),
             replacementCostAt: new Date(),
           }
         : {}),
-      ...(shouldSeedCost ? { costPrice: Math.round(lowestQuoteCost!) } : {}),
       selectedSupplierName: result.supply.selectedQuote?.supplierName ?? product.selectedSupplierName ?? null,
       ...(result.supply.hardFloorPrice > 0 ? { currentHardFloorPrice: result.supply.hardFloorPrice } : {}),
       ...(source.prk && !product.torobPrk && identityApproved ? { torobPrk: source.prk } : {}),
@@ -915,7 +995,7 @@ export async function cleanupWrongTimedSaleCards(opts?: {
         productId: p.id,
         sku: p.sku,
         storeExternalId: p.storeExternalId,
-        effectiveCostPrice: p.costPrice > 0 ? p.costPrice : Math.round(safePrice * 0.85),
+        ...(p.costPrice > 0 ? { effectiveCostPrice: p.costPrice } : {}),
         hardFloorPrice: p.currentHardFloorPrice ?? 0,
         monitoredMarketCeiling: safePrice,
         basePrice: safePrice,

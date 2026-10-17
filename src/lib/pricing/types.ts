@@ -306,10 +306,16 @@ export interface PricingProfileConfig {
     undercutPct: number;
     /** پله‌های undercut بر اساس سطح انکر (تومان) — از کوچک به بزرگ؛ null=بی‌نهایت */
     undercutTiers: UndercutTier[];
-    /** حداکثر فاصله مجاز از رهبر منفرد (٪) — فقط وقتی فروشندگان خلوت و رهبر منفرد است */
+    /** حداکثر فاصله مجاز از رهبر منفرد (٪) — فقط در حالت premium (پیش‌فرض: false) */
     leaderGapPct: number;
-    /** حداقل حاشیه برای فعال‌شدن policy رهبر منفرد (٪) */
+    /** حداقل حاشیه برای دنبال‌کردن رهبر/بدنه بازار در رقابت رهبر منفرد (٪) */
     leaderMinMarginPct: number;
+    /**
+     * حالت قدیمی «پلک بالای رهبر منفرد» (leader_sole_gap). پیش‌فرض false:
+     * در بازار خلوت با رهبر منفرد، اگر حاشیه کافی باشد رتبه ۱ زیر رهبر می‌نشینیم،
+     * وگرنه زیر بدنه بازار — هرگز بالاتر از رهبر.
+     */
+    leaderPremiumMode: boolean;
     localMonopolyDiscountFromRefPct: number;
     fallbackToReference: boolean;
   };
@@ -385,7 +391,7 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     staleSafetyBufferPct: 2.5,
     neverBelowManualCost: true,
     costPolicy: "replacement_floor",
-    allowAutoApplyWithoutCost: true,
+    allowAutoApplyWithoutCost: false,
     costlessSafePercentile: 55,
     costlessSafetyMarginPct: 1.0,
     impliedCostBackoffPct: 6.0,
@@ -439,6 +445,7 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     ],
     leaderGapPct: 4,
     leaderMinMarginPct: 5,
+    leaderPremiumMode: false,
     localMonopolyDiscountFromRefPct: 1.0,
     fallbackToReference: true,
   },
@@ -498,7 +505,7 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     autoApply: false,
   },
   engine: {
-    version: "4.1.0",
+    version: "4.1.1",
   },
 };
 
@@ -575,6 +582,10 @@ export interface CompetitivePositionReport {
     | "provisional_market_percentile";
   /** فاصله قیمت ما از رهبر منفرد بازار (٪) — null = بدون رهبر منفرد */
   leaderGapPct?: number | null;
+  /** رتبه با احتساب فروشنده‌های مشکوک/کهنهٔ حذف‌شده (برای گزارش شفاف کنار رتبهٔ قابل‌اتکا) */
+  rankIncludingSuspect: number | null;
+  /** تعداد کل فروشنده‌های دارای قیمت، شامل مشکوک/کهنه (برای گزارش شفاف) */
+  totalSellersIncludingSuspect: number;
 }
 
 export interface PricingResult {

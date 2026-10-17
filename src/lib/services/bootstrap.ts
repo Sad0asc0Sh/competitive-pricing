@@ -131,12 +131,38 @@ export function mergeConfig(partial: Partial<PricingProfileConfig> | null | unde
   const pSup = p.supervisor ?? ({} as Partial<PricingProfileConfig["supervisor"]>);
   const pGates = pSup.gates ?? ({} as Partial<PricingProfileConfig["supervisor"]["gates"]>);
 
+  // سازگاری پروفایل‌های قدیمی (۴.۱.۱):
+  //  - اگر costPolicy ذخیره نشده ولی neverBelowManualCost هست، همان معنای قدیمی حفظ می‌شود
+  //    (true → max_inventory_replacement، false → replacement_floor). وگرنه پیش‌فرض جدید.
+  //  - اگر پله‌های undercut ذخیره نشده‌اند و پروفایل قدیمی undercutAmount/undercutPct غیرپیش‌فرض
+  //    داشته، پله‌ها را خالی می‌گذاریم تا مقادیر صریح قدیمی نادیده گرفته نشوند.
+  const pSourcing = { ...(p.sourcing ?? {}) };
+  if (
+    pSourcing.costPolicy == null &&
+    p.sourcing &&
+    typeof p.sourcing.neverBelowManualCost === "boolean"
+  ) {
+    pSourcing.costPolicy = p.sourcing.neverBelowManualCost
+      ? "max_inventory_replacement"
+      : "replacement_floor";
+  }
+
+  const pRank1 = { ...(p.rank1 ?? {}) };
+  if (
+    p.rank1 &&
+    p.rank1.undercutTiers === undefined &&
+    (p.rank1.undercutAmount !== undefined || p.rank1.undercutPct !== undefined)
+  ) {
+    // پروفایل قدیمی (قبل از پله‌های ۴.۱): مقادیر صریح undercutAmount/undercutPct حفظ می‌شوند.
+    pRank1.undercutTiers = [];
+  }
+
   return {
-    sourcing: { ...d.sourcing, ...(p.sourcing ?? {}) },
+    sourcing: { ...d.sourcing, ...pSourcing },
     filters: { ...d.filters, ...(p.filters ?? {}) },
     outliers: { ...d.outliers, ...(p.outliers ?? {}) },
     aggregation: { ...d.aggregation, ...(p.aggregation ?? {}) },
-    rank1: { ...d.rank1, ...(p.rank1 ?? {}) },
+    rank1: { ...d.rank1, ...pRank1 },
     margin: { ...d.margin, ...(p.margin ?? {}) },
     guards: { ...d.guards, ...(p.guards ?? {}) },
     discount: { ...d.discount, ...(p.discount ?? {}) },
@@ -153,7 +179,9 @@ export function mergeConfig(partial: Partial<PricingProfileConfig> | null | unde
     },
     ai: { ...d.ai, ...(p.ai ?? {}) },
     costless: { ...d.costless, ...(p.costless ?? {}) },
-    engine: { ...d.engine, ...(p.engine ?? {}) },
+    // نسخه‌ی موتور از کد جاری می‌آید، نه از پروفایل قدیمی؛ وگرنه تصمیم‌های ۴.۱.۱
+    // با برچسب پروفایل ذخیره‌شده (مثلاً 4.1.0) ثبت می‌شوند.
+    engine: { ...d.engine, ...(p.engine ?? {}), version: d.engine.version },
   };
 }
 

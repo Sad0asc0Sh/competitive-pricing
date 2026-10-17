@@ -705,8 +705,9 @@ test('۱۴. ناظر بالاسر SubQ SystemOne (مدل subq-snap-preview و ن
   assert.equal(approvedRes.rejectedBySupervisor, false)
   assert.equal(approvedRes.needsReview, false)
 
-  // ۴) سناریوی ب: حاشیه سود کم (~۵٪ گیت ۳ → ~۵۸%) اما امتیاز کل در بازه ریویو (۴۵..۸۰) → ارسال به ریویو (بدون خاموشی پیشنهاد)
-  const reviewRes = runPricingPipeline(
+  // ۴) سناریوی ب: حاشیه سود کم (~۵٪) اما عبور از قیدهای سخت → گیت ۳ با امتیاز ۸۵ تأیید می‌شود
+  //    (۴.۱.۱: فرمول قبلی ۵۰+۱.۶×حاشیه، ۹۵٪ تصمیم‌های خودکار را بی‌دلیل به ریویو می‌فرستاد)
+  const lowMarginRes = runPricingPipeline(
     {
       source: 'torob',
       productTitle: 'دوربین مداربسته تحت شبکه داهوا مدل DH-IPC-HFW1230S-S5 ظرفیت 2 مگاپیکسل',
@@ -724,9 +725,10 @@ test('۱۴. ناظر بالاسر SubQ SystemOne (مدل subq-snap-preview و ن
       now,
     },
   )
-  assert.equal(reviewRes.supervisor.verdict, 'review')
-  assert.equal(reviewRes.rejectedBySupervisor, false)
-  assert.equal(reviewRes.needsReview, true, 'در بازه ۴۵ تا ۸۰/۹۶ درصد باید به بخش ریویو برود')
+  assert.equal(lowMarginRes.supervisor.gates.profit_and_rank_safety.verdict, 'approve')
+  assert.equal(lowMarginRes.supervisor.verdict, 'approve')
+  assert.equal(lowMarginRes.rejectedBySupervisor, false)
+  assert.equal(lowMarginRes.needsReview, false, 'عبور از کف سود با حاشیه ~۵٪ باید خودکار تأیید شود')
 
   // ۵) سناریوی ج: امتیاز زیر ۴۵٪ در ورودی (مثلاً کارت ترب «پایه دوربین» است نه خود دوربین) → رد کامل (reject)
   const rejectedRes = runPricingPipeline(
@@ -864,7 +866,7 @@ const { buildDiscount } = loadTsModule('src/lib/pricing/discount.ts')
 const { applyGuards } = loadTsModule('src/lib/pricing/guards.ts')
 const { weightedMedian } = loadTsModule('src/lib/pricing/stats.ts')
 
-test('۲۰. آمار وزنی (میانه وزنی) و هیسترزیس متقارن محافظ‌ها + گرد کردن جهت‌دار (P1/P2-1)', () => {
+test('۲۰. آمار وزنی (میانه وزنی) و هیسترزیس یک‌طرفه محافظ‌ها + گرد کردن جهت‌دار (P1/P2-1)', () => {
   // میانه وزنی: با وزن‌های بالا، عضو سبک بالای لیست جابه‌جا نمی‌کند
   assert.equal(weightedMedian([10, 20, 30], [5, 2, 1]), 10)
   assert.equal(weightedMedian([10, 20, 30, 40], [1, 1, 1, 1]), 20, 'میانه وزنی با عضو مرزی (بدون میان‌یابی — سازگار با weightedMedianInt outliers)')
@@ -872,10 +874,15 @@ test('۲۰. آمار وزنی (میانه وزنی) و هیسترزیس متقا
   const g = DEFAULT_PROFILE_CONFIG.guards
   const r = DEFAULT_PROFILE_CONFIG.rounding
 
-  // هیسترزیس متقارن ۴.۱: تغییر جزئی صعودی دیگر خودکار اعمال نمی‌شود
+  // هیسترزیس یک‌طرفه ۴.۱.۱: فقط افزایش جزئی نادیده گرفته می‌شود
   const hyst = applyGuards(2501900, { costPrice: 2400000, minMarginPct: 3, minProfitAmountToman: 10000, currentPrice: 2500000 }, g, r)
-  assert.equal(hyst.price, 2500000, 'تغییر 0.08% صعودی باید توسط هیسترزیس متقارن نادیده گرفته شود')
-  assert.ok(hyst.notes.some((n) => n.includes('هیسترزیس متقارن')))
+  assert.equal(hyst.price, 2500000, 'افزایش 0.08% باید توسط هیسترزیس یک‌طرفه نادیده گرفته شود')
+  assert.ok(hyst.notes.some((n) => n.includes('هیسترزیس یک‌طرفه')))
+
+  // کاهش جزئی هرگز نباید مسدود شود؛ وگرنه رقیب با یک پله کاهش جای رتبه ۱ را می‌گیرد
+  const down = applyGuards(2498100, { costPrice: 2400000, minMarginPct: 3, minProfitAmountToman: 10000, currentPrice: 2500000 }, g, r)
+  assert.equal(down.price, 2498000, 'کاهش 0.08% باید اعمال شود (هیسترزیس یک‌طرفه)')
+  assert.ok(!down.notes.some((n) => n.includes('نادیده گرفته شد')))
 
   // undercut-anchor → گرد کردن به پایین (هرگز بالای رقیب نرویم)
   const floored = applyGuards(2501900, { costPrice: 2000000, minMarginPct: 3, minProfitAmountToman: 10000, currentPrice: 2410000 }, g, r, { direction: 'floor' })
@@ -963,7 +970,7 @@ test('۲۲. طبقه‌بندی R0/R1 فروشندگان پرت پایین (M2):
   assert.ok(sum.ceiling != null && sum.ceiling > 2500000 && sum.ceiling < 2700000, `سقف معیار باید باند مطلوب باشد (${sum.ceiling})`)
 })
 
-test('۲۳. سیاست رهبر منفرد (leader_sole_gap، M4): بازار خلوت و رهبر منفرد → رهبر × (1 + 4%)', () => {
+test('۲۳. سیاست رهبر منفرد (پیش‌فرض ۴.۱.۱): بازار خلوت و رهبر منفرد → رتبه ۱ زیر رهبر، نه بالای او', () => {
   const offers = [
     { shopName: 'رهبر ارزان منفرد', shopCity: 'تهران', price: 2500000, lastChangedAt: now, inStock: true, shopScore: 4.8 },
     { shopName: 'پیگیر ۲', shopCity: 'تهران', price: 2620000, lastChangedAt: now, inStock: true, shopScore: 4.5 },
@@ -980,10 +987,12 @@ test('۲۳. سیاست رهبر منفرد (leader_sole_gap، M4): بازار خ
       now,
     },
   )
-  assert.equal(res.strategy, 'leader_sole_gap')
-  assert.equal(res.position.competitionTier, 'leader_sole_gap')
-  // رهبر 2,500,000 × 1.04 = 2,600,000 (پرش ۴٪ بدون undercut چشی)
-  assert.equal(res.finalPrice, 2600000)
+  assert.equal(res.strategy, 'national_rank1_undercut')
+  assert.equal(res.position.competitionTier, 'national_rank1')
+  // رهبر 2,500,000 − پله 2,000 = 2,498,000 → رتبه ۱ مطلق، هرگز بالای رهبر
+  assert.equal(res.finalPrice, 2498000)
+  assert.ok(res.finalPrice < 2500000, 'پیش‌فرض نباید بالای رهبر منفرد بنشیند')
+  assert.equal(res.position.projectedNationalRank, 1)
   assert.equal(res.marketConflict, false)
   assert.ok(res.finalPrice >= res.supply.hardFloorPrice)
 })
@@ -1229,4 +1238,147 @@ test('۲۹. شبیه‌ساز رگرسیون ۱۰ سناریو (واحد: هیچ
   }
   assert.ok(approvals >= 1, 'باید حداقل یک سناریوی تایید خودکار ناظر (approve) در لجر ثبت شود')
   assert.ok(approvals <= scenarios.length, 'sanity')
+})
+
+// ==================================================================
+// نسخه ۴.۱.۱ — تست‌های بستن ایرادهای باقی‌مانده
+// ==================================================================
+const { evaluateSystemOneSupervisorSync } = loadTsModule('src/lib/pricing/systemone-supervisor.ts')
+const { summarizeOwnPriceHistory } = loadTsModule('src/lib/pricing/own-price-history.ts')
+
+const supervisorInput = (override = {}) => ({
+  productName: 'کالای تست',
+  source: { source: 'torob', offers: [], totalSellerCount: 10, fetchedAt: now, ok: true },
+  offers: [
+    { shopName: 'الف', price: 2450000, included: true, weight: 1 },
+    { shopName: 'ب', price: 2480000, included: true, weight: 1 },
+  ],
+  supply: {
+    costSource: 'supplier_list',
+    effectiveCostPrice: 2320000,
+    baseBuyPrice: 2300000,
+    overheadAmount: 20000,
+    selectedQuote: null,
+    evaluatedQuotes: [],
+    validQuotesCount: 1,
+    lowestQuoteCost: 2320000,
+    highestQuoteCost: 2320000,
+    medianQuoteCost: 2320000,
+    hardFloorPrice: 2390000,
+    minMarginPctUsed: 3,
+    minProfitAmountUsed: 10000,
+    usedFallbackCost: false,
+    usedMarketConsensusFloor: false,
+    safetyBufferAppliedPct: 0,
+    explanation: '',
+    warnings: [],
+  },
+  position: { projectedNationalRank: 1, projectedLocalRank: 1 },
+  floorCeiling: { monitoredSellersCount: 4 },
+  identityMatchScorePct: 95,
+  selfShopInListing: true,
+  finalPrice: 2400000,
+  basePrice: 2400000,
+  discountPct: 0,
+  dispersion: 0.01,
+  config: DEFAULT_PROFILE_CONFIG,
+  ...override,
+})
+
+test('۳۰. گیت سود ناظر (۴.۱.۱): عبور از کف سود ⇒ approve (حاشیه فقط اولویت صف ریویو است)', () => {
+  const report = evaluateSystemOneSupervisorSync(supervisorInput())
+  const profitGate = report.gates.profit_and_rank_safety
+  assert.equal(profitGate.verdict, 'approve')
+  assert.ok(profitGate.scorePct >= 82 && profitGate.scorePct < 90, `امتیاز گیت سود باید ۸۲..۹۰ باشد (${profitGate.scorePct})`)
+
+  const belowCost = evaluateSystemOneSupervisorSync(
+    supervisorInput({ supply: { ...supervisorInput().supply, effectiveCostPrice: 2400000 } }),
+  )
+  assert.equal(belowCost.gates.profit_and_rank_safety.verdict, 'reject', 'قیمت <= هزینه باید reject شود')
+
+  const belowFloor = evaluateSystemOneSupervisorSync(
+    supervisorInput({ finalPrice: 2350000 }),
+  )
+  assert.equal(belowFloor.gates.profit_and_rank_safety.verdict, 'reject', 'زیر hardFloor نباید تأیید شود')
+})
+
+test('۳۱. مرجع طبقه‌بندی (۴.۱.۱): پول کوچک «تازه+معتبر» فقط وقتی نماینده است مرجع می‌شود', () => {
+  const normal = [
+    1030000, 1040000, 1050000, 1060000, 1070000, 1080000, 1100000,
+  ]
+  const offers = [
+    { shopName: 'ارزان تازه', price: 800000, lastChangedAt: now, inStock: true, shopScore: 4.8, included: true, weight: 1 },
+    { shopName: 'معتبر پایین', price: 990000, lastChangedAt: now, inStock: true, shopScore: 4.8, included: true, weight: 1 },
+    ...normal.map((price, i) => ({
+      shopName: `عادی ${i + 1}`,
+      price,
+      lastChangedAt: now,
+      inStock: true,
+      shopScore: 4.0,
+      included: true,
+      weight: 1,
+    })),
+  ]
+  const report = removeOutliers(offers, DEFAULT_PROFILE_CONFIG.outliers, {
+    now,
+    highTrustScoreThreshold: DEFAULT_PROFILE_CONFIG.rank1.highTrustScoreThreshold,
+  })
+
+  assert.ok(report.stableRefPrice >= 1000000, `مرجع نباید از دو ارزان‌فروش آلوده شود (${report.stableRefPrice})`)
+  assert.equal(report.highOutlierRemoved, 0, 'هیچ فروشنده عادی نباید گران‌فروش پرت شود')
+  const normalRemoved = offers.filter((o) => o.shopName.startsWith('عادی') && !o.included)
+  assert.equal(normalRemoved.length, 0, 'بدنه‌ی عادی بازار باید کامل بماند')
+  assert.equal(offers.find((o) => o.shopName === 'ارزان تازه').cls, 'suspect_low', 'ارزان‌فروش تازه و منفرد باید suspect_low باشد')
+})
+
+test('۳۲. هیسترزیس یک‌طرفه (۴.۱.۱): کاهش جزئی مسدود نمی‌شود و رتبه ۱ از دست نمی‌رود', () => {
+  const g = DEFAULT_PROFILE_CONFIG.guards
+  const r = DEFAULT_PROFILE_CONFIG.rounding
+  const down = applyGuards(
+    1000000,
+    { costPrice: 800000, minMarginPct: 3, minProfitAmountToman: 10000, currentPrice: 1001000 },
+    g,
+    r,
+    { direction: 'floor' },
+  )
+  assert.equal(down.price, 1000000, 'کاهش ۰٫۱٪ باید اعمال شود (قبلاً هیسترزیس متقارن آن را مسدود می‌کرد)')
+})
+
+test('۳۳. رهبر منفرد premium (اختیاری): با leaderPremiumMode=true رفتار قبلی (پلک بالای رهبر) برمی‌گردد', () => {
+  const cfg = structuredClone(DEFAULT_PROFILE_CONFIG)
+  cfg.rank1.leaderPremiumMode = true
+  const offers = [
+    { shopName: 'رهبر ارزان منفرد', shopCity: 'تهران', price: 2500000, lastChangedAt: now, inStock: true, shopScore: 4.8 },
+    { shopName: 'پیگیر ۲', shopCity: 'تهران', price: 2620000, lastChangedAt: now, inStock: true, shopScore: 4.5 },
+    { shopName: 'پیگیر ۳', shopCity: 'مشهد', price: 2700000, lastChangedAt: now, inStock: true, shopScore: 4.6 },
+  ]
+  const res = runPricingPipeline(
+    { source: 'torob', productTitle: 'کارت آداپتور شبکه', offers, totalSellerCount: 8, fetchedAt: now, ok: true },
+    {
+      productId: 56,
+      productName: 'کارت آداپتور شبکه',
+      costPrice: 2300000,
+      supplierQuotes: [{ supplierName: 'پخش شرق مشهد', rawPrice: 2300000, supplierCity: 'مشهد', priority: 9, inStock: true, updatedAt: now }],
+      config: cfg,
+      now,
+    },
+  )
+  assert.equal(res.strategy, 'leader_sole_gap')
+  assert.equal(res.finalPrice, 2600000)
+})
+
+test('۳۴. own_price_7d (۴.۱.۱): دوام تا ردیف بعدی سنجیده می‌شود و skipped مرجع نیست', () => {
+  const start = new Date('2026-10-12T00:00:00.000Z')
+  const now2 = new Date(start.getTime() + 120 * 3600_000)
+  const at = (h) => new Date(start.getTime() + h * 3600_000)
+  const rows = [
+    { finalPrice: 2600000, createdAt: at(0), pushStatus: 'pushed' }, // فقط ۱ ساعت برقرار
+    { finalPrice: 2500000, createdAt: at(1), pushStatus: 'pushed' }, // ۵۹ ساعت برقرار → معتبر
+    { finalPrice: 2550000, createdAt: at(60), pushStatus: 'pushed' }, // ۳۰ ساعت برقرار
+    { finalPrice: 2400000, createdAt: at(90), pushStatus: 'pushed' }, // ۳۰ ساعت برقرار
+    { finalPrice: 3000000, createdAt: at(30), pushStatus: 'skipped' }, // هرگز به فروشگاه نرسیده
+  ]
+  const summary = summarizeOwnPriceHistory(rows, { now: now2, holdHours: 48, windowDays: 7 })
+  assert.equal(summary.ownStableHigh7d, 2500000, 'قیمت گذرا/۷۰ساعته‌ی یک‌ساعته نباید مرجع تخفیف شود')
+  assert.equal(summary.ownAvg7d, Math.round((2600000 + 2500000 + 2550000 + 2400000) / 4))
 })

@@ -1,9 +1,7 @@
-import type { MarketSummary } from "./aggregate";
 import { ceilToStep, median, weightedMean } from "./stats";
 import type {
   CostResolutionPolicy,
   EvaluatedSupplierQuote,
-  MarketPriceTrend,
   PricingProfileConfig,
   SupplierQuote,
   SupplyCostResolution,
@@ -449,82 +447,6 @@ export function resolveSupplyCost(input: {
     warnings,
     costPolicyUsed: policy,
     inventoryReplacementWarning,
-  };
-}
-
-/**
- * ترفند هوشمند «قیمت‌گذار معیار بازار» در صورت نداشتن لیست همکار و نداشتن قیمت خرید:
- *
- * ۱) ترکیب وزنی سه شاخص مقاوم پس از حذف فروشندگان قدیمی و پرت:
- *    - `modalConsensus` (۴۵٪): هسته چگال/مد بازار (پرتراکم‌ترین بازه قیمتی فروشندگان به‌روز)
- *    - `trimmedWeightedMean` (۳۵٪): میانگین وزنی بریده‌شده
- *    - `safePercentilePrice` (۲۰٪): صدک امن بازار (مثلاً صدک ۵۵)
- * ۲) تعیین کف امن ضدضرر بازار (`hardFloorPrice`) در مرکز ثقل فروشندگان به‌روز (بالاتر از فروشندگان ارزانِ مشکوک)
- *    تا هم در صدر فروشندگانِ به‌روز و معتبر رقابت کنیم و هم هیچ ضرری متوجه فروشگاه نباشد.
- */
-export function deriveSafeMarketConsensusSupply(
-  initialSupply: SupplyCostResolution,
-  market: MarketSummary,
-  config: PricingProfileConfig,
-  priceTrend?: MarketPriceTrend | null,
-): SupplyCostResolution {
-  if (initialSupply.effectiveCostPrice > 0 || market.count === 0 || market.reference == null) {
-    if (initialSupply.effectiveCostPrice <= 0 && market.count === 0) {
-      return {
-        ...initialSupply,
-        warnings: [
-          ...initialSupply.warnings,
-          "محصول فاقد لیست قیمت همکار، فاقد قیمت خرید و فاقد فروشنده معتبر در ترب است",
-        ],
-      };
-    }
-    return initialSupply;
-  }
-
-  const sCfg = config.sourcing;
-  const rCfg = config.rounding;
-
-  const modal = market.modalConsensus ?? market.reference;
-  const trimmedW = market.trimmedWeightedMean ?? market.reference;
-  const safePct = market.safePercentilePrice ?? market.median ?? market.reference;
-  const med = market.median ?? market.reference;
-
-  // ترکیب وزنی سه لنگر آماری برای رسیدن به دقیق‌ترین «قیمت معیار به‌روز بازار»
-  const consensusBase = Math.round(0.45 * modal + 0.35 * trimmedW + 0.20 * safePct);
-
-  // کف امن ضدضرر در حالت بدون لیست خرید:
-  // هرگز پایین‌تر از میانه فروشندگان به‌روز و میانگین وزنی بریده نرود؛ و اگر روند بازار صعودی بود ۱.۵٪ بالاتر قرار گیرد
-  const trendBufferPct = priceTrend?.direction === "rising" ? 1.5 : 0;
-  const rawSafeSellingFloor = Math.max(med, trimmedW, consensusBase) * (1 + trendBufferPct / 100);
-  const step = Math.max(1, rCfg.finalStep || 1000);
-  const hardFloorPrice = ceilToStep(rawSafeSellingFloor, step);
-
-  // استخراج قیمت خرید تخمینی امن (پشتوانه محاسبه حاشیه سود، به اندازه impliedCostBackoffPct زیر کف امن بازار)
-  const backoffPct = Math.max(initialSupply.minMarginPctUsed + 1, sCfg.impliedCostBackoffPct ?? 6);
-  const impliedCostPrice = Math.max(
-    1000,
-    Math.round(hardFloorPrice / (1 + backoffPct / 100)),
-  );
-
-  const warnings = [...initialSupply.warnings];
-  if (!sCfg.allowAutoApplyWithoutCost) {
-    warnings.push("قیمت بر اساس اجماع بازار ترب (بدون لیست خرید همکار) تعیین شد — نیازمند تأیید");
-  }
-
-  return {
-    ...initialSupply,
-    costSource: "market_consensus_safe_floor",
-    effectiveCostPrice: impliedCostPrice,
-    baseBuyPrice: impliedCostPrice,
-    overheadAmount: 0,
-    hardFloorPrice,
-    usedMarketConsensusFloor: true,
-    safetyBufferAppliedPct: trendBufferPct,
-    warnings,
-    explanation:
-      `کشف هوشمند از ترب (بدون لیست خرید): پس از حذف قیمت‌های پرت/قدیمی، هسته چگال بازار ${modal.toLocaleString("fa-IR")}، ` +
-      `میانگین وزنی بریده ${trimmedW.toLocaleString("fa-IR")} و میانه ${Math.round(med).toLocaleString("fa-IR")} تومان است → ` +
-      `کف امن ضدضرر بازار: ${hardFloorPrice.toLocaleString("fa-IR")} تومان (قیمت خرید تخمینی امن: ${impliedCostPrice.toLocaleString("fa-IR")} تومان)`,
   };
 }
 

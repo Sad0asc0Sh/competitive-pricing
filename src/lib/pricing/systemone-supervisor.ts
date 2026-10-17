@@ -180,9 +180,11 @@ export function evaluateSystemOneSupervisorSync(input: {
   } else if (input.finalPrice < input.supply.hardFloorPrice) {
     profitScorePct = 30;
   } else {
-    // fires (نسخه ۴.۱): حاشیه سود ایمن ملاک است؛ رتبه دیگر جزو گیت نبود (فقط اولویت صف ریویو)
+    // ۴.۱.۱: عبور از قیدهای سخت قبلی (>= hardFloor و > هزینه) یعنی «ایمن»؛ پس امتیاز پایه ۸۲ است
+    // و حاشیه فقط برای اولویت صف ریویو امتیاز اضافه می‌کند (۰ تا ۱۸). فرمول قبلی (۵۰ + ۱.۶×حاشیه)
+    // برای تأیید به حاشیه‌ی ≥۱۸.۷۵٪ نیاز داشت و عملاً ۹۵٪ تصمیم‌های خودکار را به ریویو می‌فرستاد.
     const marginPct = ((input.finalPrice - input.supply.effectiveCostPrice) / input.supply.effectiveCostPrice) * 100;
-    profitScorePct = clamp(50 + Math.min(48, marginPct * 1.6), 0, 100);
+    profitScorePct = clamp(82 + Math.min(18, Math.max(0, marginPct) * 0.6), 0, 100);
   }
   const prfReject = supCfg.gates.profit_and_rank_safety.rejectBelowPct ?? globalReject;
   const prfApprove = supCfg.gates.profit_and_rank_safety.approveAbovePct ?? globalApprove;

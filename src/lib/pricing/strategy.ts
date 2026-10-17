@@ -89,8 +89,10 @@ export function decideTargetPrice(
 
   // =========================================================================
   // پله صفر: «سیاست رهبر منفرد» در بازار خلوت
-  // اگر رهبرِ ارزان‌ترین قیمت، تنها عضو خوشه خودش است و فروشندگان به‌روز کم‌اند
-  // به‌جای undercut، پله بالای رهبر می‌نشینیم (leaderGapPct) — مگر آنکه حاشیه اجازه ندهد.
+  // پیش‌فرض (leaderPremiumMode=false): هرگز بالای رهبر نمی‌نشینیم.
+  //   - اگر undercut رهبر با حفظ کف/حداقل حاشیه ممکن باشد ⇒ رتبه ۱ دقیقاً زیر رهبر.
+  //   - وگرنه زیر بدنه‌ی بازار (اولین پیشنهاد قابل‌رقابت بالای کف) قرار می‌گیریم.
+  // حالت premium (اختیاری، سازگاری با رفتار قبلی): پلک leaderGapPct بالای رهبر.
   // =========================================================================
   const clusters = market.clusters ?? [];
   const lowestCluster = clusters[0];
@@ -100,38 +102,86 @@ export function decideTargetPrice(
     lowestCluster?.leaderPrice === nationalLow &&
     lowestCluster.sellerCount === 1;
 
-  if (
-    sparseSellers &&
-    leaderIsSole &&
-    nationalLow != null &&
-    ref != null &&
-    nationalLow < ref &&
-    cfg.leaderGapPct > 0
-  ) {
-    const gapAnchor = Math.round(nationalLow * (1 + cfg.leaderGapPct / 100));
-    const followerAnchor = nationalLow;
+  if (sparseSellers && leaderIsSole && nationalLow != null && ref != null && nationalLow < ref) {
     const cost = supply?.effectiveCostPrice ?? 0;
-    const gapCandidateMarginPct = cost > 0 ? ((gapAnchor - cost) / cost) * 100 : -1;
 
-    if (gapCandidateMarginPct >= cfg.leaderMinMarginPct) {
-      const leaderGapTarget = Math.max(hardFloor, gapAnchor);
-      return {
-        strategy: "leader_sole_gap",
-        competitionTier: "leader_sole_gap",
-        targetPrice: leaderGapTarget,
-        explanation:
-          `صدرسازی محتاطانه (بازار خلوت با ${market.count} فروشنده): رهبر منفرد «${market.lowestShopName}» ${fa(nationalLow)} تومان است — ` +
-          `به‌جای undercut، پلک ${cfg.leaderGapPct}% بالای رهبر (${fa(leaderGapTarget)} تومان) انتخاب شد؛ حاشیه ${gapCandidateMarginPct.toFixed(1)}% ≥ حداقل ${cfg.leaderMinMarginPct}%`,
-      };
-    }
-    // حاشیه اجازه نمی‌دهد؛ با حفظ کف، قیمت رهبر منفرد را دنبال می‌کنیم
-    if (cost <= 0 || followerAnchor > hardFloor) {
+    if (cfg.leaderPremiumMode === true && cfg.leaderGapPct > 0) {
+      const gapAnchor = Math.round(nationalLow * (1 + cfg.leaderGapPct / 100));
+      const followerAnchor = nationalLow;
+      const gapCandidateMarginPct = cost > 0 ? ((gapAnchor - cost) / cost) * 100 : -1;
+
+      if (gapCandidateMarginPct >= cfg.leaderMinMarginPct) {
+        const leaderGapTarget = Math.max(hardFloor, gapAnchor);
+        return {
+          strategy: "leader_sole_gap",
+          competitionTier: "leader_sole_gap",
+          targetPrice: leaderGapTarget,
+          explanation:
+            `حالت premium رهبر منفرد (بازار خلوت با ${market.count} فروشنده): رهبر «${market.lowestShopName}» ${fa(nationalLow)} تومان است — ` +
+            `پلک ${cfg.leaderGapPct}% بالای رهبر (${fa(leaderGapTarget)} تومان)؛ حاشیه ${gapCandidateMarginPct.toFixed(1)}% ≥ حداقل ${cfg.leaderMinMarginPct}%`,
+        };
+      }
+      // حاشیه اجازه نمی‌دهد؛ با حفظ کف، قیمت رهبر منفرد را دنبال می‌کنیم
+      if (cost <= 0 || followerAnchor > hardFloor) {
+        return {
+          strategy: "match_lowest",
+          competitionTier: "national_rank1",
+          targetPrice: Math.max(hardFloor, followerAnchor),
+          explanation:
+            `حاشیه ما برای پلک ${cfg.leaderGapPct}%-ی بالای رهبر کافی نیست (${Math.max(0, gapCandidateMarginPct).toFixed(1)}% < ${cfg.leaderMinMarginPct}%)؛ دنبال کردن قیمت رهبر منفرد (${fa(Math.max(hardFloor, followerAnchor))} تومان)`,
+        };
+      }
+    } else {
+      const leaderUndercut = computeUndercutDelta(nationalLow, cfg);
+      const followerTarget = Math.max(hardFloor, nationalLow - leaderUndercut);
+      const followerMarginPct = cost > 0 ? ((followerTarget - cost) / cost) * 100 : -1;
+      const canFollowLeader =
+        (hardFloor <= 0 || nationalLow - leaderUndercut >= hardFloor || hardFloor <= nationalLow) &&
+        (cost <= 0 || followerMarginPct >= cfg.leaderMinMarginPct);
+
+      if (canFollowLeader) {
+        return {
+          strategy: "national_rank1_undercut",
+          competitionTier: "national_rank1",
+          targetPrice: followerTarget,
+          explanation:
+            `رهبر منفرد بازار (${market.count} فروشنده): «${market.lowestShopName}» با ${fa(nationalLow)} تومان — ` +
+            `قیمت ${fa(followerTarget)} تومان (${fa(Math.max(0, nationalLow - followerTarget))} تومان زیر رهبر) برای رتبه ۱؛ ` +
+            `حاشیه ${followerMarginPct.toFixed(1)}% ≥ حداقل ${cfg.leaderMinMarginPct}%`,
+        };
+      }
+
+      // دنبال‌کردن رهبر با کف/حاشیه سازگار نیست ⇒ زیر بدنه بازار، نه بالاتر از رهبر
+      const body = market.firstReachableNationalOffer;
+      if (body && body.price > nationalLow) {
+        const bodyUndercut = computeUndercutDelta(body.price, cfg);
+        const target = Math.max(hardFloor, body.price - bodyUndercut);
+        return {
+          strategy: "national_cluster_rank1",
+          competitionTier: "national_cluster_rank1",
+          targetPrice: target,
+          explanation:
+            `رهبر منفرد ${fa(nationalLow)} تومان زیر/نزدیک کف مجاز ما (${fa(hardFloor)}) است و دنبال‌کردنش حاشیه ${Math.max(0, followerMarginPct).toFixed(1)}% < ${cfg.leaderMinMarginPct}% می‌دهد؛ ` +
+            `زیر بدنه بازار و جلوی «${body.shopName}» (${fa(body.price)}) با قیمت ${fa(target)} تومان قرار گرفتیم — هرگز بالاتر از رهبر نمی‌نشینیم`,
+        };
+      }
+
+      if (cfg.volumeMode && hardFloor > 0) {
+        return {
+          strategy: "volume_floor_min_margin",
+          competitionTier: "volume_floor_min_margin",
+          targetPrice: hardFloor,
+          explanation:
+            `رهبر منفرد بازار با حاشیه کافی قابل دنبال‌کردن نیست و بدنه‌ی دیگری بالای کف وجود ندارد؛ ` +
+            `قیمت روی کمترین مقدار مجاز و سودآور (${fa(hardFloor)} تومان) تنظیم شد`,
+        };
+      }
+
       return {
         strategy: "match_lowest",
         competitionTier: "national_rank1",
-        targetPrice: Math.max(hardFloor, followerAnchor),
-        explanation:
-          `حاشیه ما برای پلک ${cfg.leaderGapPct}%-ی بالای رهبر کافی نیست (${Math.max(0, gapCandidateMarginPct).toFixed(1)}% < ${cfg.leaderMinMarginPct}%)؛ دنبال کردن قیمت رهبر منفرد (${fa(Math.max(hardFloor, followerAnchor))} تومان)`,
+        targetPrice: Math.max(hardFloor, nationalLow),
+        explanation: `رهبر منفرد بازار ${fa(nationalLow)} تومان است؛ بدون پرش بالاتر از رهبر، روی همان قیمت (${fa(Math.max(hardFloor, nationalLow))}) قرار گرفتیم`,
       };
     }
   }
@@ -339,6 +389,15 @@ export function evaluateCompetitivePosition(
   const projectedNationalRank = validNational.length > 0 ? cheaperNationalCount + 1 : 1;
   const projectedLocalRank = validLocal.length > 0 ? cheaperLocalCount + 1 : 1;
 
+  // رتبه‌ی شفاف با احتساب فروشنده‌های مشکوک/کهنه‌ای که از بازار قابل‌اتکا حذف شده‌اند.
+  // رتبه‌ی رسمی (projectedNationalRank) فقط قابل‌اتکاها را می‌شمارد؛ این عدد کنارش گزارش می‌شود
+  // تا «رتبه ۱» در بازار دارای ارزان‌فروش تازه، گمراه‌کننده نباشد.
+  const suspectPrices = (market.suspectLows ?? []).map((s) => s.price).filter((p) => p > 0);
+  const allNationalPrices = [...validNational.map((o) => o.price), ...suspectPrices];
+  const cheaperIncludingSuspect = allNationalPrices.filter((p) => p < finalPrice).length;
+  const rankIncludingSuspect = allNationalPrices.length > 0 ? cheaperIncludingSuspect + 1 : null;
+  const totalSellersIncludingSuspect = allNationalPrices.length;
+
   // فاصله ما از رهبر منفرد بازار (مثبت = زیر قیمت رهبریم، منفی = بالاتر)
   const leaderCluster = market.clusters[0] ?? null;
   const leaderGapPct =
@@ -366,5 +425,7 @@ export function evaluateCompetitivePosition(
     netMarginPct,
     competitionTier,
     leaderGapPct,
+    rankIncludingSuspect,
+    totalSellersIncludingSuspect,
   };
 }

@@ -12,6 +12,9 @@ const os = require("os");
 const PRICING_APP_DIR = process.env.PRICING_APP_DIR || "/home/debian/apps/ai-driven-competitive-pricing-system";
 const EKGKALA_BACKEND_DIR = process.env.EKGKALA_BACKEND_DIR || "/home/debian/apps/ekgkala-project/ekgkala-backend";
 
+// ایمنی ۴.۱.۱: به‌صورت پیش‌فرض فقط dry-run است. برای هر نوشتن باید صریحاً --apply بدهید.
+const APPLY = process.argv.includes("--apply");
+
 require("dotenv").config({ path: path.join(PRICING_APP_DIR, ".env") });
 const beEnv = {};
 require("dotenv").config({ path: path.join(EKGKALA_BACKEND_DIR, ".env"), processEnv: beEnv });
@@ -58,6 +61,12 @@ async function main() {
       );
     }
 
+    if (!APPLY) {
+      console.log("🛑 حالت DRY-RUN: هیچ تغییری در PostgreSQL/MongoDB/کش اعمال نشد.");
+      console.log("برای اجرای واقعی، اسکریپت را با آرگومان --apply اجرا کنید (فقط پس از بکاپ و بازبینی خروجی).");
+      return;
+    }
+
     // ۲. پاک‌سازی در PostgreSQL
     await client.query(`
       UPDATE products
@@ -101,6 +110,7 @@ async function main() {
       await mongoose.connect(mongoUri);
       const Sale = require(path.join(EKGKALA_BACKEND_DIR, "models/Sale"));
       const delRes = await Sale.deleteMany({
+        autoManaged: true,
         name: { $in: ["فروش ویژه زمان‌دار (مالی و تخفیف + منتخب‌ها)", "فروش ویژه هوشمند", "فروش ویژه مشهد"] },
       });
       console.log(`✅ تعداد کمپین‌های Sale خودکار حذف‌شده از MongoDB: ${delRes.deletedCount}`);

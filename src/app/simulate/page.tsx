@@ -698,11 +698,11 @@ export default function SimulatePage() {
               {/* ۲. شاخص‌های ۱۲ گانه تصمیم‌گیری */}
               <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
                 <K
-                  k={res.supply?.usedMarketConsensusFloor ? "خرید تخمینی امن (از ترب)" : "تمام‌شده همکار منتخب"}
+                  k="تمام‌شده همکار منتخب"
                   v={t(res.supply?.effectiveCostPrice)}
                 />
                 <K
-                  k={res.supply?.usedMarketConsensusFloor ? "کف امن ضدضرر بازار" : "خط قرمز فروش (کف سود)"}
+                  k="خط قرمز فروش (کف سود)"
                   v={t(res.supply?.hardFloorPrice)}
                   warn
                 />

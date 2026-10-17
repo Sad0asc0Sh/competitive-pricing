@@ -84,7 +84,7 @@ CREATE TABLE "price_decisions" (
 	"confidence" real DEFAULT 0 NOT NULL,
 	"status" varchar(30) NOT NULL,
 	"steps" jsonb DEFAULT '[]'::jsonb NOT NULL,
-	"engine_version" varchar(20) DEFAULT '4.1.0' NOT NULL,
+	"engine_version" varchar(20) DEFAULT '4.1.1' NOT NULL,
 	"market_conflict" boolean DEFAULT false NOT NULL,
 	"reference_kind" varchar(30),
 	"floor_confirmed" boolean DEFAULT false NOT NULL,

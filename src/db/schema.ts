@@ -150,8 +150,8 @@ export const priceDecisions = pgTable(
     confidence: real("confidence").default(0).notNull(),
     status: varchar("status", { length: 30 }).notNull(), // applied | pending_review | rejected | failed | skipped
     steps: jsonb("steps").$type<DecisionStep[]>().default([]).notNull(),
-    /** نسخه‌ی موتور ۴.۱ که این تصمیم را ساخته (قابل‌ردیابی) */
-    engineVersion: varchar("engine_version", { length: 20 }).default("4.1.0").notNull(),
+    /** نسخه‌ی موتور ۴.۱.۱ که این تصمیم را ساخته (قابل‌ردیابی) */
+    engineVersion: varchar("engine_version", { length: 20 }).default("4.1.1").notNull(),
     /** فروشنده suspect_low زیر قیمت پیشنهادی ما (market_conflict → review) */
     marketConflict: boolean("market_conflict").default(false).notNull(),
     /** مرجع مقایسه تخفیف: none | own_price_7d | market_p75 */

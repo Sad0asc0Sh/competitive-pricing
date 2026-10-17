@@ -497,6 +497,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     message:
       `رتبه در ${cfg.rank1.defaultCity}: #${position.projectedLocalRank} (از ${position.totalLocalValidSellers || 1}) | ` +
       `رتبه در کل ترب: #${position.projectedNationalRank} (از ${position.totalNationalValidSellers || 1}) | ` +
+      `رتبه با احتساب فروشنده‌های مشکوک/کهنه: #${position.rankIncludingSuspect ?? "-"} (از ${position.totalSellersIncludingSuspect || 1}) | ` +
       `حاشیه ایمنی/سود: ${fa(position.netProfitToman)} تومان (${position.netMarginPct}%)`,
     data: { ...position },
   });

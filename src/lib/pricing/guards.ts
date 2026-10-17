@@ -69,12 +69,13 @@ export function applyGuards(
   if (ctx.currentPrice && ctx.currentPrice > 0) {
     const changePct = ((price - ctx.currentPrice) / ctx.currentPrice) * 100;
 
-    // هیسترزیس متقارن (۴.۱): تغییر بسیار جزئی در هر دو جهت (بالا/پایین) بی‌مورد است
+    // هیسترزیس یک‌طرفه (۴.۱.۱): فقط افزایش‌های بسیار جزئی نادیده گرفته می‌شوند.
+    // کاهش جزئی هرگز مسدود نمی‌شود؛ وگرنه رقیب با یک پله کاهش، جای ما را در رتبه ۱ می‌گیرد.
     // — مگر آنکه قیمت فعلی زیر کف قرمز باشد؛ آنجا هر نوسانی اهمیت دارد.
     const hyst = cfg.hysteresisPct ?? 0;
-    if (hyst > 0 && Math.abs(changePct) > 0 && Math.abs(changePct) < hyst && ctx.currentPrice >= hardFloor) {
+    if (hyst > 0 && changePct > 0 && changePct < hyst && ctx.currentPrice >= hardFloor) {
       price = ctx.currentPrice;
-      notes.push(`تغییر جزئی (${changePct.toFixed(2)}% < ${hyst}%) نادیده گرفته شد تا ثبات قیمت حفظ شود (هیسترزیس متقارن)`);
+      notes.push(`افزایش جزئی (${changePct.toFixed(2)}% < ${hyst}%) نادیده گرفته شد تا ثبات قیمت حفظ شود (هیسترزیس یک‌طرفه)`);
     } else if (Math.abs(changePct) > cfg.maxChangePctPerRun) {
       const capped =
         changePct > 0
