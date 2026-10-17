@@ -34,6 +34,10 @@ export function applyGuards(
   },
   cfg: PricingProfileConfig["guards"],
   rounding: PricingProfileConfig["rounding"],
+  opts?: {
+    /** جهت گرد کردن: undercut-anchor → floor (هرگز بالای رقیب)، کف → ceil (هرگز زیر کف) */
+    direction?: "floor" | "ceil" | "nearest";
+  },
 ): GuardOutcome {
   const notes: string[] = [];
   const reviewReasons: string[] = [];
@@ -65,17 +69,12 @@ export function applyGuards(
   if (ctx.currentPrice && ctx.currentPrice > 0) {
     const changePct = ((price - ctx.currentPrice) / ctx.currentPrice) * 100;
 
-    // هیسترزیس: تغییر بسیار جزئی (مثلاً کمتر از ۰.۱۵٪) در حالی که بالای کف سود هستیم
+    // هیسترزیس متقارن (۴.۱): تغییر بسیار جزئی در هر دو جهت (بالا/پایین) بی‌مورد است
+    // — مگر آنکه قیمت فعلی زیر کف قرمز باشد؛ آنجا هر نوسانی اهمیت دارد.
     const hyst = cfg.hysteresisPct ?? 0;
-    if (
-      hyst > 0 &&
-      Math.abs(changePct) > 0 &&
-      Math.abs(changePct) < hyst &&
-      ctx.currentPrice >= hardFloor &&
-      ctx.currentPrice <= price
-    ) {
+    if (hyst > 0 && Math.abs(changePct) > 0 && Math.abs(changePct) < hyst && ctx.currentPrice >= hardFloor) {
       price = ctx.currentPrice;
-      notes.push(`تغییر جزئی (${changePct.toFixed(2)}% < ${hyst}%) نادیده گرفته شد تا ثبات قیمت حفظ شود`);
+      notes.push(`تغییر جزئی (${changePct.toFixed(2)}% < ${hyst}%) نادیده گرفته شد تا ثبات قیمت حفظ شود (هیسترزیس متقارن)`);
     } else if (Math.abs(changePct) > cfg.maxChangePctPerRun) {
       const capped =
         changePct > 0
@@ -91,7 +90,7 @@ export function applyGuards(
         price = hardFloor;
         floorEnforced = true;
         reviewReasons.push(
-          `افزایش فوری قیمت (${changePct.toFixed(1)}%) به دلیل بالا رفتن قیمت خرید در لیست همکاران`,
+          `جهش قیمت ${changePct.toFixed(1)}% به دلیل به‌روزرسانی کف خرید همکاران (قیمت فعلی زیر کف بود)`,
         );
       } else {
         notes.push(
@@ -104,7 +103,16 @@ export function applyGuards(
   }
 
   // ۳) گرد کردن نهایی با تضمین ریاضی عدم عبور از خط قرمز کف خرید و سود
-  price = applyRoundingWithFloor(price, rounding.finalStep, rounding.psychological, hardFloor, ctx.costPrice);
+  if (floorEnforced || opts?.direction === "ceil" || opts?.direction !== "floor") {
+    price = applyRoundingWithFloor(price, rounding.finalStep, rounding.psychological, hardFloor, ctx.costPrice);
+  } else {
+    // undercut-anchor: همیشه به پایین گرد کن تا هرگز بالای رقیب/انکر نشویم
+    const floored = Math.floor(price / Math.max(1, rounding.finalStep)) * Math.max(1, rounding.finalStep);
+    price =
+      hardFloor > 0 && floored < hardFloor
+        ? applyRoundingWithFloor(price, rounding.finalStep, rounding.psychological, hardFloor, ctx.costPrice)
+        : Math.max(0, Math.round(floored));
+  }
 
   return {
     price,

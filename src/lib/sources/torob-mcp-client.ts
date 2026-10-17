@@ -407,7 +407,7 @@ export async function fetchViaTorobMcpServer(opts: {
 
   return {
     source: "torob",
-    productTitle: details.name_fa ?? opts.productName,
+    productTitle: details.name_fa ?? undefined,
     prk: details.prk ?? prk,
     detailsUrl,
     offers: converted.offers,

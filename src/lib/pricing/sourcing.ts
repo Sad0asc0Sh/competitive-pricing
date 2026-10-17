@@ -1,6 +1,7 @@
 import type { MarketSummary } from "./aggregate";
 import { ceilToStep, median, weightedMean } from "./stats";
 import type {
+  CostResolutionPolicy,
   EvaluatedSupplierQuote,
   MarketPriceTrend,
   PricingProfileConfig,
@@ -285,6 +286,11 @@ export function resolveSupplyCost(input: {
   let safetyBufferAppliedPct = 0;
   let explanation = "";
 
+  // M2: سیاست تقاطع قیمت انبار (manualCost) و قیمت ریپلیس (لیست همکار)
+  const policy: CostResolutionPolicy =
+    sCfg.costPolicy ?? (sCfg.neverBelowManualCost ? "legacy_never_below_manual" : "replacement_floor");
+  let inventoryReplacementWarning: string | null = null;
+
   if (sCfg.enabled && validQuotes.length > 0) {
     costSource = "supplier_list";
     const cheapest = validQuotes[0];
@@ -341,7 +347,7 @@ export function resolveSupplyCost(input: {
       }
     }
 
-    if (sCfg.neverBelowManualCost && manualCost > effectiveCostPrice) {
+    if (policy === "legacy_never_below_manual" && sCfg.neverBelowManualCost && manualCost > effectiveCostPrice) {
       warnings.push(
         `قیمت تمام‌شده ثبت‌شده در انبار (${manualCost.toLocaleString("fa-IR")}) بالاتر از لیست همکار (${effectiveCostPrice.toLocaleString("fa-IR")}) است؛ برای جلوگیری از ضرر روی موجودی فعلی، عدد بالاتر ملاک قرار گرفت`,
       );
@@ -349,6 +355,19 @@ export function resolveSupplyCost(input: {
       baseBuyPrice = manualCost;
       overheadAmount = 0;
       explanation += ` (ارتقا به قیمت خرید انبار: ${manualCost.toLocaleString("fa-IR")} تومان)`;
+    } else if (policy === "max_inventory_replacement" && manualCost > effectiveCostPrice) {
+      warnings.push(
+        `سیاست max_inventory_replacement: کف فروش از بالاترین هزینه انبار (${manualCost.toLocaleString("fa-IR")}) و قیمت ریپلیس (${effectiveCostPrice.toLocaleString("fa-IR")}) تعیین شد`,
+      );
+      effectiveCostPrice = manualCost;
+      baseBuyPrice = manualCost;
+      overheadAmount = Math.max(0, effectiveCostPrice - (selectedQuote?.buyPriceToman ?? 0));
+      explanation += ` (کف از هزینه انبار: ${manualCost.toLocaleString("fa-IR")} تومان)`;
+    } else if (policy === "replacement_floor" && manualCost > effectiveCostPrice) {
+      inventoryReplacementWarning =
+        `قیمت فروش ممکن است زیر هزینه‌ی موجودی انبار (${manualCost.toLocaleString("fa-IR")}) تعیین شود؛ ملاک ریپلیس ارزان‌تر (${effectiveCostPrice.toLocaleString("fa-IR")}) است`;
+      warnings.push(inventoryReplacementWarning);
+      explanation += ` (قیمت ریپلیس ملاک است؛ انبار گران‌تر: ${manualCost.toLocaleString("fa-IR")} تومان)`;
     }
   } else if (rawQuotes.length > 0 && validQuotes.length === 0) {
     usedFallbackCost = true;
@@ -428,6 +447,8 @@ export function resolveSupplyCost(input: {
     safetyBufferAppliedPct,
     explanation,
     warnings,
+    costPolicyUsed: policy,
+    inventoryReplacementWarning,
   };
 }
 

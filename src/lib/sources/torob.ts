@@ -450,7 +450,7 @@ export const torobAdapter: PriceSourceAdapter = {
           const priceTrend = await fetchTorobPriceTrendV4(prk);
           return {
             source: "torob",
-            productTitle: parsed.title ?? product.name,
+            productTitle: parsed.title ?? undefined,
             prk: parsed.prk ?? prk,
             detailsUrl: targetApiUrl,
             offers: parsed.offers,
@@ -491,7 +491,7 @@ export const torobAdapter: PriceSourceAdapter = {
         if (parsed.offers.length) {
           return {
             source: "torob",
-            productTitle: parsed.title ?? product.name,
+            productTitle: parsed.title ?? undefined,
             prk,
             offers: parsed.offers,
             totalSellerCount: parsed.total,
@@ -512,7 +512,7 @@ export const torobAdapter: PriceSourceAdapter = {
       if (ai && ai.offers.length) {
         return {
           source: "torob",
-          productTitle: ai.title ?? product.name,
+          productTitle: ai.title ?? undefined,
           prk,
           offers: ai.offers,
           totalSellerCount: ai.totalSellerCount || ai.offers.length,

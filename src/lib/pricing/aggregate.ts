@@ -77,6 +77,12 @@ export interface MarketSummary {
   firstReachableLocalOffer: OfferEvaluation | null;
   /** ارزان‌ترین فروشنده دارای امتیاز بالا (High-Trust) که بالای کف ماست */
   firstReachableHighTrustOffer: OfferEvaluation | null;
+  /** خوشه‌های بدگمانی پایین (suspect_low/stale_low) که از پول محاسبه خارج شدند — برای کشف تعارض بازار */
+  suspectLows: { price: number; shopName: string; cls: string }[];
+  /** سقف واقعی بازار: کمینه‌ی صدک credible، میانه×(۱+maxCeilingAboveMedianPct) و بالاترین فروشنده credible */
+  ceiling: number | null;
+  /** ارزان‌ترین فروشنده High-Trust در پول معتبر */
+  highTrustLowest: number | null;
 }
 
 /**
@@ -214,6 +220,9 @@ export function summarizeMarket(
     highTrustScoreThreshold?: number;
     safePercentile?: number;
     upperPercentile?: number;
+    suspectLows?: { price: number; shopName: string; cls: string }[];
+    maxCeilingAboveMedianPct?: number;
+    ceilingPercentile?: number;
   },
 ): MarketSummary {
   const defaultCity = opts?.defaultCity ?? "مشهد";
@@ -283,8 +292,11 @@ export function summarizeMarket(
       firstReachableNationalOffer: null,
       firstReachableLocalOffer: null,
       firstReachableHighTrustOffer: null,
+      suspectLows: opts?.suspectLows ?? [],
+      ceiling: null,
+      highTrustLowest: null,
     };
-  };
+  }
 
   const prices = sortAsc(used.map((o) => o.price));
   const modalConsensus = computeModalConsensusPrice(used, cfg.modalClusterRadiusPct ?? 3.0);
@@ -308,6 +320,30 @@ export function summarizeMarket(
         ((o.shopScore != null && o.shopScore >= highTrustScore) || Boolean(o.guarantee)),
     ) ?? null;
 
+  // سقف واقعی بازار (نسخه ۴.۱): کمینه از صدک credible، میانه×(۱+حداکثر فاصله مجاز) و بالاترین credible
+  const crediblePool = used.filter((o) => o.credible);
+  const ceilingSourcePool = crediblePool.length >= 2 ? crediblePool : used;
+  const ceilingCandidates: number[] = [];
+  const pCeiling = percentile(
+    ceilingSourcePool.map((o) => o.price),
+    opts?.ceilingPercentile ?? 85,
+  );
+  if (Number.isFinite(pCeiling)) ceilingCandidates.push(pCeiling);
+  const medForCeiling = median(prices);
+  if (opts?.maxCeilingAboveMedianPct != null && Number.isFinite(medForCeiling)) {
+    ceilingCandidates.push(medForCeiling * (1 + opts.maxCeilingAboveMedianPct / 100));
+  }
+  const highestCredible = crediblePool.length ? crediblePool[crediblePool.length - 1].price : null;
+  if (highestCredible != null) ceilingCandidates.push(highestCredible);
+  const ceiling = ceilingCandidates.length
+    ? Math.round(Math.min(...ceilingCandidates))
+    : null;
+
+  const highTrustLowest =
+    used.find(
+      (o) => (o.shopScore != null && o.shopScore >= highTrustScore) || Boolean(o.guarantee),
+    )?.price ?? null;
+
   return {
     count: used.length,
     lowest: prices[0],
@@ -328,5 +364,8 @@ export function summarizeMarket(
     firstReachableNationalOffer,
     firstReachableLocalOffer,
     firstReachableHighTrustOffer,
+    suspectLows: opts?.suspectLows ?? [],
+    ceiling,
+    highTrustLowest,
   };
 }

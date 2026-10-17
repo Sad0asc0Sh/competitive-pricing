@@ -140,6 +140,41 @@ const sgeooole: StoreConnectorAdapter = {
       ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
     };
 
+    // ۰) کالیبره‌کردن (dry-run) قبل از push اصلی: فروشگاه با S3 و گارد کف قطعی اعتبارسنجی می‌کند و
+    // در صورت مخالفت صریح (ok:false یا valid:false) این push همین‌جا بسته می‌شود. نبود پاسخ/اندپروینت
+    // dry-run مشکل‌ساز نیست و جریان push اصلی ادامه می‌یابد.
+    {
+      const syncProbeUrl = `${baseUrl}/api/products/pricing-sync?dryRun=1`;
+      try {
+        const dryRes = await fetch(syncProbeUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(bodyPayload),
+          cache: "no-store",
+        });
+        if (dryRes.ok) {
+          const dryJson = (await dryRes.json().catch(() => null)) as
+            | { ok?: boolean; valid?: boolean; message?: string; reason?: string }
+            | null;
+          if (dryJson && dryJson.ok === false) {
+            return {
+              ok: false,
+              message: `dry-run فروشگاه رد کرد: ${dryJson.message ?? dryJson.reason ?? "دلیل نامشخص"}`,
+            };
+          }
+          if (dryJson && dryJson.valid === false) {
+            return {
+              ok: false,
+              message: `dry-run فروشگاه payload را نامعتبر دانست: ${dryJson.message ?? dryJson.reason ?? "دلیل نامشخص"}`,
+            };
+          }
+        }
+        // پاسخ غیر ok یا بدون بدنه معتبر → کالیبره سخت‌گیرانه نیست؛ push اصلی ادامه می‌یابد
+      } catch {
+        // خطای شبکه در کالیبره، جریان اصلی را نمی‌شکند
+      }
+    }
+
     // ۱) تلاش برای ارسال به اندپوینت اختصاصی همگام‌سازی قیمت و هر ۳ سیستم تخفیف در sgeooole
     const syncUrl = `${baseUrl}/api/products/pricing-sync`;
     const res = await fetch(syncUrl, {

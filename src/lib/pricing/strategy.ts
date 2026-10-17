@@ -15,7 +15,9 @@ export interface StrategyOutcome {
     | "match_lowest"
     | "reference"
     | "cost_plus"
-    | "no_data";
+    | "no_data"
+    | "leader_sole_gap"
+    | "provisional_market_percentile";
   competitionTier: CompetitivePositionReport["competitionTier"];
   targetPrice: number | null;
   explanation: string;
@@ -24,12 +26,25 @@ export interface StrategyOutcome {
 const fa = (n: number | null | undefined) => (n == null ? "—" : Math.round(n).toLocaleString("fa-IR"));
 
 /**
- * محاسبه مقدار کاهش زیر قیمت رقیب (Undercut) برای قرارگیری در رتبه اول
+ * محاسبه مقدار کاهش زیر قیمت رقیب (Undercut) برای قرارگیری در رتبه اول.
+ * نسخه ۴.۱: اگر پله‌های undercut (undercutTiers) پیکربندی شده باشند، فقط مبلغ پله‌ی متناسب با سطح انکر استفاده می‌شود
+ * (مثلاً کالاهای زیر ۲ میلیون → ۱ هزار، زیر ۱۰ میلیون → ۲ هزار، زیر ۳۰ میلیون → ۵ هزار، بالاتر → ۱۰ هزار تومان)؛
+ * پیکربندی قدیمی (undercutAmount + undercutPct) فقط وقتی پله‌ای تعریف نشده به‌کار می‌رود.
  */
 export function computeUndercutDelta(
   competitorPrice: number,
   cfg: PricingProfileConfig["rank1"],
 ): number {
+  const tiers = cfg.undercutTiers ?? [];
+  if (tiers.length) {
+    for (const t of tiers) {
+      if (t.upTo == null || competitorPrice <= t.upTo) {
+        return Math.max(1, Math.round(t.amount));
+      }
+    }
+    const last = tiers[tiers.length - 1];
+    return Math.max(1, Math.round(last.amount));
+  }
   const pctDelta = Math.round((competitorPrice * Math.max(0, cfg.undercutPct)) / 100);
   return Math.max(cfg.undercutAmount, pctDelta, 1000);
 }
@@ -73,60 +88,59 @@ export function decideTargetPrice(
   const gapPct = ((ref - nationalLow) / ref) * 100;
 
   // =========================================================================
-  // الف) رژیم «قیمت‌گذار معیار بازار (Market-Maker Consensus)» (بدون لیست خرید اولیه)
+  // پله صفر: «سیاست رهبر منفرد» در بازار خلوت
+  // اگر رهبرِ ارزان‌ترین قیمت، تنها عضو خوشه خودش است و فروشندگان به‌روز کم‌اند
+  // به‌جای undercut، پله بالای رهبر می‌نشینیم (leaderGapPct) — مگر آنکه حاشیه اجازه ندهد.
   // =========================================================================
-  if (supply?.usedMarketConsensusFloor) {
-    const safeFloor = hardFloor;
-    const upperCap = market.upperBenchmarkPrice ?? Math.round(safeFloor * 1.08);
+  const clusters = market.clusters ?? [];
+  const lowestCluster = clusters[0];
+  const sparseSellers = market.count > 0 && market.count <= 4;
+  const leaderIsSole =
+    nationalLow != null &&
+    lowestCluster?.leaderPrice === nationalLow &&
+    lowestCluster.sellerCount === 1;
 
-    // ۱) آیا در شهر پیش‌فرض (مشهد) فروشنده‌ای در باند امن (بالای کف امن بازار) داریم تا سرگروه مشهد در باند امن شویم؟
-    const safeLocalSeller = market.localCity.offers.find(
-      (o) => o.price >= safeFloor && o.price <= upperCap,
-    );
-    if (cfg.competeInDefaultCity && safeLocalSeller) {
-      const undercut = computeUndercutDelta(safeLocalSeller.price, cfg);
-      const target = Math.max(safeFloor, safeLocalSeller.price - undercut);
+  if (
+    sparseSellers &&
+    leaderIsSole &&
+    nationalLow != null &&
+    ref != null &&
+    nationalLow < ref &&
+    cfg.leaderGapPct > 0
+  ) {
+    const gapAnchor = Math.round(nationalLow * (1 + cfg.leaderGapPct / 100));
+    const followerAnchor = nationalLow;
+    const cost = supply?.effectiveCostPrice ?? 0;
+    const gapCandidateMarginPct = cost > 0 ? ((gapAnchor - cost) / cost) * 100 : -1;
+
+    if (gapCandidateMarginPct >= cfg.leaderMinMarginPct) {
+      const leaderGapTarget = Math.max(hardFloor, gapAnchor);
       return {
-        strategy: "market_maker_consensus",
-        competitionTier: "market_maker_consensus",
-        targetPrice: target,
+        strategy: "leader_sole_gap",
+        competitionTier: "leader_sole_gap",
+        targetPrice: leaderGapTarget,
         explanation:
-          `قیمت‌گذار معیار بازار (بدون لیست خرید — صدر باند امن ${defaultCity}): پس از حذف قیمت‌های قدیمی/پرت، ` +
-          `کف امن بازار ${fa(safeFloor)} تومان تعیین شد و با قرارگیری زیر فروشنده به‌روز ${defaultCity} («${safeLocalSeller.shopName}»: ${fa(safeLocalSeller.price)})، ` +
-          `قیمت قطعی ${fa(target)} تومان بدون ریسک ضرر انتخاب گردید`,
+          `صدرسازی محتاطانه (بازار خلوت با ${market.count} فروشنده): رهبر منفرد «${market.lowestShopName}» ${fa(nationalLow)} تومان است — ` +
+          `به‌جای undercut، پلک ${cfg.leaderGapPct}% بالای رهبر (${fa(leaderGapTarget)} تومان) انتخاب شد؛ حاشیه ${gapCandidateMarginPct.toFixed(1)}% ≥ حداقل ${cfg.leaderMinMarginPct}%`,
       };
     }
-
-    // ۲) آیا در کل ترب فروشنده‌ای در باند امنِ هسته بازار (بالای safeFloor) داریم تا سرگروه فروشندگان به‌روز شویم؟
-    const safeNationalSeller = market.clusters
-      .flatMap((c) => c.offers)
-      .sort((a, b) => a.price - b.price)
-      .find((o) => o.price > safeFloor && o.price <= upperCap);
-
-    if (safeNationalSeller) {
-      const undercut = computeUndercutDelta(safeNationalSeller.price, cfg);
-      const target = Math.max(safeFloor, safeNationalSeller.price - undercut);
+    // حاشیه اجازه نمی‌دهد؛ با حفظ کف، قیمت رهبر منفرد را دنبال می‌کنیم
+    if (cost <= 0 || followerAnchor > hardFloor) {
       return {
-        strategy: "market_maker_consensus",
-        competitionTier: "market_maker_consensus",
-        targetPrice: target,
+        strategy: "match_lowest",
+        competitionTier: "national_rank1",
+        targetPrice: Math.max(hardFloor, followerAnchor),
         explanation:
-          `قیمت‌گذار معیار بازار (بدون لیست خرید — سرگروه فروشندگان به‌روز ترب): با حذف ارزان‌فروشان مشکوک به عدم آپدیت، ` +
-          `هسته چگال بازار ${fa(market.modalConsensus)} تومان و کف امن ${fa(safeFloor)} تومان است → ` +
-          `قیمت قطعی ${fa(target)} تومان (در صدر خوشه فروشندگان به‌روز، جلوی «${safeNationalSeller.shopName}» با ${fa(safeNationalSeller.price)}) تعیین شد`,
+          `حاشیه ما برای پلک ${cfg.leaderGapPct}%-ی بالای رهبر کافی نیست (${Math.max(0, gapCandidateMarginPct).toFixed(1)}% < ${cfg.leaderMinMarginPct}%)؛ دنبال کردن قیمت رهبر منفرد (${fa(Math.max(hardFloor, followerAnchor))} تومان)`,
       };
     }
-
-    // ۳) قرارگیری مستقیم روی قیمت معیار امن بازار
-    return {
-      strategy: "market_maker_consensus",
-      competitionTier: "market_maker_consensus",
-      targetPrice: safeFloor,
-      explanation:
-        `قیمت‌گذار معیار بازار (بدون لیست خرید): بر اساس اجماع فروشندگان به‌روز ترب (مد بازار ${fa(market.modalConsensus)} و میانگین وزنی بریده ${fa(market.trimmedWeightedMean)})، ` +
-        `قیمت قطعی و بدون ضرر ${fa(safeFloor)} تومان تعیین شد`,
-    };
   }
+
+  // =========================================================================
+  // (نسخه ۴.۱) رژیم «قیمت‌گذار معیار بازار (Market-Maker Consensus)» حذف شد:
+  // مسیر بی‌هزینه دیگر اجماع ترب را به کف شما نگیرِ خودکار تبدیل نمی‌کند؛ به جایش در موتور
+  // قیمت Provisional (صدک پایین پول به‌روز و معتبر) می‌سازد و به رِیویو می‌فرستد (P2-3).
+  // =========================================================================
 
   if (!cfg.enabled) {
     const refTarget = Math.max(hardFloor, ref);
@@ -325,6 +339,15 @@ export function evaluateCompetitivePosition(
   const projectedNationalRank = validNational.length > 0 ? cheaperNationalCount + 1 : 1;
   const projectedLocalRank = validLocal.length > 0 ? cheaperLocalCount + 1 : 1;
 
+  // فاصله ما از رهبر منفرد بازار (مثبت = زیر قیمت رهبریم، منفی = بالاتر)
+  const leaderCluster = market.clusters[0] ?? null;
+  const leaderGapPct =
+    leaderCluster && leaderCluster.sellerCount === 1 && finalPrice > 0
+      ? Math.round(
+          ((leaderCluster.leaderPrice - finalPrice) / Math.max(1, leaderCluster.leaderPrice)) * 100,
+        )
+      : null;
+
   const cost = supply.effectiveCostPrice;
   const netProfitToman = cost > 0 ? finalPrice - cost : 0;
   const netMarginPct = cost > 0 ? Math.round(((finalPrice - cost) / cost) * 10000) / 100 : 0;
@@ -342,5 +365,6 @@ export function evaluateCompetitivePosition(
     netProfitToman,
     netMarginPct,
     competitionTier,
+    leaderGapPct,
   };
 }

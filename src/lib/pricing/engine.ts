@@ -5,10 +5,17 @@ import { applyRecencyWeights, applyValidityFilters } from "./filters";
 import { applyGuards } from "./guards";
 import { evaluateTorobCandidate } from "./matcher";
 import { removeOutliers } from "./outliers";
-import { deriveSafeMarketConsensusSupply, resolveSupplyCost } from "./sourcing";
-import { computeUndercutDelta, decideTargetPrice, evaluateCompetitivePosition } from "./strategy";
+import { resolveSupplyCost } from "./sourcing";
+import { decideTargetPrice, evaluateCompetitivePosition } from "./strategy";
+import { ceilToStep, percentile } from "./stats";
 import { evaluateSystemOneSupervisorSync } from "./systemone-supervisor";
-import type { DecisionStepLog, PricingContext, PricingResult, SourceResult } from "./types";
+import type {
+  CompetitivePositionReport,
+  DecisionStepLog,
+  PricingContext,
+  PricingResult,
+  SourceResult,
+} from "./types";
 
 const fa = (n: number | null | undefined) => (n == null ? "-" : Math.round(n).toLocaleString("fa-IR"));
 
@@ -19,6 +26,11 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   const reviewReasons: string[] = [];
 
   const log = (s: DecisionStepLog) => steps.push(s);
+
+  let strategy: string = "";
+  let competitionTier: CompetitivePositionReport["competitionTier"] = "no_data";
+  let target: number | null = null;
+  let strategyExplanation = "";
 
   // ---------- 0) بررسی اولیه قیمت خرید و تامین از لیست همکاران
   let supply = resolveSupplyCost({
@@ -34,6 +46,10 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
 
   if (!isInitiallyCostless) {
     for (const w of supply.warnings) {
+      // M2: هشدار «زیر هزینه‌ی موجودی» مسیر ریویو نیست؛ فقط در گزارش شفاف‌سازی می‌شود (T2)
+      if (supply.costPolicyUsed === "replacement_floor" && w === supply.inventoryReplacementWarning) {
+        continue;
+      }
       reviewReasons.push(w);
     }
     log({
@@ -49,6 +65,8 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         hardFloorPrice: supply.hardFloorPrice,
         validQuotesCount: supply.validQuotesCount,
         selectedSupplier: supply.selectedQuote?.supplierName ?? null,
+        costPolicy: supply.costPolicyUsed,
+        inventoryReplacementWarning: supply.inventoryReplacementWarning,
       },
     });
   }
@@ -125,6 +143,23 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     }
   }
 
+  // P0-7: اگر عنوان کارت ترب غایب بود (fail-closed) تطابق هویت هرگز بالای ۷۰٪ نمی‌رود
+  if (!source.productTitle) {
+    identityMatchScorePct = Math.min(identityMatchScorePct, 70);
+    if (!selfShopInListing) {
+      reviewReasons.push("عنوان کارت ترب دریافت نشد — تطابق هویت نیاز به بازبینی در صف (قفل PRK تنها با تایید هویت باز می‌شود)");
+    }
+    log({
+      step: "identity",
+      title: "گیت ۱ (ورودی): راستی‌آزمایی هویت کالا با ناظر SystemOne",
+      message:
+        `عنوان کارت ترب غایب بود → سقف تطابق هویت ${identityMatchScorePct}% (fail-closed ≤ ۷۰%)` +
+        (selfShopInListing ? " — با اعتبار حضور فروشگاه خودمان در لیستینگ، مسیر ریویو رد شد" : " — ارسال به ریویو برای تطابق دستی مدیر"),
+      level: "warn",
+      data: { score: identityMatchScorePct, titleMissing: true, selfShopInListing },
+    });
+  }
+
   if (source.totalSellerCount < cfg.filters.minSellerCount) {
     reviewReasons.push(
       `تعداد فروشنده (${source.totalSellerCount}) کمتر از حداقل ${cfg.filters.minSellerCount} — احتمالاً لیستینگ ادغام‌نشده`,
@@ -170,21 +205,23 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     .filter((p) => Number.isFinite(p) && p > 0);
   const lowestRaw = positiveRawPrices.length ? Math.min(...positiveRawPrices) : null;
 
-  // ---------- 3) حذف هوشمند داده‌های پرت و فروشندگان غیربه‌روز
+  // ---------- 3) طبقه‌بندی هوشمند داده‌های پرت و فروشندگان غیربه‌روز (نسخه ۴.۱ — R0/R1)
   const outlierReport = removeOutliers(offers, cfg.outliers, {
     isCostlessMode: isInitiallyCostless,
     now,
+    highTrustScoreThreshold: cfg.rank1.highTrustScoreThreshold,
   });
   log({
     step: "outliers",
-    title: "حذف فروشندگان پرت و غیربه‌روز",
+    title: "طبقه‌بندی فروشندگان پرت و غیربه‌روز (R0/R1)",
     message:
-      `${outlierReport.removed} پیشنهاد پرت حذف شد (${outlierReport.staleLowRemoved} ارزان‌فروش مشکوک به عدم آپدیت، ` +
-      `${outlierReport.highOutlierRemoved} گران‌فروش پرت؛ بازه مجاز ${fa(outlierReport.lowerBound)} تا ${fa(outlierReport.upperBound)} تومان)`,
+      `${outlierReport.removed} پیشنهاد مشکوک حذف شد (${outlierReport.staleLowRemoved} قیمت کهنه/مشکوک پایین، ` +
+      `${outlierReport.highOutlierRemoved} گران‌فروش پرت؛ باند ${fa(outlierReport.lowerBound)} تا ${fa(outlierReport.upperBound)} تومان) ` +
+      `| مرجع طبقه‌بندی ${fa(outlierReport.stableRefPrice)}؛ ${outlierReport.suspectLows.length} فروشنده‌ی مشکوک برای مغز بازار ثبت شد`,
     data: { ...outlierReport },
   });
 
-  // ---------- 4) وزن‌دهی و تجمیع اولیه + کشف کف امن در صورت نبودن لیست همکار
+  // ---------- 4) وزن‌دهی و تجمیع (نسخه ۴.۱: suspectLows + ceiling مستقیماً وارد بازار می‌شوند)
   applyRecencyWeights(offers, cfg.aggregation.recencyHalfLifeDays, now);
   let market = summarizeMarket(offers, cfg.aggregation, {
     defaultCity: cfg.rank1.defaultCity,
@@ -194,37 +231,47 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     highTrustScoreThreshold: cfg.rank1.highTrustScoreThreshold,
     safePercentile: cfg.sourcing.costlessSafePercentile,
     upperPercentile: cfg.discount.marketUpperPercentile,
+    suspectLows: outlierReport.suspectLows,
+    maxCeilingAboveMedianPct: cfg.discount.maxCeilingAboveMedianPct,
+    ceilingPercentile: cfg.discount.marketUpperPercentile,
   });
 
+  let isProvisional = false;
   if (isInitiallyCostless) {
-    supply = deriveSafeMarketConsensusSupply(supply, market, cfg, source.priceTrend);
-    for (const w of supply.warnings) {
-      reviewReasons.push(w);
-    }
-    log({
-      step: "sourcing",
-      title: "کشف هوشمند کف امن و قیمت معیار از ترب (بدون لیست خرید)",
-      message: supply.explanation,
-      level: supply.effectiveCostPrice > 0 && supply.warnings.length === 0 ? "info" : "warn",
-      data: {
-        costSource: supply.costSource,
-        effectiveCostPrice: supply.effectiveCostPrice,
-        hardFloorPrice: supply.hardFloorPrice,
-        modalConsensus: market.modalConsensus,
-        trimmedWeightedMean: market.trimmedWeightedMean,
-        safePercentilePrice: market.safePercentilePrice,
-      },
-    });
-
-    if (supply.hardFloorPrice > 0) {
-      market = summarizeMarket(offers, cfg.aggregation, {
-        defaultCity: cfg.rank1.defaultCity,
-        hardFloorPrice: supply.hardFloorPrice,
-        undercutAmount: cfg.rank1.undercutAmount,
-        clusterMaxGapPct: cfg.rank1.clusterMaxGapPct,
-        highTrustScoreThreshold: cfg.rank1.highTrustScoreThreshold,
-        safePercentile: cfg.sourcing.costlessSafePercentile,
-        upperPercentile: cfg.discount.marketUpperPercentile,
+    // مسیر Provisional (نسخه ۴.۱): اجماع ترب دیگر تبدیل به کف خودکار نمی‌شود؛
+    // قیمت پیشنهادی = صدک پایین پول «به‌روز + معتبر» و همیشه مسیر ریویو/تایید انسان است.
+    const credibleFresh = offers.filter((o) => o.included && o.fresh && o.credible && o.price > 0);
+    if (credibleFresh.length >= cfg.costless.minCredibleFresh && market.reference != null) {
+      const poolPrices = credibleFresh.map((o) => o.price);
+      const provisional = ceilToStep(
+        percentile(poolPrices, cfg.costless.provisionalPercentile),
+        Math.max(1, cfg.rounding.finalStep),
+      );
+      strategy = "provisional_market_percentile";
+      competitionTier = "provisional_market_percentile";
+      target = provisional;
+      isProvisional = true;
+      reviewReasons.push(
+        `بدون قیمت خرید و لیست همکار — قیمت Provisional (${fa(provisional)} = صدک ${cfg.costless.provisionalPercentile} از ${poolPrices.length} فروشنده به‌روز و معتبر)` +
+          (cfg.costless.autoApply ? "" : " — با تایید مدیر وارد کمپین/تایید انبار می‌شود"),
+      );
+      log({
+        step: "provisional",
+        title: "مسیر بی‌هزینه Provisional (بدون تحمیلی از اجماع ترب)",
+        message:
+          `قیمت Provisional = صدهم ${cfg.costless.provisionalPercentile} پول به‌روز و معتبر (${poolPrices.length} عضو): ${fa(provisional)} تومان؛` +
+          ` ارزان‌ترین ${fa(Math.min(...poolPrices))} و گران‌ترین ${fa(Math.max(...poolPrices))} — هیچ ادعای سود قطعی دارد نیست (review)`,
+        level: "warn",
+        data: { provisional, poolSize: poolPrices.length, desiredMinProfit: supply.hardFloorPrice },
+      });
+    } else {
+      // داده کافی نیست → تصمیم واقعی تنها با استعلام مجدد/انبار ممکن است (no_data)
+      target = null;
+      log({
+        step: "provisional",
+        title: "مسیر بی‌هزینه Provisional غیرفعال",
+        message: `فقط ${credibleFresh.length} فروشنده به‌روز و معتبر (حداقل لازم: ${cfg.costless.minCredibleFresh}) — بدون پیشنهاد Provisional`,
+        level: "warn",
       });
     }
   }
@@ -234,7 +281,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     title: `تحلیل هسته بازار ترب و شهر ${cfg.rank1.defaultCity}`,
     message:
       market.count > 0
-        ? `کل ترب (${market.count} معتبر): کف ${fa(market.lowest)} | میانه ${fa(market.median)} | هسته چگال (مد) ${fa(market.modalConsensus)} | مرجع ${fa(market.reference)} | پراکندگی ${(market.dispersion * 100).toFixed(1)}% — ` +
+        ? `کل ترب (${market.count} معتبر): کف ${fa(market.lowest)} | میانه ${fa(market.median)} | هسته چگال (مد) ${fa(market.modalConsensus)} | مرجع ${fa(market.reference)} | سقف واقعی ${fa(market.ceiling)} | پراکندگی ${(market.dispersion * 100).toFixed(1)}% — ` +
           `بازار ${cfg.rank1.defaultCity} (${market.localCity.count} فروشنده): کف ${fa(market.localCity.lowest)} | میانه ${fa(market.localCity.median)}`
         : "هیچ پیشنهاد معتبری باقی نماند",
     level: market.count > 0 ? "info" : "warn",
@@ -244,10 +291,12 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       nationalModalConsensus: market.modalConsensus,
       nationalTrimmedWeightedMean: market.trimmedWeightedMean,
       nationalReference: market.reference,
+      monitoredCeiling: market.ceiling,
       localCityCount: market.localCity.count,
       localCityLowest: market.localCity.lowest,
       localCityMedian: market.localCity.median,
       clusterCount: market.clusters.length,
+      suspectLows: market.suspectLows,
     },
   });
 
@@ -255,33 +304,42 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     reviewReasons.push(`تعداد پیشنهاد معتبر (${market.count}) کمتر از حداقل ${cfg.guards.minValidOffers}`);
   }
 
-  // ---------- 5) استراتژی چندسطحی هوشمند
-  const strat = decideTargetPrice(market, cfg.rank1, supply);
-  let strategy: string = strat.strategy;
-  let competitionTier = strat.competitionTier;
-  let target = strat.targetPrice;
-
-  if (
-    target != null &&
-    !supply.usedMarketConsensusFloor &&
-    source.priceTrend?.direction === "falling" &&
-    supply.hardFloorPrice > 0 &&
-    target > supply.hardFloorPrice
-  ) {
-    const undercut = computeUndercutDelta(target, cfg.rank1);
-    const trendAdjusted = Math.max(supply.hardFloorPrice, target - undercut);
-    if (trendAdjusted < target) {
-      target = trendAdjusted;
-      strat.explanation += ` (تعدیل نزولی هوشمند به دلیل روند کاهشی نمودار قیمت ترب: ${fa(target)} تومان)`;
+  // Veto «تازگی» (نسخه ۴.۱): نسبت پیشنهادهای به‌روز — رد آن همیشه review است (نه reject)
+  if (market.count > 0) {
+    const freshCount = offers.filter((o) => o.included && o.fresh).length;
+    const freshRatio = freshCount / market.count;
+    if (freshRatio < Math.max(0, cfg.guards.minFreshRatio)) {
+      reviewReasons.push(
+        `نسبت پیشنهادهای به‌روز (${(freshRatio * 100).toFixed(0)}%) زیر حداقل ${Math.round(cfg.guards.minFreshRatio * 100)}% — اطمینان بازار پایین است`,
+      );
     }
   }
 
-  log({
-    step: "strategy",
-    title: "استراتژی رقابتی و کشف کف هدف فروش",
-    message: strat.explanation,
-    data: { target, strategy, competitionTier },
-  });
+
+  // ---------- 5) استراتژی چندسطحی هوشمند (نسخه ۴.۱ — ladder یکپارچه)
+  if (!isProvisional) {
+    const strat = decideTargetPrice(market, cfg.rank1, supply);
+    strategy = strat.strategy;
+    competitionTier = strat.competitionTier;
+    target = strat.targetPrice;
+    strategyExplanation = strat.explanation;
+    log({
+      step: "strategy",
+      title: "استراتژی رقابتی و کشف کف هدف فروش",
+      message: strat.explanation,
+      data: { target, strategy, competitionTier },
+    });
+  }
+
+  if (isProvisional) {
+    strategyExplanation = `استراتژی Provisional (صدک ${cfg.costless.provisionalPercentile} از پول به‌روز و معتبر)`;
+    log({
+      step: "strategy",
+      title: "استراتژی رقابتی و کشف کف هدف فروش",
+      message: strategyExplanation,
+      data: { target, strategy, competitionTier },
+    });
+  }
 
   if (target == null) {
     if (supply.effectiveCostPrice > 0) {
@@ -357,6 +415,17 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   }
 
   // ---------- 6) محافظ‌ها (تضمین مطلق خط قرمز قیمت خرید همکاران یا کف امن بازار)
+  // جهت گرد کردن (نسخه ۴.۱): انکرهای undercut → همیشه به پایین (هرگز بالای رقیب نشویم)؛
+  // بقیه (کف/Provisional) → رفتار قبلی با سقف‌گیری به بالا هنگام زیر-کف.
+  const undercutAnchorStrategies = new Set([
+    "national_rank1_undercut",
+    "rank1_undercut",
+    "local_city_rank1_undercut",
+    "local_cluster_rank1",
+    "national_cluster_rank1",
+    "high_trust_cluster_rank1",
+    "match_lowest",
+  ]);
   const guarded = applyGuards(
     target,
     {
@@ -369,6 +438,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     },
     cfg.guards,
     cfg.rounding,
+    { direction: undercutAnchorStrategies.has(strategy) ? "floor" : "nearest" },
   );
   reviewReasons.push(...guarded.reviewReasons);
 
@@ -389,6 +459,36 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
 
   const finalPrice = guarded.price;
 
+  // ---------- 6.۱) Vetoes باینری بازار (نسخه ۴.۱): تعارض ارزان‌فروش مشکوک و فروش عمیق زیر مرجع
+  const conflictOffers = offers.filter((o) => o.cls === "suspect_low" && o.price < finalPrice);
+  const marketConflict = conflictOffers.length > 0;
+  if (marketConflict) {
+    const summaryList = conflictOffers
+      .slice(0, 3)
+      .map((o) => `${o.shopName} (${o.price.toLocaleString("fa-IR")})`)
+      .join("، ");
+    reviewReasons.push(
+      `تعارض بازار: ${conflictOffers.length} فروشنده‌ی «مشکوک پایین» زیر قیمت پیشنهادی ما قرار گرفت (${summaryList}) — بی‌دلیل نیست، نیازمند بازبینی`,
+    );
+    log({
+      step: "market_conflict",
+      title: "Veto تعارض بازار (suspect_low زیر قیمت ما)",
+      message: `${conflictOffers.length} فروشنده مشکوک: ${summaryList}`,
+      level: "warn",
+      data: { count: conflictOffers.length, suspects: conflictOffers.map((o) => ({ shop: o.shopName, price: o.price, cls: o.cls })) },
+    });
+  }
+
+  if (
+    market.reference != null &&
+    supply.effectiveCostPrice > 0 &&
+    finalPrice < market.reference * 0.7
+  ) {
+    reviewReasons.push(
+      `فروش عمیق زیر مرجع بازار (بیش از ۳۰٪ زیر مرجع ${fa(market.reference)}) — deep_floor، نیازمند بازبینی کف تامین`,
+    );
+  }
+
   // ---------- 7) ارزیابی جایگاه نهایی در کل ترب و در شهر مشهد
   const position = evaluateCompetitivePosition(finalPrice, market, supply, competitionTier);
   log({
@@ -401,16 +501,31 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     data: { ...position },
   });
 
-  // ---------- 8) کشف اصولی «سقف واقعی بازار» (معیار تخفیف) و اعمال درصد تخفیف روی کف
-  const disc = buildDiscount(finalPrice, offers, cfg.discount, cfg.rounding);
+  // ---------- 8) سقف معیار با مرجع بیرونی (own_price_7d / market_p75) و کالیبراسیون دقیق (نسخه ۴.۱)
+  const disc = buildDiscount(finalPrice, offers, cfg.discount, cfg.rounding, {
+    ownStableHigh7d: ctx.discountContext?.ownStableHigh7d ?? null,
+    ownAvg7d: ctx.discountContext?.ownAvg7d ?? null,
+    hasOwnPriceHistory: Boolean(
+      ctx.discountContext?.ownStableHigh7d && ctx.discountContext.ownStableHigh7d > 0,
+    ),
+    ceilingOverride: market.ceiling,
+  });
   const basePrice = disc.basePrice;
+  if (disc.referenceKind === "none" && disc.discountPct === 0 && market.reference != null && finalPrice < market.reference) {
+    reviewReasons.push(
+      `مرجع معتبر تخفیف (own_price_7d / market_p75) یافت نشد؛ کف ما زیر مرجع است → گیت تخفیف نیاز به بازبینی تاریخ قیمت خودی`,
+    );
+  }
   log({
     step: "discount",
-    title: "کشف سقف واقعی بازار (معیار تخفیف) و کالیبراسیون درصد تخفیف روی کف",
+    title: "کشف سقف معیار با مرجع بیرونی و کالیبراسیون درصد تخفیف روی کف",
     message: disc.explanation,
     data: {
       basePrice,
       discountPct: disc.discountPct,
+      referenceKind: disc.referenceKind,
+      referencePrice: disc.referencePrice,
+      floorConfirmed: disc.floorConfirmed,
       monitoredMarketFloor: disc.floorCeiling.monitoredMarketFloor,
       monitoredMarketCeiling: disc.floorCeiling.monitoredMarketCeiling,
       exactFloorRestored: disc.floorCeiling.exactFloorRestored,
@@ -498,7 +613,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       : needsReview
         ? `⏳ ارسال به بخش ریویو (بازبینی): ${reviewReasons.join("؛ ")} (پیشنهاد: سقف ${fa(basePrice)} با ${disc.discountPct}% تخفیف → کف ${fa(finalPrice)} تومان)`
         : `✅ تایید ناظر SystemOne (${supervisor.overallScorePct}% ≥ ${supervisor.approveAbovePct}%) و اعمال خودکار: سقف معیار ${fa(basePrice)} با ${disc.discountPct}% تخفیف → کف قطعی ${fa(finalPrice)} تومان | ${
-            supply.usedMarketConsensusFloor ? "بر اساس اجماع به‌روز بازار ترب (بدون ضرر)" : `سود خالص: ${fa(position.netProfitToman)} تومان`
+            isProvisional ? "قیمت Provisional بدون قیمت خرید تاییدنشده است" : `سود خالص: ${fa(position.netProfitToman)} تومان`
           }`,
     level: rejectedBySupervisor ? "error" : needsReview ? "warn" : "info",
   });
@@ -520,9 +635,14 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     finalPrice,
     basePrice,
     discountPct: disc.discountPct,
+    discountReferenceKind: disc.referenceKind,
+    discountReferencePrice: disc.referencePrice,
+    floorConfirmed: disc.floorConfirmed,
     strategy,
     confidence: conf.score,
     needsReview,
+    marketConflict,
+    isProvisional,
     rejectedBySupervisor,
     reviewReasons,
     steps,

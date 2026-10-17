@@ -55,6 +55,26 @@ export function weightedMean(xs: number[], ws: number[]): number {
   return den > 0 ? num / den : mean(xs);
 }
 
+/** میانه وزنی: نقطه‌ای که نصف مجموع وزن از هر طرف آن قرار دارد (برای مرجع کلاس‌بندی R0/R1) */
+export function weightedMedian(xs: number[], ws: number[]): number {
+  if (!xs.length) return NaN;
+  const pairs = xs
+    .map((x, i) => ({ x, w: Math.max(0, ws[i] ?? 1) }))
+    .filter((p) => p.w > 0 && Number.isFinite(p.x))
+    .sort((a, b) => a.x - b.x);
+  if (!pairs.length) return NaN;
+  if (pairs.length === 1) return pairs[0].x;
+  const total = pairs.reduce((s, p) => s + p.w, 0);
+  let acc = 0;
+  for (const p of pairs) {
+    acc += p.w;
+    if (acc >= total / 2 && acc - p.w <= total / 2) {
+      return p.x;
+    }
+  }
+  return pairs[pairs.length - 1].x;
+}
+
 /** ضریب پراکندگی نسبی (برای اعتماد) */
 export function coefficientOfVariation(xs: number[]): number {
   if (xs.length < 2) return 0;

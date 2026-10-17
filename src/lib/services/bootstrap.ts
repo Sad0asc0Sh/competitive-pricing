@@ -152,6 +152,8 @@ export function mergeConfig(partial: Partial<PricingProfileConfig> | null | unde
       },
     },
     ai: { ...d.ai, ...(p.ai ?? {}) },
+    costless: { ...d.costless, ...(p.costless ?? {}) },
+    engine: { ...d.engine, ...(p.engine ?? {}) },
   };
 }
 

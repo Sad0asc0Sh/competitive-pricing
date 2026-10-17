@@ -169,23 +169,20 @@ export function evaluateSystemOneSupervisorSync(input: {
   const mktVerdict = classifyThreeZoneScore(marketScorePct, mktReject, mktApprove);
 
   let profitScorePct = 0;
-  if (input.finalPrice == null || input.supply.effectiveCostPrice <= 0) {
+  if (input.finalPrice == null) {
     profitScorePct = 10;
+  } else if (input.supply.effectiveCostPrice <= 0) {
+    // cost_unknown → همیشه بازه ریویو (هرگز reject سنتی با حذف rankBonus)
+    profitScorePct = 45;
   } else if (input.finalPrice <= input.supply.effectiveCostPrice) {
+    // نقض مطلق کف هزینه → reject (فقط این حالت در گیت سود مردود است)
     profitScorePct = 0;
   } else if (input.finalPrice < input.supply.hardFloorPrice) {
     profitScorePct = 30;
   } else {
-    const localRank = input.position.projectedLocalRank ?? 1;
-    const natRank = input.position.projectedNationalRank ?? 1;
-    let rankBonus = 25;
-    if (localRank === 1 && natRank === 1) rankBonus = 40;
-    else if (localRank === 1 || natRank <= 2) rankBonus = 35;
-    else if (localRank <= 3 || natRank <= 5) rankBonus = 28;
-    else rankBonus = 18;
-
-    const costCertainty = input.supply.usedMarketConsensusFloor ? 48 : 60;
-    profitScorePct = clamp(costCertainty + rankBonus, 0, 100);
+    // fires (نسخه ۴.۱): حاشیه سود ایمن ملاک است؛ رتبه دیگر جزو گیت نبود (فقط اولویت صف ریویو)
+    const marginPct = ((input.finalPrice - input.supply.effectiveCostPrice) / input.supply.effectiveCostPrice) * 100;
+    profitScorePct = clamp(50 + Math.min(48, marginPct * 1.6), 0, 100);
   }
   const prfReject = supCfg.gates.profit_and_rank_safety.rejectBelowPct ?? globalReject;
   const prfApprove = supCfg.gates.profit_and_rank_safety.approveAbovePct ?? globalApprove;
@@ -248,7 +245,7 @@ export function evaluateSystemOneSupervisorSync(input: {
     },
     profit_and_rank_safety: {
       key: "profit_and_rank_safety",
-      title: "گیت ۳: ایمنی حاشیه سود همکار و رتبه رقابتی مشهد/ترب",
+      title: "گیت ۳: ایمنی حاشیه سود همکار (رتبه فقط اولویت صف ریویو است)",
       noul: Math.round((profitScorePct / 100) * 100) / 100,
       scorePct: profitScorePct,
       rejectBelowPct: prfReject,
@@ -257,10 +254,10 @@ export function evaluateSystemOneSupervisorSync(input: {
       weight: supCfg.gates.profit_and_rank_safety.weight ?? 0.3,
       reason:
         prfVerdict === "approve"
-          ? `حاشیه سود بالای خط قرمز و جایگاه رقابتی عالی (${profitScorePct}%)`
+          ? `حاشیه سود ایمن بالای خط قرمز هزینه (${profitScorePct}%)`
           : prfVerdict === "review"
             ? `حاشیه سود ایمن ولی نیازمند تایید بازبینی (${profitScorePct}% در بازه ${prfReject}%..${prfApprove}%)`
-            : `خطر نقض کف سود یا عدم وجود قیمت خرید (${profitScorePct}% < ${prfReject}%)`,
+            : `خطر نقض کف سود یا حاشیه ناکافی (${profitScorePct}% < ${prfReject}%)`,
     },
     ceiling_discount_validity: {
       key: "ceiling_discount_validity",

@@ -46,6 +46,15 @@ export const products = pgTable(
     torobDetailsUrl: text("torob_details_url"),
     /** قیمت تمام‌شده پایه/دستی (تومان) */
     costPrice: integer("cost_price").default(0).notNull(),
+    /** آخرین قیمت خرید جایگزینِ تاییدشده از لیست همکار (M2 — قیمت باز خرید در تاریخ …) */
+    replacementCost: integer("replacement_cost"),
+    replacementCostAt: timestamp("replacement_cost_at"),
+    /** پایان کمپین مجاز تخفیف site (برای پیوستگی تایمر) */
+    currentCampaignEndsAt: timestamp("current_campaign_ends_at"),
+    /** قفل نرم اجرای هم‌زمان (UTC) — اگر در آینده باشد، محصول در این اجرا skip می‌شود */
+    lockedUntil: timestamp("locked_until"),
+    /** سیگنال مغز خارجی: نیاز به استعلام/پوش مجدد از فروشگاه (کف منقضی یا فروش زیر هزینه انبار) */
+    needsRefresh: boolean("needs_refresh").default(false).notNull(),
     /** لیست پیشنهادهای قیمت همکاران / تامین‌کنندگان برای این محصول */
     supplierQuotes: jsonb("supplier_quotes").$type<SupplierQuote[]>().default([]).notNull(),
     /** نام همکار منتخب فعلی */
@@ -141,6 +150,14 @@ export const priceDecisions = pgTable(
     confidence: real("confidence").default(0).notNull(),
     status: varchar("status", { length: 30 }).notNull(), // applied | pending_review | rejected | failed | skipped
     steps: jsonb("steps").$type<DecisionStep[]>().default([]).notNull(),
+    /** نسخه‌ی موتور ۴.۱ که این تصمیم را ساخته (قابل‌ردیابی) */
+    engineVersion: varchar("engine_version", { length: 20 }).default("4.1.0").notNull(),
+    /** فروشنده suspect_low زیر قیمت پیشنهادی ما (market_conflict → review) */
+    marketConflict: boolean("market_conflict").default(false).notNull(),
+    /** مرجع مقایسه تخفیف: none | own_price_7d | market_p75 */
+    referenceKind: varchar("reference_kind", { length: 30 }),
+    /** کف نهایی متناسب با مرجع/کف بازار و از روی کف دقیق اعمال شد (true) یا به‌قدر لازم کالیبره نشده (false) */
+    floorConfirmed: boolean("floor_confirmed").default(false).notNull(),
     pushStatus: varchar("push_status", { length: 30 }), // pushed | failed | skipped
     pushError: text("push_error"),
     pushedAt: timestamp("pushed_at"),

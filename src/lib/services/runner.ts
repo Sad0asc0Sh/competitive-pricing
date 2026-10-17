@@ -1,5 +1,13 @@
 import { db } from "@/db";
-import { competitorOffers, discountCampaigns, priceDecisions, priceRuns, products, type Product } from "@/db/schema";
+import {
+  competitorOffers,
+  discountCampaigns,
+  priceDecisions,
+  priceRuns,
+  products,
+  schedules,
+  type Product,
+} from "@/db/schema";
 import { reviewDecisionWithAI } from "@/lib/ai/client";
 import { resolveSubqRuntime } from "@/lib/ai/config";
 import { pickCampaign } from "@/lib/pricing/campaigns";
@@ -8,7 +16,7 @@ import { enrichSupervisorWithSubqApi } from "@/lib/pricing/systemone-supervisor"
 import type { PricingResult, RawOffer, SupplierQuote } from "@/lib/pricing/types";
 import { fetchFromSource, isAllowedSourceType } from "@/lib/sources/registry";
 import { pushToStore } from "@/lib/store/connectors";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { ensureDefaults, getProfileConfig, logActivity } from "./bootstrap";
 
 /** تبدیل ایمن مقادیر موتور به عدد صحیح/اعشاری معتبر قبل از درج در دیتابیس (NaN/Infinity هرگز درج نشود) */
@@ -16,6 +24,8 @@ const safeInt = (v: number | null | undefined): number | null =>
   v == null || !Number.isFinite(v) ? null : Math.round(v);
 const safeReal = (v: number | null | undefined, fallback = 0): number =>
   v == null || !Number.isFinite(v) ? fallback : v;
+
+const DEFAULT_INTERVAL_MINUTES = 180;
 
 export interface RunOptions {
   trigger: "manual" | "schedule" | "api";
@@ -39,6 +49,100 @@ export interface RunSummary {
   failed: number;
   decisionIds: number[];
   lastError?: string | null;
+}
+
+/** نامزد اعمال در پایان اجرا (فاز ۴) — push تا پس از تخصیص صندلی منتخب‌ها عقب انداخته شد (P0-4) */
+interface DeferredApply {
+  decisionId: number;
+  campaignEndsAt: Date | null;
+}
+
+/** نامزد تخصیص صندلی «منتخب‌ها» (showInFeatured) برای هر کمپین — نواری‌شدن رتبه‌محور */
+interface FeaturedCandidate {
+  decisionId: number;
+  productId: number;
+  sku: string;
+  campaignId: number;
+  rankKey: number;
+  netMarginPct: number;
+}
+
+interface ProcessOutcome {
+  id: number;
+  productId: number;
+  status: string;
+  errorHint?: string | null;
+  deferred?: DeferredApply;
+  featuredCandidate?: FeaturedCandidate;
+}
+
+interface OwnDiscountContext {
+  ownStableHigh7d: number | null;
+  ownAvg7d: number | null;
+}
+
+/**
+ * قفل نرم تک‌محصولی (P0-5): با یک UPDATE اتمی قفل «۵ دقیقه‌ای» گرفته می‌شود؛
+ * اجرای موازی/کلاسترِ هم‌زمان هر محصول را حداکثر یک‌بار استعلام می‌کند.
+ */
+async function tryLockProduct(productId: number): Promise<boolean> {
+  try {
+    const res = await db.execute(
+      sql`update products set locked_until = now() + interval '5 minutes' where id = ${productId} and (locked_until is null or locked_until <= now()) returning id`,
+    );
+    return (res.rows?.length ?? 0) > 0;
+  } catch {
+    // در نبود ستون/خطا، قفل نرم مجاز به سقوط مسیر معمولی است
+    return true;
+  }
+}
+
+async function unlockProduct(productId: number): Promise<void> {
+  try {
+    await db.execute(sql`update products set locked_until = null where id = ${productId}`);
+  } catch {
+    // unlock نباید جریان را بشکند؛ قفل TTL خودش آزاد می‌شود
+  }
+}
+
+/** مرجع تخفیف بخش رو. (P3): بالاترین قیمت خودی دوام‌یافته در پنجره ۷ روزی + میانگین ۷ روزی */
+async function computeOwnDiscountContext(
+  productId: number,
+  windowDays: number,
+  holdHours: number,
+): Promise<OwnDiscountContext> {
+  const since = new Date(Date.now() - Math.max(1, windowDays) * 86_400_000);
+  const holdCutoff = new Date(Date.now() - Math.max(0, holdHours) * 3_600_000);
+  try {
+    const rows = await db
+      .select({
+        finalPrice: priceDecisions.finalPrice,
+        basePrice: priceDecisions.basePrice,
+        createdAt: priceDecisions.createdAt,
+      })
+      .from(priceDecisions)
+      .where(
+        and(
+          eq(priceDecisions.productId, productId),
+          inArray(priceDecisions.status, ["applied"]),
+          inArray(priceDecisions.pushStatus, ["pushed", "skipped"]),
+          gte(priceDecisions.createdAt, since),
+        ),
+      )
+      .orderBy(asc(priceDecisions.createdAt));
+
+    const finals = rows.map((r) => r.finalPrice).filter((v): v is number => v != null && v > 0);
+    const stableRows = rows.filter((r) => r.createdAt <= holdCutoff && (r.finalPrice ?? 0) > 0);
+    const ownStableHigh7d = stableRows.length
+      ? Math.max(...stableRows.map((r) => Math.round(r.finalPrice!)))
+      : null;
+    const ownAvg7d = finals.length
+      ? Math.round(finals.reduce((a, b) => a + b, 0) / finals.length)
+      : null;
+    return { ownStableHigh7d, ownAvg7d };
+  } catch {
+    return { ownStableHigh7d: null, ownAvg7d: null };
+  }
 }
 
 export async function runPricing(opts: RunOptions): Promise<RunSummary> {
@@ -75,8 +179,10 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
     decisionIds: [],
     lastError: null,
   };
+
   const campaigns = await db.select().from(discountCampaigns);
-  const allocatedCounts: Record<number, number> = {};
+  const outcomes: ProcessOutcome[] = [];
+  let skippedLocked = 0;
 
   const concurrency = Math.max(1, Math.min(8, Number(process.env.PRICING_RUN_CONCURRENCY ?? 3) || 3));
   let nextIdx = 0;
@@ -86,23 +192,30 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
       if (idx >= targets.length) return;
       const product = targets[idx];
       const cardIndex = (opts.cardRangeFrom ? Math.max(1, opts.cardRangeFrom) : 1) + idx;
-      try {
-        const decisionOut = await priceOneProduct(
-          product,
-          run.id,
-          campaigns,
-          cardIndex,
-          allocatedCounts,
-          opts.manualOffers,
-          opts.manualSupplierQuotes,
+      const locked = await tryLockProduct(product.id);
+      if (!locked) {
+        skippedLocked++;
+        await logActivity(
+          "runner",
+          `قفل فعال محصول ${product.sku} — این اجرا رد شد (skipped_locked، قفل ۵ دقیقه‌ای نرم)`,
+          { productId: product.id, runId: run.id },
+          "warn",
         );
-        summary.decisionIds.push(decisionOut.id);
-        if (decisionOut.status === "applied") summary.applied++;
-        else if (decisionOut.status === "pending_review") summary.pendingReview++;
+        continue;
+      }
+      try {
+        const outcome = await priceOneProduct(product, run.id, campaigns, cardIndex, {
+          manualOffers: opts.manualOffers,
+          manualSupplierQuotes: opts.manualSupplierQuotes,
+        });
+        outcomes.push(outcome);
+        summary.decisionIds.push(outcome.id);
+        if (outcome.status === "applied") summary.applied++;
+        else if (outcome.status === "pending_review") summary.pendingReview++;
         else {
           summary.failed++;
-          if (decisionOut.errorHint && !summary.lastError) {
-            summary.lastError = decisionOut.errorHint;
+          if (outcome.errorHint && !summary.lastError) {
+            summary.lastError = outcome.errorHint;
           }
         }
       } catch (e) {
@@ -112,13 +225,67 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
         await logActivity(
           "runner",
           `خطا در قیمت‌گذاری محصول ${product.sku}: ${errMsg}`,
-          { productId: product.id },
+          { productId: product.id, runId: run.id },
           "error",
         );
+      } finally {
+        await unlockProduct(product.id);
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, targets.length)) }, () => worker()));
+
+  // ---------- فاز ۲: تخصیص صندلی «منتخب‌ها» (showInFeatured) — نوار رتبه‌محور و تعیین‌شده (P0-4)
+  const featuredCandidates: FeaturedCandidate[] = [];
+  for (const o of outcomes) {
+    if (o.featuredCandidate) featuredCandidates.push(o.featuredCandidate);
+  }
+  featuredCandidates.sort(
+    (a, b) => a.rankKey - b.rankKey || b.netMarginPct - a.netMarginPct || a.sku.localeCompare(b.sku),
+  );
+  if (featuredCandidates.length) {
+    const perCampaignSeats: Record<number, number> = {};
+    for (const c of featuredCandidates) {
+      const maxCards = campaigns.find((x) => x.id === c.campaignId)?.maxCards ?? 0;
+      if (maxCards > 0 && (perCampaignSeats[c.campaignId] ?? 0) >= maxCards) {
+        // صندلی تمام شد — showInFeatured تصمیمِ فاز ۱ (false) می‌ماند
+        await db.update(priceDecisions).set({ showInFeatured: false }).where(eq(priceDecisions.id, c.decisionId));
+        continue;
+      }
+      perCampaignSeats[c.campaignId] = (perCampaignSeats[c.campaignId] ?? 0) + 1;
+      await db.update(priceDecisions).set({ showInFeatured: true }).where(eq(priceDecisions.id, c.decisionId));
+    }
+  }
+
+  // ---------- فاز ۴: اعمال و push به فروشگاه (بعد از قطعیت صندلی‌ها)
+  for (const o of outcomes) {
+    if (o.status === "applied" && o.deferred) {
+      await applyDecision(o.deferred.decisionId, o.deferred.campaignEndsAt);
+    }
+  }
+
+  // ---------- فاز ۵: گارد انقضا کمپین زمان‌دار (P0-6) — اگر کمپین فعلی به‌زودی منقضی شود و این
+  // اجرا جایگزین فعالِ آنرا اعمال نکرد، با قیمت فعلی «بدون کمپین» به فروشگاه ارسال می‌شود تا کمپین
+  // در سمت فروشگاه منقضی (نه رهاشده) نمایش داده شود.
+  let intervalMinutes = DEFAULT_INTERVAL_MINUTES;
+  try {
+    if (opts.scheduleId) {
+      const s = await db.select({ v: schedules.intervalMinutes }).from(schedules).where(eq(schedules.id, opts.scheduleId)).limit(1);
+      intervalMinutes = s[0]?.v ?? intervalMinutes;
+    } else {
+      const s = await db
+        .select({ v: schedules.intervalMinutes })
+        .from(schedules)
+        .where(eq(schedules.active, true))
+        .orderBy(asc(schedules.id))
+        .limit(1);
+      intervalMinutes = s[0]?.v ?? intervalMinutes;
+    }
+  } catch {
+    intervalMinutes = DEFAULT_INTERVAL_MINUTES;
+  }
+  const appliedProductIds = new Set(outcomes.filter((o) => o.status === "applied").map((o) => o.productId));
+  await runExpiryGuard(targets, appliedProductIds, intervalMinutes, run.id);
 
   await db
     .update(priceRuns)
@@ -133,10 +300,54 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
 
   await logActivity(
     "runner",
-    `اجرای #${run.id} پایان یافت: ${summary.applied} اعمال، ${summary.pendingReview} بازبینی، ${summary.failed} رد/خطا`,
-    { ...summary },
+    `اجرای #${run.id} پایان یافت: ${summary.applied} اعمال، ${summary.pendingReview} بازبینی، ${summary.failed} رد/خطا${skippedLocked ? `، ${skippedLocked} قفل‌دار رد شد` : ""}`,
+    { ...summary, skippedLocked },
   );
   return summary;
+}
+
+async function runExpiryGuard(
+  targets: Product[],
+  appliedProductIds: Set<number>,
+  intervalMinutes: number,
+  runId: number,
+): Promise<void> {
+  const now = Date.now();
+  const horizonMs = Math.max(10, intervalMinutes * 2) * 60_000;
+  for (const p of targets) {
+    if (appliedProductIds.has(p.id)) continue;
+    const endsAt = p.currentCampaignEndsAt;
+    const isActiveCampaign = Boolean(p.currentCampaign && p.currentCampaign !== "none" && endsAt);
+    if (!isActiveCampaign || !endsAt) continue;
+    const remainingMs = endsAt.getTime() - now;
+    if (remainingMs <= 0 || remainingMs > horizonMs) continue;
+
+    const safePrice = p.currentFinalPrice || p.currentBasePrice || 0;
+    const pushRes = await pushToStore({
+      productId: p.id,
+      sku: p.sku,
+      storeExternalId: p.storeExternalId,
+      effectiveCostPrice: p.costPrice > 0 ? p.costPrice : Math.round(safePrice * 0.85),
+      hardFloorPrice: p.currentHardFloorPrice ?? 0,
+      monitoredMarketCeiling: safePrice,
+      basePrice: safePrice,
+      finalPrice: safePrice,
+      discountPct: 0,
+      campaignType: "none",
+      campaignName: null,
+      badgeTheme: "green-orange",
+      showInFeatured: false,
+      campaignEndsAt: null,
+      decisionId: p.lastDecisionId ?? 0,
+      confidence: 1,
+    });
+    await logActivity(
+      "runner",
+      `گارد انقضا: کمپین ${p.currentCampaign} محصول ${p.sku} در ${Math.round(remainingMs / 60000)} دقیقه منقضی می‌شود و این اجرا جایگزین فعال برای آن اعمال نکرد — وضعیت «بدون کمپین» با قیمت فعلی به فروشگاه ارسال شد (${pushRes.message})`,
+      { productId: p.id, runId, remainingMs: Math.round(remainingMs / 60000) },
+      pushRes.ok ? "info" : "warn",
+    );
+  }
 }
 
 const SUPERVISOR_REASON_PREFIXES = [
@@ -206,10 +417,11 @@ async function priceOneProduct(
   runId: number,
   campaigns: (typeof discountCampaigns.$inferSelect)[],
   cardIndex: number,
-  allocatedCounts: Record<number, number>,
-  manualOffers?: RawOffer[],
-  manualSupplierQuotes?: SupplierQuote[],
-): Promise<{ id: number; status: string; errorHint?: string | null }> {
+  opts?: { manualOffers?: RawOffer[]; manualSupplierQuotes?: SupplierQuote[] },
+): Promise<ProcessOutcome> {
+  const manualOffers = opts?.manualOffers;
+  const manualSupplierQuotes = opts?.manualSupplierQuotes;
+
   if (!manualOffers?.length && !isAllowedSourceType(product.sourceType)) {
     throw new Error(
       `منبع «${product.sourceType}» برای محصول ${product.sku} مجاز نیست؛ فقط منبع واقعی «ترب» پشتیبانی می‌شود. منبع محصول را از صفحه محصولات اصلاح کنید.`,
@@ -218,6 +430,13 @@ async function priceOneProduct(
 
   const { config } = await getProfileConfig(product.profileId);
   const supplierQuotes = manualSupplierQuotes ?? product.supplierQuotes ?? [];
+
+  // مرجع تخفیف own_price_7d (P3): تاریخچه قیمت خودی دوام‌یافته در پنجره ۷ روزی
+  const discountContext = await computeOwnDiscountContext(
+    product.id,
+    config.discount.ownPriceWindowDays ?? 7,
+    config.discount.ownPriceMinHoldHours ?? 48,
+  );
 
   const source = await fetchFromSource(
     {
@@ -246,6 +465,7 @@ async function priceOneProduct(
     currentFinalPrice: product.currentFinalPrice,
     category: product.category,
     config,
+    discountContext,
   });
 
   if (config.supervisor.enabled) {
@@ -306,10 +526,10 @@ async function priceOneProduct(
   }
 
   // گارد امنیتی مضاعف برای جلوگیری از تشخیص اشتباه کارت و اعمال خودکار کالاهای بدون قیمت خرید:
-  // اگر محصول فاقد قیمت خرید همکار است (usedMarketConsensusFloor) و هنوز لینک/PRK ترب برای آن توسط مدیر تایید نشده است (!product.torobPrk)،
+  // اگر محصول فاقد قیمت خرید همکار است (effectiveCost = 0) و هنوز لینک/PRK ترب برای آن توسط مدیر تایید نشده است (!product.torobPrk)،
   // بار اول حتماً به صف بازبینی (pending_review) می‌رود تا کارت پیدا شده در ترب توسط مدیر تایید شود و سرخود وارد کمپین‌های سایت نگردد!
   const unverifiedFirstSearchWithoutCost =
-    !product.torobPrk && !product.torobUrl && result.supply.usedMarketConsensusFloor;
+    !product.torobPrk && !product.torobUrl && result.supply.effectiveCostPrice <= 0;
   if (unverifiedFirstSearchWithoutCost && !result.rejectedBySupervisor) {
     result.needsReview = true;
     result.reviewReasons.push(
@@ -319,7 +539,7 @@ async function priceOneProduct(
 
   const strictlyAboveCost =
     result.finalPrice != null &&
-    result.supply.effectiveCostPrice > 0 &&
+    result.supply.hardFloorPrice > 0 &&
     result.finalPrice >= result.supply.hardFloorPrice &&
     result.finalPrice > result.supply.effectiveCostPrice;
 
@@ -328,6 +548,9 @@ async function priceOneProduct(
     status = "rejected";
   } else if (!result.finalPrice) {
     status = "failed";
+  } else if (result.isProvisional) {
+    // P2-3: مسیر Provisional هرگز خودکار اعمال نمی‌شود
+    status = "pending_review";
   } else if (strictlyAboveCost && !result.needsReview && product.autoApply) {
     status = "applied";
   } else {
@@ -337,10 +560,11 @@ async function priceOneProduct(
   let campaignType = "none";
   let campaignName: string | null = null;
   let badgeTheme = "green-orange";
-  let showInFeatured = false;
   let campaignEndsAt: Date | null = null;
+  let campaignId: number | null = null;
+  let pickShowInFeatured = false;
 
-  // تخصیص کمپین فقط زمانی انجام می‌شود که تصمیم رد یا خطادار نباشد!
+  // تخصیص کمپین فقط زمانی انجام می‌شود که تصمیم رد یا خطاددار نباشد!
   if (
     status !== "rejected" &&
     status !== "failed" &&
@@ -356,15 +580,30 @@ async function priceOneProduct(
       projectedLocalRank: result.position.projectedLocalRank,
       projectedNationalRank: result.position.projectedNationalRank,
       preferredCampaignType: product.preferredCampaignType,
-      allocatedCounts,
+      discountKind: result.discountReferenceKind ?? null,
+      ownAvg7d: discountContext.ownAvg7d,
     });
     campaignType = pick.type;
     campaignName = pick.campaignName;
     badgeTheme = pick.badgeTheme;
-    showInFeatured = pick.showInFeatured;
     campaignEndsAt = pick.endsAt;
-    if (status === "applied" && pick.campaignId != null && pick.type !== "none") {
-      allocatedCounts[pick.campaignId] = (allocatedCounts[pick.campaignId] ?? 0) + 1;
+    campaignId = pick.campaignId;
+    pickShowInFeatured = pick.showInFeatured && product.showInFeatured;
+
+    // P0-3: پیوستگی تایمر — اگر کمپین همین نوع فعلی کتابستانِ سالم هنوز فعال باشد، تایمر دست نمی‌خورد (S3)
+    if (
+      pick.type !== "none" &&
+      product.currentCampaign === pick.type &&
+      product.currentCampaignEndsAt &&
+      product.currentCampaignEndsAt.getTime() > Date.now()
+    ) {
+      pick.reason += " · تایمر کمپین فعلی ادامه دارد (reset نشد — پیوستگی تایمر)";
+      campaignEndsAt = product.currentCampaignEndsAt;
+      // تایمرِ فعلی حفظ شد → showInFeatured فعلی هم حفظ می‌شود (S3)
+      pickShowInFeatured = product.currentShowInFeatured ?? pickShowInFeatured;
+      result.reviewReasons.push(
+        `کمپین فعلی (${pick.type}) هنوز سالم فعال است و تایمر آن (تا ${product.currentCampaignEndsAt.toLocaleString("fa-IR")}) ریست نشد`,
+      );
     }
     result.steps.push({
       step: "campaign",
@@ -374,7 +613,7 @@ async function priceOneProduct(
         type: pick.type,
         campaignName: pick.campaignName,
         badgeTheme: pick.badgeTheme,
-        showInFeatured: pick.showInFeatured,
+        showInFeaturedDesired: pickShowInFeatured,
         cardIndex,
       },
     });
@@ -403,7 +642,8 @@ async function priceOneProduct(
       campaignType,
       campaignName,
       badgeTheme,
-      showInFeatured,
+      // P0-4: در فاز ۱ «دقیقی» false ثبت می‌شود؛ پس از اولود فاز ۲ صندلی‌ها واقعی می‌شود
+      showInFeatured: false,
       strategy: result.strategy,
       competitionTier: result.position.competitionTier,
       projectedNationalRank: safeInt(result.position.projectedNationalRank),
@@ -411,6 +651,10 @@ async function priceOneProduct(
       netProfitToman: safeInt(result.position.netProfitToman),
       netMarginPct: safeReal(result.position.netMarginPct),
       confidence: safeReal(result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence),
+      engineVersion: config.engine?.version ?? "4.1.0",
+      marketConflict: result.marketConflict ?? false,
+      referenceKind: result.discountReferenceKind ?? "none",
+      floorConfirmed: result.floorConfirmed ?? false,
       status,
       steps: result.steps,
     })
@@ -443,18 +687,27 @@ async function priceOneProduct(
   // قفل کردن PRK در دیتابیس فقط زمانی که تصمیم اعمال شده یا گیت تطابق هویت بالای آستانه تایید خودکار (approve) باشد!
   const identityApproved = result.supervisor.gates.identity_match?.verdict === "approve";
 
+  // P0-1 (M2): spread حذف شد — ژست write-back قیمت خرید همگانی ممنوع؛
+  // تنها «seed» قیمتی خرید وقتی انبار خالی است و «قیمت ریپلیس بالاتر» در replacementCost ثبت می‌شود.
+  const lowestQuoteCost = result.supply.lowestQuoteCost;
+  const shouldSeedCost = product.costPrice <= 0 && (lowestQuoteCost ?? 0) > 0;
+  const shouldRaiseReplacement =
+    (lowestQuoteCost ?? 0) > product.costPrice && !!result.supply.selectedQuote?.supplierName;
+
   await db
     .update(products)
     .set({
       lastCheckedAt: new Date(),
       lastDecisionId: decision.id,
       updatedAt: new Date(),
-      ...(!result.supply.usedMarketConsensusFloor && result.supply.effectiveCostPrice > 0
-        ? { costPrice: result.supply.effectiveCostPrice }
+      ...(shouldSeedCost || shouldRaiseReplacement
+        ? {
+            replacementCost: Math.round(lowestQuoteCost!),
+            replacementCostAt: new Date(),
+          }
         : {}),
-      selectedSupplierName: result.supply.usedMarketConsensusFloor
-        ? "کشف هوشمند از ترب (قیمت‌گذار معیار)"
-        : result.supply.selectedQuote?.supplierName ?? product.selectedSupplierName ?? null,
+      ...(shouldSeedCost ? { costPrice: Math.round(lowestQuoteCost!) } : {}),
+      selectedSupplierName: result.supply.selectedQuote?.supplierName ?? product.selectedSupplierName ?? null,
       ...(result.supply.hardFloorPrice > 0 ? { currentHardFloorPrice: result.supply.hardFloorPrice } : {}),
       ...(source.prk && !product.torobPrk && identityApproved ? { torobPrk: source.prk } : {}),
       ...(source.detailsUrl && !product.torobDetailsUrl && identityApproved
@@ -464,11 +717,29 @@ async function priceOneProduct(
     })
     .where(eq(products.id, product.id));
 
-  if (status === "applied") {
-    await applyDecision(decision.id, campaignEndsAt);
-  }
+  // برگشت خروجی به‌همنه با فاز ۴ runner — applyDecision پس از تخصیص صندلی منتخب‌ها صدا زده می‌شود
+  const deferred: DeferredApply | undefined =
+    status === "applied" ? { decisionId: decision.id, campaignEndsAt } : undefined;
 
-  return { id: decision.id, status, errorHint: source.error ?? null };
+  const featuredCandidate: FeaturedCandidate | undefined =
+    status === "applied" &&
+    campaignId != null &&
+    campaignType !== "none" &&
+    (result.position.projectedLocalRank === 1 ||
+      result.position.projectedNationalRank === 1 ||
+      pickShowInFeatured)
+      ? {
+          decisionId: decision.id,
+          productId: product.id,
+          sku: product.sku,
+          campaignId: campaignId as number,
+          rankKey:
+            result.position.projectedNationalRank === 1 || result.position.projectedLocalRank === 1 ? 0 : 1,
+          netMarginPct: result.position.netMarginPct ?? 0,
+        }
+      : undefined;
+
+  return { id: decision.id, productId: product.id, status, errorHint: source.error ?? null, deferred, featuredCandidate };
 }
 
 /** آیا تصمیم توسط ناظر SystemOne رد شده؟ (وضعیت rejected یا لاگ supervisor با verdict=reject) */
@@ -530,7 +801,8 @@ export async function applyDecision(
       currentCampaignName: d.campaignName,
       currentBadgeTheme: d.badgeTheme ?? "green-orange",
       currentShowInFeatured: d.showInFeatured ?? false,
-       ...(d.source === "torob" && !p.torobPrk ? {} : {}),
+      // P0-3: تایمر کمپین روی خودِ محصول ذخیره می‌شود تا پیوستگی و گارد انقضا کار کند
+      currentCampaignEndsAt: campaignEndsAt ?? (p.currentCampaignEndsAt ?? null),
       lastDecisionId: d.id,
       status: "active",
       updatedAt: new Date(),
@@ -569,9 +841,14 @@ export async function applyDecision(
     })
     .where(eq(priceDecisions.id, d.id));
 
+  // S6: پوش موفق = سیگنال مغز خارجی (needsRefresh) برطرف شد
+  if (push.ok) {
+    await db.update(products).set({ needsRefresh: false, updatedAt: new Date() }).where(eq(products.id, p.id));
+  }
+
   await logActivity(
     "apply",
-    `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف نهایی ${d.finalPrice} | کمپین: ${d.campaignType} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${opts?.force ? " (اعمال اجباری انسانی با force)" : ""}`,
+    `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف نهایی ${d.finalPrice} | کمپین: ${d.campaignType}${campaignEndsAt ? ` تا ${campaignEndsAt.toISOString()}` : ""} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${opts?.force ? " (اعمال اجباری انسانی با force)" : ""}`,
     { decisionId: d.id, forced: !!opts?.force },
     push.ok ? "info" : "warn",
   );
@@ -612,6 +889,7 @@ export async function cleanupWrongTimedSaleCards(opts?: {
         currentCampaignName: null,
         currentDiscountPct: 0,
         currentShowInFeatured: false,
+        currentCampaignEndsAt: null,
         currentBasePrice: safePrice > 0 ? safePrice : p.currentBasePrice,
         // اگر محصول قیمت خرید نداشت و به اشتباه به یک PRK ترب قفل شده بود، قفل PRK را آزاد کن تا دوباره تمیز استعلام شود
         ...(p.costPrice <= 0 ? { torobPrk: null, torobDetailsUrl: null, autoApply: false } : {}),

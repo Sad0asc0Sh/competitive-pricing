@@ -50,6 +50,10 @@ export interface SupplyCostResolution {
   safetyBufferAppliedPct: number;
   explanation: string;
   warnings: string[];
+  /** سیاست M2 که در این رزولوشن استفاده شد */
+  costPolicyUsed?: CostResolutionPolicy;
+  /** هشدار «زیر هزینه‌ی موجودی» وقتی کف از قیمت جایگزین پایین‌تر می‌رود (Policy replacement_floor) */
+  inventoryReplacementWarning?: string | null;
 }
 
 export interface RawOffer {
@@ -104,13 +108,47 @@ export interface OfferEvaluation extends RawOffer {
   excludeReason?: string;
   weight: number;
   isLocalCity?: boolean;
+  /** پیشنهاد «به‌روز» است (تاریخ آخرین تغییر در پنجره تازگی) — P1 طبقه‌بندی */
+  fresh?: boolean;
+  /** پیشنهاد «معتبر/قابل‌اتکا» است (فروشنده بالاتر از آستانه اطمینان و قیمت پایین‌تر از باند بالایی) */
+  credible?: boolean;
+  /** فروشنده با امتیاز اطمینان بالا (بالای آستانه highTrust) */
+  highTrust?: boolean;
+  /** برچسب طبقه‌بندی R0/R1: ok | confirmed_low | suspect_low | stale_low | high_outlier */
+  cls?: OfferClass;
 }
+
+export type OfferClass = "ok" | "confirmed_low" | "suspect_low" | "stale_low" | "high_outlier";
 
 export type OutlierMethod = "iqr" | "mad" | "band";
 export type AggregationMethod = "median" | "trimmed_mean" | "weighted_mean" | "modal_consensus";
 export type SupplierSelectionMode = "priority_then_lowest" | "lowest_valid" | "conservative_high" | "weighted_priority";
 
 export type SgeoooleCampaignType = "flash" | "featured" | "timed_sale" | "none";
+
+/** سیاست تعیین قیمت خرید مؤثر در تقاطع قیمت انبار و لیست همکار (M2) */
+export type CostResolutionPolicy =
+  | "replacement_floor"
+  | "max_inventory_replacement"
+  | "legacy_never_below_manual";
+
+export interface UndercutTier {
+  /** سقف انکر (تومان)؛ null = بی‌نهایت (آخرین پله) */
+  upTo: number | null;
+  /** مبلغ undercut در این پله (تومان) — عدد صحیح مثبت */
+  amount: number;
+}
+
+export type DiscountDecisionKind = "none" | "own_price_7d" | "market_p75" | "entry_min";
+
+export interface DiscountContext {
+  /** مرجع مقایسه برای محاسبه درصد تخفیف واقعی (own_price_7d بازار) */
+  ownStableHigh7d: number | null;
+  ownAvg7d: number | null;
+  /** صفحه فروشگاه حاوی تخفیف فعال است؟ (محاسبه در runner) */
+  activeSaleIds?: number[];
+  lastPriceUpdateAt?: string | null;
+}
 export type SgeoooleBadgeTheme = "green-orange" | "gold-red" | "red-purple";
 export type CeilingDiscoveryMode =
   | "market_percentile_ceiling"
@@ -208,7 +246,10 @@ export interface PricingProfileConfig {
     defaultOverheadPct: number;
     defaultNonLocalShippingToman: number;
     staleSafetyBufferPct: number;
-    neverBelowManualCost: boolean;
+    /** (M2 — منسوخ، به‌جای آن costPolicy) */ neverBelowManualCost: boolean;
+    /** سیاست تقاطع قیمت انبار و لیست همکار: replacement_floor (کف از قیمت ریپلیس، هشدار در صورت عبور از آن) |
+     *  max_inventory_replacement (کف از max انبار/ریپلیس) | legacy_never_below_manual (رفتار ۳.۶) */
+    costPolicy: CostResolutionPolicy;
     allowAutoApplyWithoutCost: boolean;
     costlessSafePercentile: number;
     costlessSafetyMarginPct: number;
@@ -234,6 +275,14 @@ export interface PricingProfileConfig {
     hardBandPct: number;
     lowerStaleBandPct: number;
     minSamples: number;
+    /** حداکثر فاصله گروه خرید هم‌قیمت (٪ نسبت به مرجع) برای تشخیص «هسته تاییدشده» R0 */
+    classifyClusterPct: number;
+    /** باند بدگمانی پایین R1 (٪ زیر مرجع) برای غیرتاییدشده‌ها */
+    suspectLowBandPct: number;
+    /** آستانه تازگی «به‌روز» (روز) برای طبقه‌بندی R0/R1 */
+    freshCutoffDays: number;
+    /** حداقل تعداد اعضای گروه برای تشخیص cluster در R0 */
+    minClusterMembers: number;
   };
   /** ---------- ۳) تجمیع و کشف قیمت معیار بازار ---------- */
   aggregation: {
@@ -255,6 +304,12 @@ export interface PricingProfileConfig {
     highTrustScoreThreshold: number;
     undercutAmount: number;
     undercutPct: number;
+    /** پله‌های undercut بر اساس سطح انکر (تومان) — از کوچک به بزرگ؛ null=بی‌نهایت */
+    undercutTiers: UndercutTier[];
+    /** حداکثر فاصله مجاز از رهبر منفرد (٪) — فقط وقتی فروشندگان خلوت و رهبر منفرد است */
+    leaderGapPct: number;
+    /** حداقل حاشیه برای فعال‌شدن policy رهبر منفرد (٪) */
+    leaderMinMarginPct: number;
     localMonopolyDiscountFromRefPct: number;
     fallbackToReference: boolean;
   };
@@ -272,6 +327,8 @@ export interface PricingProfileConfig {
     minConfidenceAutoApply: number;
     minValidOffers: number;
     hysteresisPct: number;
+    /** حداقل نسبت پیشنهادهای «به‌روز» (fresh) از کل معتبرها — رد آن → review نه reject */
+    minFreshRatio: number;
   };
   /** ---------- ۷) کشف «سقف و کف اصولی بازار» و سیستم تخفیف سهگانه sgeooole ---------- */
   discount: {
@@ -283,6 +340,10 @@ export interface PricingProfileConfig {
     minDiscountPct: number;
     maxDiscountPct: number;
     calibrateCeilingForExactFloor: boolean;
+    /** مرجع مقایسه درصد تخفیف: پنجره ۷ روزی بالاترین قیمت اعمال‌شده خودی */
+    ownPriceWindowDays: number;
+    /** حداقل دوام قیمت خودی پیش از تبدیل به سقف مرجع */
+    ownPriceMinHoldHours: number;
   };
   /** ---------- ۸) گرد کردن ---------- */
   rounding: {
@@ -297,6 +358,19 @@ export interface PricingProfileConfig {
     enabled: boolean;
     reviewBelowConfidence: number;
   };
+  /** ---------- ۱۱) مسیر بی‌هزینه (بدون لیست همکار و بدون قیمت خرید) — Provisional ---------- */
+  costless: {
+    /** صدک پول استخراج بازار برای قیمت provision یکی (مثلاً ۳۰) */
+    provisionalPercentile: number;
+    /** حداقل فروشندگان معتبر-به‌روز برای فعال بودن مسیر */
+    minCredibleFresh: number;
+    /** اجازه اعمال خودکار قیمت provision یک (پیش‌فرض false → همیشه review) */
+    autoApply: boolean;
+  };
+  /** ---------- ۱۲) نسخه موتور (ذخیره در هر تصمیم) ---------- */
+  engine: {
+    version: string;
+  };
 }
 
 export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
@@ -310,6 +384,7 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     defaultNonLocalShippingToman: 0,
     staleSafetyBufferPct: 2.5,
     neverBelowManualCost: true,
+    costPolicy: "replacement_floor",
     allowAutoApplyWithoutCost: true,
     costlessSafePercentile: 55,
     costlessSafetyMarginPct: 1.0,
@@ -333,6 +408,10 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     hardBandPct: 25,
     lowerStaleBandPct: 16,
     minSamples: 4,
+    classifyClusterPct: 3,
+    suspectLowBandPct: 12,
+    freshCutoffDays: 5,
+    minClusterMembers: 2,
   },
   aggregation: {
     method: "modal_consensus",
@@ -351,7 +430,15 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     clusterMaxGapPct: 5,
     highTrustScoreThreshold: 4.5,
     undercutAmount: 1000,
-    undercutPct: 0.2,
+    undercutPct: 0,
+    undercutTiers: [
+      { upTo: 2_000_000, amount: 1_000 },
+      { upTo: 10_000_000, amount: 2_000 },
+      { upTo: 30_000_000, amount: 5_000 },
+      { upTo: null, amount: 10_000 },
+    ],
+    leaderGapPct: 4,
+    leaderMinMarginPct: 5,
     localMonopolyDiscountFromRefPct: 1.0,
     fallbackToReference: true,
   },
@@ -367,6 +454,7 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     minConfidenceAutoApply: 0.65,
     minValidOffers: 2,
     hysteresisPct: 0.15,
+    minFreshRatio: 0.3,
   },
   discount: {
     mode: "market_percentile_ceiling",
@@ -377,6 +465,8 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     minDiscountPct: 5,
     maxDiscountPct: 35,
     calibrateCeilingForExactFloor: true,
+    ownPriceWindowDays: 7,
+    ownPriceMinHoldHours: 48,
   },
   rounding: {
     finalStep: 1000,
@@ -402,6 +492,14 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     enabled: true,
     reviewBelowConfidence: 0.72,
   },
+  costless: {
+    provisionalPercentile: 30,
+    minCredibleFresh: 3,
+    autoApply: false,
+  },
+  engine: {
+    version: "4.1.0",
+  },
 };
 
 export interface DecisionStepLog {
@@ -425,6 +523,8 @@ export interface PricingContext {
   cardIndex?: number;
   config: PricingProfileConfig;
   now?: Date;
+  /** تاریخچه قیمت خودی محصولات (برای مرجع own_price_7d) — محاسبه در runner */
+  discountContext?: DiscountContext;
 }
 
 export interface MarketFloorCeilingReport {
@@ -470,7 +570,11 @@ export interface CompetitivePositionReport {
     | "volume_floor_min_margin"
     | "market_reference"
     | "cost_plus_target"
-    | "no_data";
+    | "no_data"
+    | "leader_sole_gap"
+    | "provisional_market_percentile";
+  /** فاصله قیمت ما از رهبر منفرد بازار (٪) — null = بدون رهبر منفرد */
+  leaderGapPct?: number | null;
 }
 
 export interface PricingResult {
@@ -490,9 +594,18 @@ export interface PricingResult {
   finalPrice: number | null;
   basePrice: number | null;
   discountPct: number | null;
+  /** مرجع تخفیف تصمیم (own_price_7d / market_p75 / none) — P3 */
+  discountReferenceKind?: DiscountDecisionKind;
+  discountReferencePrice?: number | null;
+  /** کالیبراسیون دقیق شد؟ (sgeooole: base×(1−pct) == final) */
+  floorConfirmed?: boolean;
   strategy: string;
   confidence: number;
   needsReview: boolean;
+  /** یک فروشنده suspect_low زیر قیمت پیشنهادی ما قرار گرفت → موضوع ریویو (market_conflict) */
+  marketConflict?: boolean;
+  /** قیمت از جنس Provisional است (مسیر بی‌هزینه یا انکر ضعیف) */
+  isProvisional?: boolean;
   rejectedBySupervisor?: boolean;
   reviewReasons: string[];
   steps: DecisionStepLog[];
