@@ -18,6 +18,7 @@ const { pickCampaign } = loadTsModule('src/lib/pricing/campaigns.ts')
 const { selectBestTorobSearchMatch, evaluateTorobCandidate, extractModelAndSpecTokens, isInternalOrDatabaseId } = loadTsModule('src/lib/pricing/matcher.ts')
 const { classifyThreeZoneScore, buildSubqSystemOneRequestBody } = loadTsModule('src/lib/pricing/systemone-supervisor.ts')
 const { computeConfidence } = loadTsModule('src/lib/pricing/confidence.ts')
+const { evaluateApproveMargin } = loadTsModule('src/lib/pricing/approval.ts')
 const { parseTorobJson } = loadTsModule('src/lib/sources/torob.ts')
 const { convertMcpDetailsToOffers, analyzeMcpPriceHistory, extractSellerCountFromMcpCard } = loadTsModule('src/lib/sources/torob-mcp-client.ts')
 
@@ -899,11 +900,21 @@ test('۲۰. آمار وزنی (میانه وزنی) و هیسترزیس یک‌�
   assert.equal(jump.needsReview, true)
 })
 
-test('۲۱. سیاست تقاطع قیمت انبار/ریپلیس (M2): replacement_floor هشدار می‌دهد ولی ملاک ریپلیس است', () => {
+test('۲۱. سیاست تقاطع قیمت انبار/ریپلیس (M2): پیش‌فرض ۴.۱.۲ محافظه‌کارانه است و replacement_floor صریح هشدار می‌دهد', () => {
   const q = [{ supplierName: 'پخش شرق مشهد', rawPrice: '23,200,000 ریال', supplierCity: 'مشهد', priority: 9, inStock: true, updatedAt: now }]
   const manualCost = 2500000 // انبار گران‌تر از بازار
 
-  const x0 = resolveSupplyCost({ supplierQuotes: q, manualCostPrice: manualCost, config: DEFAULT_PROFILE_CONFIG, now })
+  // ۴.۱.۲ (N4): پیش‌فرض اصلاح شد تا با neverBelowManualCost=true متناقض نباشد؛
+  // کف از بیشینه‌ی هزینه انبار و ریپلیس گرفته می‌شود.
+  const xDefault = resolveSupplyCost({ supplierQuotes: q, manualCostPrice: manualCost, config: DEFAULT_PROFILE_CONFIG, now })
+  assert.equal(xDefault.costPolicyUsed, 'max_inventory_replacement')
+  assert.equal(xDefault.effectiveCostPrice, 2500000, 'پیش‌فرض: کف از بیشینه انبار/ریپلیس')
+
+  const floorCfg = {
+    ...DEFAULT_PROFILE_CONFIG,
+    sourcing: { ...DEFAULT_PROFILE_CONFIG.sourcing, costPolicy: 'replacement_floor', neverBelowManualCost: false },
+  }
+  const x0 = resolveSupplyCost({ supplierQuotes: q, manualCostPrice: manualCost, config: floorCfg, now })
   assert.equal(x0.costPolicyUsed, 'replacement_floor')
   assert.equal(x0.effectiveCostPrice, 2331600, 'ملاک = ریپلیس ارزان‌تر')
   assert.equal(x0.selectedQuote.supplierName, 'پخش شرق مشهد')
@@ -1381,4 +1392,26 @@ test('۳۴. own_price_7d (۴.۱.۱): دوام تا ردیف بعدی سنجید�
   const summary = summarizeOwnPriceHistory(rows, { now: now2, holdHours: 48, windowDays: 7 })
   assert.equal(summary.ownStableHigh7d, 2500000, 'قیمت گذرا/۷۰ساعته‌ی یک‌ساعته نباید مرجع تخفیف شود')
   assert.equal(summary.ownAvg7d, Math.round((2600000 + 2500000 + 2550000 + 2400000) / 4))
+})
+
+test('۳۵. گیت حداقل حاشیه برای اعمال خودکار (۴.۱.۲): ۰ = رفتار قبلی، مثبت = ریویو', () => {
+  const base = {
+    approveMarginPct: 0,
+    netMarginPct: 2,
+    strictlyAboveCost: true,
+    autoApply: true,
+    needsReview: false,
+    rejectedBySupervisor: false,
+    isProvisional: false,
+    hasPrice: true,
+  }
+  assert.equal(evaluateApproveMargin(base).needsReview, false, 'پیش‌فرض باید کاملاً سازگار بماند')
+
+  const strict = evaluateApproveMargin({ ...base, approveMarginPct: 5 })
+  assert.equal(strict.needsReview, true)
+  assert.match(strict.reason, /کمتر از حد تأیید خودکار 5%/)
+
+  assert.equal(evaluateApproveMargin({ ...base, approveMarginPct: 5, netMarginPct: 7 }).needsReview, false)
+  assert.equal(evaluateApproveMargin({ ...base, approveMarginPct: 5, autoApply: false }).needsReview, false)
+  assert.equal(evaluateApproveMargin({ ...base, approveMarginPct: 5, rejectedBySupervisor: true }).needsReview, false)
 })

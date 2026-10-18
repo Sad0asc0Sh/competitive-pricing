@@ -15,6 +15,13 @@
       "when": 1792219305582,
       "tag": "0001_v411_incremental",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792219305583,
+      "tag": "0002_v412_audit_fixes",
+      "breakpoints": true
     }
   ]
 }

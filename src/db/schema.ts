@@ -46,7 +46,11 @@ export const products = pgTable(
     torobDetailsUrl: text("torob_details_url"),
     /** قیمت تمام‌شده پایه/دستی (تومان) */
     costPrice: integer("cost_price").default(0).notNull(),
-    /** آخرین قیمت خرید جایگزینِ تاییدشده از لیست همکار (M2 — قیمت باز خرید در تاریخ …) */
+    /**
+     * آخرین قیمت خرید جایگزینِ تاییدشده از لیست همکار (M2 — قیمت باز خرید در تاریخ …).
+     * فقط گزارشی است و موتور هیچ‌جا آن را به‌عنوان مبنای قیمت نمی‌خواند (منبع زنده،
+     * supplierQuotes است)؛ در UI به‌عنوان «قیمت جایگزینی قطعی» نمایش داده نشود.
+     */
     replacementCost: integer("replacement_cost"),
     replacementCostAt: timestamp("replacement_cost_at"),
     /** پایان کمپین مجاز تخفیف site (برای پیوستگی تایمر) */
@@ -145,6 +149,9 @@ export const priceDecisions = pgTable(
     competitionTier: varchar("competition_tier", { length: 40 }),
     projectedNationalRank: integer("projected_national_rank"),
     projectedLocalRank: integer("projected_local_rank"),
+    /** رتبه با احتساب فروشنده‌های مشکوک/کهنه (برای نمایش کنار رتبه‌ی رسمی در صف بازبینی) */
+    rankIncludingSuspect: integer("rank_including_suspect"),
+    totalSellersIncludingSuspect: integer("total_sellers_including_suspect").default(0).notNull(),
     netProfitToman: integer("net_profit_toman"),
     netMarginPct: real("net_margin_pct"),
     confidence: real("confidence").default(0).notNull(),
@@ -163,7 +170,12 @@ export const priceDecisions = pgTable(
     pushedAt: timestamp("pushed_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("decisions_product_idx").on(t.productId), index("decisions_run_idx").on(t.runId)],
+  (t) => [
+    index("decisions_product_idx").on(t.productId),
+    index("decisions_run_idx").on(t.runId),
+    // هم‌نام با ایندکس SQL مهاجرت؛ بدون این تعریف drizzle-kit push آن را drift می‌دید (N3).
+    index("decisions_push_recovery_idx").on(t.status, t.pushStatus, t.createdAt),
+  ],
 );
 
 /** پیشنهادهای رقبا (اسنپ‌شات ترب شامل شهر فروشنده و نوع آنلاین/حضوری) برای هر تصمیم */

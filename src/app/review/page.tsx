@@ -37,6 +37,14 @@ export default async function ReviewPage() {
         const reasons = steps.find((s) => s.step === "decision")?.message ?? "";
         const supMsg = steps.find((s) => s.step === "supervisor")?.message;
         const aiMsg = steps.find((s) => s.step === "ai_review")?.message;
+        // ۴.۱.۲ (N5): رتبه‌ی رسمی فقط روی فروشنده‌های قابل‌اتکاست؛ رتبه‌ی «با احتساب
+        // فروشنده‌های مشکوک/کهنه» کنارش نمایش داده می‌شود تا ریویوور بداند آیا ارزان‌فروش
+        // تازه‌ای زیر قیمت ما هست یا نه. برای تصمیم‌های قدیمی از steps می‌خوانیم.
+        const positionStep = steps.find((s) => s.step === "position");
+        const rankIncludingSuspect =
+          d.rankIncludingSuspect ?? (Number(positionStep?.data?.rankIncludingSuspect) || null);
+        const totalIncludingSuspect =
+          d.totalSellersIncludingSuspect || Number(positionStep?.data?.totalSellersIncludingSuspect) || 0;
         return (
           <div key={d.id} className="card">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -50,14 +58,24 @@ export default async function ReviewPage() {
               </div>
               <DecisionActions decisionId={d.id} />
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-6">
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-7">
               <Item k="تمام‌شده" v={toman(cost)} />
               <Item k="قیمت فعلی" v={toman(current)} />
               <Item k="مرجع بازار" v={toman(d.referencePrice)} />
               <Item k="پیشنهاد: اصلی" v={toman(d.basePrice)} />
               <Item k="پیشنهاد: نهایی" v={toman(d.finalPrice)} strong />
               <Item k="تخفیف / کمپین" v={`${pct(d.discountPct)} · ${campaignLabel[d.campaignType ?? "none"]}`} />
+              <Item
+                k="رتبه ملی / با مشکوک"
+                v={`${d.projectedNationalRank ?? "—"} / ${rankIncludingSuspect ?? "—"} از ${totalIncludingSuspect || "—"}`}
+              />
             </div>
+            {d.marketConflict && (
+              <p className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                ⚠️ تعارض بازار: فروشنده‌ی «مشکوک پایین» زیر قیمت پیشنهادی ما هست — پیش از تأیید، رتبه‌ی ستون
+                «با مشکوک» را با رتبه‌ی رسمی مقایسه کنید.
+              </p>
+            )}
             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{reasons}</p>
             {supMsg && <p className="mt-2 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-900">🛡️ ناظر: {supMsg}</p>}
             {aiMsg && <p className="mt-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-700">🤖 هوش مصنوعی: {aiMsg}</p>}

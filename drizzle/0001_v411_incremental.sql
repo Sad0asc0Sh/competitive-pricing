@@ -44,8 +44,15 @@ ALTER TABLE "price_decisions" ADD COLUMN IF NOT EXISTS "floor_confirmed" boolean
 ALTER TABLE "price_decisions" ALTER COLUMN "engine_version" SET DEFAULT '4.1.1';
 
 -- اگر ستون از قبل با پیش‌فرض 4.1.0 وجود داشته، تصمیم‌های pre-4.1.1 با برچسب 3.6.0 تفکیک می‌شوند.
--- (تصمیم‌های 4.1.1 دست‌نخورده می‌مانند؛ اجرای دوباره idempotent است.)
-UPDATE "price_decisions" SET "engine_version" = '3.6.0' WHERE "engine_version" = '4.1.0';
+-- ۴.۱.۲ (N3): این کار فقط با اجازه‌ی صریح اپراتور انجام می‌شود، چون اگر 4.1.0 واقعاً در
+-- تولید اجرا شده باشد، تصمیم‌هایش 3.6.0 برچسب نمی‌خورند. برای اجرا:
+--   SET pricing.relabel_410 = 'on';   -- سپس این فایل را اجرا کنید
+DO $$
+BEGIN
+  IF current_setting('pricing.relabel_410', true) = 'on' THEN
+    UPDATE "price_decisions" SET "engine_version" = '3.6.0' WHERE "engine_version" = '4.1.0';
+  END IF;
+END $$;
 
 -- ---------------------------------------------------------------- ایندکس‌های کمکی نسخه ۴.۱.۱
 CREATE INDEX IF NOT EXISTS "decisions_push_recovery_idx"

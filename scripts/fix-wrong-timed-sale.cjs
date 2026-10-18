@@ -1,141 +1,235 @@
 #!/usr/bin/env node
 /**
- * اسکریپت تشخیص، گزارش‌گیری و پاک‌سازی کامل کارت اشتباه در دسته ۳ («فرصت‌های زمان‌دار مالی و تخفیف» / timed_sale)
- * + بازگردانی خودکار سند Sale و قیمت محصول در MongoDB فروشگاه (ekgkala-backend)
+ * پاک‌سازی کنترل‌شده‌ی «کارت اشتباه timed_sale» + محصولات بدون قیمت خرید.
+ *
+ * نسخه ۴.۱.۲ (بستن N2):
+ *  - پیش‌فرض dry-run است؛ هیچ نوشتنی بدون --apply انجام نمی‌شود.
+ *  - دامنه‌ی UPDATE دقیقاً همان دامنه‌ی SELECT است:
+ *      A) current_campaign = 'timed_sale'            → فقط پاک‌سازی کمپین
+ *      B) cost_price = 0 AND torob_prk IS NOT NULL   → فقط پاک‌سازی لینک/PRK ترب
+ *    دیگر هیچ محصول سالمی با «cost_price <= 0» قربانی نمی‌شود.
+ *  - تاریخچه‌ی تصمیم‌ها بازنویسی نمی‌شود: status تصمیم‌های applied هرگز rejected نمی‌شود.
+ *  - همه‌ی نوشتن‌های PostgreSQL در یک تراکنش انجام می‌شوند.
+ *  - مسیرها/رفتارها با env و فلگ‌ها قابل تطبیق‌اند (بدون hardcode سرور).
+ *
+ * نمونه:
+ *   node scripts/fix-wrong-timed-sale.cjs                 # فقط گزارش (dry-run)
+ *   node scripts/fix-wrong-timed-sale.cjs --json
+ *   node scripts/fix-wrong-timed-sale.cjs --apply
+ *   node scripts/fix-wrong-timed-sale.cjs --apply --mongo-mode=deactivate --no-cache
+ *
+ * env:
+ *   PRICING_APP_DIR، EKGKALA_BACKEND_DIR، DATABASE_URL، MONGODB_URI
  */
-const mongoose = require("mongoose");
-const { Pool } = require("pg");
-const path = require("path");
-const fs = require("fs");
-const os = require("os");
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
 
-const PRICING_APP_DIR = process.env.PRICING_APP_DIR || "/home/debian/apps/ai-driven-competitive-pricing-system";
-const EKGKALA_BACKEND_DIR = process.env.EKGKALA_BACKEND_DIR || "/home/debian/apps/ekgkala-project/ekgkala-backend";
+const PRICING_APP_DIR = process.env.PRICING_APP_DIR || path.resolve(__dirname, '..')
+const DEFAULT_BACKEND_CANDIDATES = [
+  process.env.EKGKALA_BACKEND_DIR,
+  path.resolve(PRICING_APP_DIR, '..', 'sgeooole', 'ekgkala-backend'),
+  path.resolve(PRICING_APP_DIR, '..', 'ekgkala-project', 'ekgkala-backend'),
+  '/home/debian/apps/ekgkala-project/ekgkala-backend',
+].filter(Boolean)
 
-// ایمنی ۴.۱.۱: به‌صورت پیش‌فرض فقط dry-run است. برای هر نوشتن باید صریحاً --apply بدهید.
-const APPLY = process.argv.includes("--apply");
+const EKGKALA_BACKEND_DIR = DEFAULT_BACKEND_CANDIDATES.find((dir) =>
+  fs.existsSync(path.join(dir, 'models', 'Sale.js')),
+) || DEFAULT_BACKEND_CANDIDATES[0]
 
-require("dotenv").config({ path: path.join(PRICING_APP_DIR, ".env") });
-const beEnv = {};
-require("dotenv").config({ path: path.join(EKGKALA_BACKEND_DIR, ".env"), processEnv: beEnv });
+const argv = process.argv.slice(2)
+const APPLY = argv.includes('--apply')
+const AS_JSON = argv.includes('--json')
+const SKIP_CACHE = argv.includes('--no-cache')
+const mongoModeArg = argv.find((a) => a.startsWith('--mongo-mode='))
+const MONGO_MODE = mongoModeArg ? mongoModeArg.split('=')[1] : 'delete' // delete | deactivate | skip
+if (!['delete', 'deactivate', 'skip'].includes(MONGO_MODE)) {
+  console.error(`--mongo-mode نامعتبر است: ${MONGO_MODE} (delete | deactivate | skip)`)
+  process.exit(1)
+}
+
+const TIMED_SALE_NAMES = [
+  'فروش ویژه زمان‌دار (مالی و تخفیف + منتخب‌ها)',
+  'فروش ویژه هوشمند',
+  'فروش ویژه مشهد',
+]
+
+require('dotenv').config({ path: path.join(PRICING_APP_DIR, '.env') })
+const beEnv = {}
+require('dotenv').config({ path: path.join(EKGKALA_BACKEND_DIR, '.env'), processEnv: beEnv })
+
+const {
+  SELECT_PRODUCTS,
+  SELECT_DECISIONS,
+  SELECT_CAMPAIGNS,
+  UPDATE_PRODUCT_CAMPAIGN,
+  UPDATE_PRODUCT_NO_COST,
+  UPDATE_DECISIONS,
+  UPDATE_CAMPAIGN_SETTINGS,
+} = require('./lib/timed-sale-cleanup.cjs')
+
+const log = (...args) => {
+  if (!AS_JSON) console.log(...args)
+}
+const emit = (payload) => {
+  if (AS_JSON) console.log(JSON.stringify(payload, null, 2))
+}
+
+const maskUrl = (value) => String(value || '').replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@')
 
 async function main() {
-  const pgUrl = process.env.DATABASE_URL;
-  if (!pgUrl) throw new Error("DATABASE_URL در فایل .env یافت نشد");
+  const pgUrl = process.env.DATABASE_URL
+  if (!pgUrl) throw new Error('DATABASE_URL در .env یا محیط یافت نشد')
 
-  const pool = new Pool({ connectionString: pgUrl });
-  const client = await pool.connect();
+  const { Pool } = require('pg')
+  const pool = new Pool({ connectionString: pgUrl })
+  const client = await pool.connect()
+  const report = {
+    dryRun: !APPLY,
+    database: maskUrl(pgUrl),
+    backendDir: EKGKALA_BACKEND_DIR,
+    products: [],
+    decisions: [],
+    campaigns: [],
+    actions: {},
+    mongo: null,
+    cache: [],
+  }
 
   try {
-    console.log("=== ۱. بررسی کارت‌های قرارگرفته در دسته ۳ (timed_sale) در PostgreSQL ===");
-    const { rows: wrongProducts } = await client.query(`
-      SELECT id, sku, name, store_external_id, cost_price, torob_prk,
-             current_base_price, current_final_price, current_discount_pct,
-             current_campaign, current_campaign_name, last_decision_id
-      FROM products
-      WHERE current_campaign = 'timed_sale'
-         OR (cost_price = 0 AND torob_prk IS NOT NULL)
-      ORDER BY id ASC
-    `);
-
-    console.log(`تعداد کارت‌های نیازمند پاک‌سازی در PostgreSQL: ${wrongProducts.length}`);
-    for (const p of wrongProducts) {
-      console.log(
-        `  -> کارت #${p.id} | SKU: ${p.sku} | نام: ${p.name} | کمپین فعلی: ${p.current_campaign} (${p.current_campaign_name}) | تخفیف: ${p.current_discount_pct}% | سقف: ${p.current_base_price} | کف: ${p.current_final_price} | PRK ترب: ${p.torob_prk}`,
-      );
+    log('=== ۱) محصولات در دامنه‌ی پاک‌سازی (PostgreSQL) ===')
+    const { rows: wrongProducts } = await client.query(SELECT_PRODUCTS)
+    report.products = wrongProducts.map((p) => ({
+      id: p.id,
+      sku: p.sku,
+      name: p.name,
+      reason: p.current_campaign === 'timed_sale' ? 'timed_sale' : 'no-cost-prk',
+      campaign: p.current_campaign,
+      discountPct: p.current_discount_pct,
+      price: p.current_final_price,
+      torobPrk: p.torob_prk,
+    }))
+    log(`تعداد: ${wrongProducts.length}`)
+    for (const p of report.products) {
+      log(`  #${p.id} | ${p.sku || '-'} | ${p.name || '-'} | دلیل: ${p.reason} | کمپین: ${p.campaign} | تخفیف: ${p.discountPct}% | قیمت: ${p.price}`)
     }
 
-    const { rows: wrongDecisions } = await client.query(`
-      SELECT d.id, d.product_id, p.sku, p.name, d.status, d.campaign_type, d.campaign_name,
-             d.base_price, d.final_price, d.discount_pct, d.effective_cost_price
-      FROM price_decisions d
-      JOIN products p ON p.id = d.product_id
-      WHERE d.campaign_type = 'timed_sale' OR d.status = 'applied'
-      ORDER BY d.id DESC
-    `);
+    log('\n=== ۲) تصمیم‌های تاریخی timed_sale (فقط گزارش) ===')
+    const { rows: wrongDecisions } = await client.query(SELECT_DECISIONS)
+    report.decisions = wrongDecisions.map((d) => ({
+      id: d.id,
+      productId: d.product_id,
+      sku: d.sku,
+      name: d.name,
+      status: d.status,
+      campaign: d.campaign_type,
+      discountPct: d.discount_pct,
+    }))
+    const appliedTimed = wrongDecisions.filter((d) => d.status === 'applied')
+    log(`تعداد: ${wrongDecisions.length} (applied: ${appliedTimed.length} — تاریخچه دست‌نخورده می‌ماند)`)
 
-    console.log(`تعداد تصمیم‌های ثبت‌شده با timed_sale یا applied: ${wrongDecisions.length}`);
-    for (const d of wrongDecisions) {
-      console.log(
-        `  -> تصمیم #${d.id} | محصول: ${d.name} (${d.sku}) | وضعیت: ${d.status} | کمپین: ${d.campaign_type} | تخفیف: ${d.discount_pct}% | سقف: ${d.base_price} -> کف: ${d.final_price}`,
-      );
-    }
+    log('\n=== ۳) کمپین‌های پیش‌فرض timed_sale با تخفیف ≤ ۵٪ ===')
+    const { rows: campaigns } = await client.query(SELECT_CAMPAIGNS)
+    report.campaigns = campaigns
+    log(`تعداد: ${campaigns.length}`)
 
     if (!APPLY) {
-      console.log("🛑 حالت DRY-RUN: هیچ تغییری در PostgreSQL/MongoDB/کش اعمال نشد.");
-      console.log("برای اجرای واقعی، اسکریپت را با آرگومان --apply اجرا کنید (فقط پس از بکاپ و بازبینی خروجی).");
-      return;
+      report.actions = {
+        message: 'DRY-RUN: هیچ تغییری در PostgreSQL/MongoDB/کش اعمال نشد. برای اجرا --apply بدهید.',
+      }
+      log('\n🛑 حالت DRY-RUN: هیچ تغییری اعمال نشد.')
+      emit(report)
+      return
     }
 
-    // ۲. پاک‌سازی در PostgreSQL
-    await client.query(`
-      UPDATE products
-      SET current_campaign = 'none',
-          current_campaign_name = NULL,
-          current_discount_pct = 0,
-          current_show_in_featured = false,
-          torob_prk = CASE WHEN cost_price <= 0 THEN NULL ELSE torob_prk END,
-          torob_details_url = CASE WHEN cost_price <= 0 THEN NULL ELSE torob_details_url END,
-          auto_apply = CASE WHEN cost_price <= 0 THEN false ELSE auto_apply END,
-          status = 'active',
-          updated_at = NOW()
-      WHERE current_campaign = 'timed_sale' OR cost_price <= 0
-    `);
+    log('\n=== ۴) اعمال تراکنشی پاک‌سازی (PostgreSQL) ===')
+    await client.query('BEGIN')
+    try {
+      // A) فقط کارت‌های timed_sale؛ status محصول و لینک ترب دست‌نخورده می‌ماند.
+      const campaignCleanup = await client.query(UPDATE_PRODUCT_CAMPAIGN)
 
-    await client.query(`
-      UPDATE price_decisions
-      SET campaign_type = 'none',
-          campaign_name = NULL,
-          show_in_featured = false,
-          status = CASE WHEN status = 'applied' THEN 'rejected' ELSE status END
-      WHERE campaign_type = 'timed_sale'
-    `);
+      // B) فقط محصولات بدون قیمت خرید که PRK ترب دارند (همان شرط SELECT).
+      const torobCleanup = await client.query(UPDATE_PRODUCT_NO_COST)
 
-    // غیرفعال کردن کمپین پیش‌فرض timed_sale با تخفیف ۳٪ تا دوباره خودکار فعال نشود
-    await client.query(`
-      UPDATE discount_campaigns
-      SET active = false,
-          min_discount_pct = 10,
-          card_range_from = 21,
-          card_range_to = 50
-      WHERE type = 'timed_sale' AND min_discount_pct <= 5
-    `);
+      // C) تصمیم‌های غیر-applied فقط برچسب کمپینشان پاک می‌شود. status هرگز بازنویسی نمی‌شود.
+      const decisionsCleanup = await client.query(UPDATE_DECISIONS)
 
-    console.log("✅ دیتابیس PostgreSQL پاک‌سازی شد (current_campaign='none' و auto_apply=false برای کالاهای بدون قیمت خرید).");
+      const campaignSetting = await client.query(UPDATE_CAMPAIGN_SETTINGS)
 
-    // ۳. پاک‌سازی کمپین Sale در MongoDB فروشگاه (ekgkala-backend)
-    const mongoUri = beEnv.MONGODB_URI || process.env.MONGODB_URI;
-    if (mongoUri && fs.existsSync(path.join(EKGKALA_BACKEND_DIR, "models/Sale.js"))) {
-      console.log("=== ۲. پاک‌سازی کمپین‌های Sale هوشمند در MongoDB فروشگاه ===");
-      await mongoose.connect(mongoUri);
-      const Sale = require(path.join(EKGKALA_BACKEND_DIR, "models/Sale"));
-      const delRes = await Sale.deleteMany({
-        autoManaged: true,
-        name: { $in: ["فروش ویژه زمان‌دار (مالی و تخفیف + منتخب‌ها)", "فروش ویژه هوشمند", "فروش ویژه مشهد"] },
-      });
-      console.log(`✅ تعداد کمپین‌های Sale خودکار حذف‌شده از MongoDB: ${delRes.deletedCount}`);
-      await mongoose.disconnect();
+      await client.query('COMMIT')
+      report.actions = {
+        productsCampaignCleaned: campaignCleanup.rowCount,
+        productsNoCostTorobCleaned: torobCleanup.rowCount,
+        decisionsCampaignCleared: decisionsCleanup.rowCount,
+        campaignsDisabled: campaignSetting.rowCount,
+      }
+      log(`✅ محصولات timed_sale: ${campaignCleanup.rowCount}`)
+      log(`✅ محصولات بدون قیمت خرید (PRK پاک شد): ${torobCleanup.rowCount}`)
+      log(`✅ تصمیم‌های غیر-applied (برچسب کمپین پاک شد، status حفظ شد): ${decisionsCleanup.rowCount}`)
+      log(`✅ کمپین پیش‌فرض timed_sale غیرفعال شد: ${campaignSetting.rowCount}`)
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
     }
 
-    // ۴. حذف کش قفل ضدربات (Wall) در torob-mcp
-    const cacheDirs = [
-      path.join(os.homedir(), ".cache", "torob-mcp"),
-      "/tmp/torob-mcp-cache",
-      "/home/debian/.cache/torob-mcp",
-    ];
-    for (const dir of cacheDirs) {
-      if (fs.existsSync(dir)) {
-        fs.rmSync(dir, { recursive: true, force: true });
-        console.log(`✅ کش قفل ضدربات torob-mcp پاک شد: ${dir}`);
+    // ۵) MongoDB: حذف/غیرفعال‌سازی فقط Saleهای autoManaged با نام‌های مشخص.
+    const mongoUri = beEnv.MONGODB_URI || process.env.MONGODB_URI
+    if (MONGO_MODE === 'skip') {
+      log('\n⏭️ پاک‌سازی MongoDB به‌درخواست رد شد (--mongo-mode=skip).')
+      report.mongo = { mode: 'skip' }
+    } else if (mongoUri && fs.existsSync(path.join(EKGKALA_BACKEND_DIR, 'models', 'Sale.js'))) {
+      log(`\n=== ۵) Saleهای خودکار مرتبط (MongoDB، حالت ${MONGO_MODE}) ===`)
+      const mongoose = require(require.resolve('mongoose', { paths: [EKGKALA_BACKEND_DIR] }))
+      await mongoose.connect(mongoUri)
+      try {
+        const Sale = require(path.join(EKGKALA_BACKEND_DIR, 'models', 'Sale'))
+        const filter = { autoManaged: true, name: { $in: TIMED_SALE_NAMES } }
+        const matched = await Sale.countDocuments(filter)
+        let affected = 0
+        if (MONGO_MODE === 'delete') {
+          const res = await Sale.deleteMany(filter)
+          affected = res.deletedCount || 0
+        } else if (MONGO_MODE === 'deactivate') {
+          const res = await Sale.updateMany(filter, { $set: { isActive: false } })
+          affected = res.modifiedCount || 0
+        } else {
+          throw new Error(`--mongo-mode نامعتبر: ${MONGO_MODE}`)
+        }
+        report.mongo = { mode: MONGO_MODE, matched, affected }
+        log(`✅ Saleهای autoManaged: ${matched} تطبیق، ${affected} تحت تأثیر (${MONGO_MODE}).`)
+      } finally {
+        await mongoose.disconnect()
+      }
+    } else {
+      log('\n⏭️ MongoDB/MONGODB_URI یا مدل Sale در دسترس نیست؛ مرحله Mongo رد شد.')
+      report.mongo = { mode: 'unavailable' }
+    }
+
+    // ۶) کش قفل ضدربات torob-mcp (اختیاری با --no-cache خاموش می‌شود).
+    if (!SKIP_CACHE) {
+      const cacheDirs = [
+        path.join(os.homedir(), '.cache', 'torob-mcp'),
+        '/tmp/torob-mcp-cache',
+        path.join(EKGKALA_BACKEND_DIR, '.cache', 'torob-mcp'),
+      ]
+      for (const dir of [...new Set(cacheDirs)]) {
+        if (!fs.existsSync(dir)) continue
+        fs.rmSync(dir, { recursive: true, force: true })
+        report.cache.push(dir)
+        log(`✅ کش torob-mcp پاک شد: ${dir}`)
       }
     }
+
+    report.actions.message = 'APPLY: پاک‌سازی انجام شد.'
+    emit(report)
   } finally {
-    client.release();
-    await pool.end();
+    client.release()
+    await pool.end()
   }
 }
 
 main().catch((err) => {
-  console.error("Cleanup failed:", err);
-  process.exit(1);
-});
+  if (AS_JSON) console.log(JSON.stringify({ error: err.message }, null, 2))
+  console.error('Cleanup failed:', err.message)
+  process.exit(1)
+})

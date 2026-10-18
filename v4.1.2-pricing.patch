@@ -1,0 +1,1413 @@
+diff --git a/drizzle/0001_v411_incremental.sql b/drizzle/0001_v411_incremental.sql
+index ee636b9..69ffbe4 100644
+--- a/drizzle/0001_v411_incremental.sql
++++ b/drizzle/0001_v411_incremental.sql
+@@ -44,8 +44,15 @@ ALTER TABLE "price_decisions" ADD COLUMN IF NOT EXISTS "floor_confirmed" boolean
+ ALTER TABLE "price_decisions" ALTER COLUMN "engine_version" SET DEFAULT '4.1.1';
+ 
+ -- اگر ستون از قبل با پیش‌فرض 4.1.0 وجود داشته، تصمیم‌های pre-4.1.1 با برچسب 3.6.0 تفکیک می‌شوند.
+--- (تصمیم‌های 4.1.1 دست‌نخورده می‌مانند؛ اجرای دوباره idempotent است.)
+-UPDATE "price_decisions" SET "engine_version" = '3.6.0' WHERE "engine_version" = '4.1.0';
++-- ۴.۱.۲ (N3): این کار فقط با اجازه‌ی صریح اپراتور انجام می‌شود، چون اگر 4.1.0 واقعاً در
++-- تولید اجرا شده باشد، تصمیم‌هایش 3.6.0 برچسب نمی‌خورند. برای اجرا:
++--   SET pricing.relabel_410 = 'on';   -- سپس این فایل را اجرا کنید
++DO $$
++BEGIN
++  IF current_setting('pricing.relabel_410', true) = 'on' THEN
++    UPDATE "price_decisions" SET "engine_version" = '3.6.0' WHERE "engine_version" = '4.1.0';
++  END IF;
++END $$;
+ 
+ -- ---------------------------------------------------------------- ایندکس‌های کمکی نسخه ۴.۱.۱
+ CREATE INDEX IF NOT EXISTS "decisions_push_recovery_idx"
+diff --git a/drizzle/0002_v412_audit_fixes.sql b/drizzle/0002_v412_audit_fixes.sql
+new file mode 100644
+index 0000000..4e95a24
+--- /dev/null
++++ b/drizzle/0002_v412_audit_fixes.sql
+@@ -0,0 +1,39 @@
++-- ============================================================================
++-- 0002_v412_audit_fixes.sql — اصلاحات ممیزی ۴.۱.۲ (idempotent)
++-- ----------------------------------------------------------------------------
++-- ۱) رتبه‌ی گزارش‌شده با احتساب فروشنده‌های مشکوک/کهنه را به ستون تبدیل می‌کند تا
++--    رابط بازبینی هر دو رتبه را نشان دهد (N5). تصمیم‌های قدیمی از steps خوانده می‌شوند.
++-- ۲) ایندکس بازیابی push را در دیتابیس تضمین می‌کند؛ همین ایندکس در schema.ts هم
++--    تعریف شده تا drizzle-kit push آن را drift گزارش نکند (N3).
++-- ۳) برچسب‌گذاری 4.1.0 → 3.6.0 فقط با اجازه‌ی صریح اپراتور انجام می‌شود (N3):
++--      SET pricing.relabel_410 = 'on';
++--      \i drizzle/0002_v412_audit_fixes.sql
++--    اگر 4.1.0 هرگز در تولید اجرا نشده، نیازی به این کار نیست.
++--
++-- اجرا (ابتدا روی کپی دیتابیس):
++--   psql "$DATABASE_URL" -f drizzle/0002_v412_audit_fixes.sql
++-- یا با اجراکننده‌ی قابل‌تطبیق:
++--   node scripts/migrate.cjs --file 0002_v412_audit_fixes.sql
++-- ============================================================================
++
++BEGIN;
++
++-- ---------------------------------------------------------------- رتبه‌ها (N5)
++ALTER TABLE "price_decisions"
++  ADD COLUMN IF NOT EXISTS "rank_including_suspect" integer;
++ALTER TABLE "price_decisions"
++  ADD COLUMN IF NOT EXISTS "total_sellers_including_suspect" integer NOT NULL DEFAULT 0;
++
++-- ---------------------------------------------------------------- ایندکس (N3)
++CREATE INDEX IF NOT EXISTS "decisions_push_recovery_idx"
++  ON "price_decisions" ("status", "push_status", "created_at");
++
++-- ---------------------------------------------------------------- relabel opt-in (N3)
++DO $$
++BEGIN
++  IF current_setting('pricing.relabel_410', true) = 'on' THEN
++    UPDATE "price_decisions" SET "engine_version" = '3.6.0' WHERE "engine_version" = '4.1.0';
++  END IF;
++END $$;
++
++COMMIT;
+diff --git a/drizzle/meta/_journal.json b/drizzle/meta/_journal.json
+index cc89a32..8e91ec4 100644
+--- a/drizzle/meta/_journal.json
++++ b/drizzle/meta/_journal.json
+@@ -15,6 +15,13 @@
+       "when": 1792219305582,
+       "tag": "0001_v411_incremental",
+       "breakpoints": true
++    },
++    {
++      "idx": 2,
++      "version": "7",
++      "when": 1792219305583,
++      "tag": "0002_v412_audit_fixes",
++      "breakpoints": true
+     }
+   ]
+ }
+\ No newline at end of file
+diff --git a/package.json b/package.json
+index 3924e82..f9ee759 100644
+--- a/package.json
++++ b/package.json
+@@ -6,11 +6,18 @@
+     "dev": "next dev -p 3050",
+     "build": "next build",
+     "start": "next start -p 3050",
+-    "test": "node --test tests/pricing-engine.test.cjs",
++    "test": "node --test tests/pricing-engine.test.cjs tests/cleanup-script-safety.test.cjs tests/migration-safety.test.cjs",
+     "db:push": "drizzle-kit push",
++    "db:migrate": "node scripts/migrate.cjs",
++    "db:migrate:dry": "node scripts/migrate.cjs --dry-run",
++    "db:migrate:baseline": "node scripts/migrate.cjs --baseline",
++    "audit:cost-policy": "node scripts/fix-cost-policy.cjs",
++    "audit:timed-sale": "node scripts/fix-wrong-timed-sale.cjs",
+     "mcp:serve": "PORT=3005 npx -y torob-mcp@0.1.2 --http",
+     "lint": "eslint .",
+-    "typecheck": "tsc --noEmit"
++    "typecheck": "tsc --noEmit",
++    "verify": "node scripts/verify-release.cjs",
++    "verify:quick": "node scripts/verify-release.cjs --quick"
+   },
+   "dependencies": {
+     "dotenv": "17.3.1",
+diff --git a/scripts/fix-cost-policy.cjs b/scripts/fix-cost-policy.cjs
+new file mode 100644
+index 0000000..3d4e346
+--- /dev/null
++++ b/scripts/fix-cost-policy.cjs
+@@ -0,0 +1,141 @@
++#!/usr/bin/env node
++/**
++ * ۴.۱.۲ (N4) — آشتی «سیاست هزینه» در پروفایل‌های ذخیره‌شده.
++ *
++ * مشکل: پروفایل‌های ساخته‌شده توسط ۴.۱.۰ ممکن است costPolicy=replacement_floor را
++ * صریح ذخیره کرده باشند، در حالی که neverBelowManualCost=true است. این دو متناقض‌اند:
++ * با replacement_floor، فلگ neverBelowManualCost بی‌اثر است و قیمت می‌تواند زیر هزینه
++ * انبار برود. نگاشت سازگاری mergeConfig فقط وقتی کار می‌کند که costPolicy غایب باشد.
++ *
++ * این اسکریپت پیش‌فرض dry-run است. با --apply فقط پروفایل‌های دارای تعارض/غایب را
++ * اصلاح می‌کند و سیاست را صریح می‌نویسد.
++ *
++ * استفاده:
++ *   node scripts/fix-cost-policy.cjs                       # گزارش
++ *   node scripts/fix-cost-policy.cjs --apply               # اصلاح تعارض‌ها
++ *   node scripts/fix-cost-policy.cjs --apply --policy=replacement_floor
++ *   node scripts/fix-cost-policy.cjs --apply --policy=legacy_never_below_manual --all
++ *
++ * سیاست‌های مجاز:
++ *   max_inventory_replacement | replacement_floor | legacy_never_below_manual
++ */
++const path = require('path')
++require('dotenv').config({ path: path.join(__dirname, '..', '.env') })
++
++const POLICIES = new Set(['max_inventory_replacement', 'replacement_floor', 'legacy_never_below_manual'])
++const argv = process.argv.slice(2)
++const APPLY = argv.includes('--apply')
++const ALL = argv.includes('--all')
++const AS_JSON = argv.includes('--json')
++const policyArg = argv.find((a) => a.startsWith('--policy='))
++const EXPLICIT_POLICY = policyArg ? policyArg.split('=')[1] : null
++
++if (EXPLICIT_POLICY && !POLICIES.has(EXPLICIT_POLICY)) {
++  console.error(`--policy نامعتبر است: ${EXPLICIT_POLICY}`)
++  process.exit(1)
++}
++
++const maskUrl = (value) => String(value || '').replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@')
++
++async function main() {
++  const url = process.env.DATABASE_URL
++  if (!url) throw new Error('DATABASE_URL در .env یا محیط یافت نشد')
++  const { Pool } = require('pg')
++  const pool = new Pool({ connectionString: url })
++  const client = await pool.connect()
++
++  try {
++    const { rows } = await client.query(`
++      SELECT id, name, is_default, config
++      FROM pricing_profiles
++      ORDER BY id ASC
++    `)
++
++    const report = []
++    for (const row of rows) {
++      const cfg = row.config || {}
++      const sourcing = cfg.sourcing || {}
++      const policy = sourcing.costPolicy ?? null
++      const never = sourcing.neverBelowManualCost
++      const conflict = policy === 'replacement_floor' && never === true
++      const missing = policy == null
++      // پیشنهاد: اگر neverBelowManualCost=true باشد، کف از بیشینه هزینه انبار و ریپلیس.
++      // وگرنه replacement_floor. با --policy صریح، همان.
++      const proposed =
++        EXPLICIT_POLICY || (never === true ? 'max_inventory_replacement' : 'replacement_floor')
++      const shouldFix = ALL ? policy !== proposed : conflict || missing
++
++      report.push({
++        id: row.id,
++        name: row.name,
++        isDefault: row.is_default,
++        policy,
++        neverBelowManualCost: never,
++        conflict,
++        missing,
++        proposed,
++        action: shouldFix ? (APPLY ? 'update' : 'would-update') : 'skip',
++      })
++    }
++
++    if (AS_JSON) {
++      console.log(JSON.stringify({ database: maskUrl(url), dryRun: !APPLY, profiles: report }, null, 2))
++    } else {
++      console.log(`دیتابیس: ${maskUrl(url)} | پروتکل: ${APPLY ? 'APPLY' : 'DRY-RUN'}`)
++      for (const p of report) {
++        console.log(
++          `  #${p.id} ${p.isDefault ? '(default) ' : ''}${p.name || '-'} | policy=${p.policy ?? '∅'} | neverBelowManualCost=${p.neverBelowManualCost ?? '∅'} | conflict=${p.conflict} | ${p.action}${p.action.includes('update') ? ` → ${p.proposed}` : ''}`,
++        )
++      }
++      const updates = report.filter((p) => p.action === 'would-update' || p.action === 'update')
++      console.log(`جمع: ${updates.length} پروفایل نیازمند اصلاح${APPLY ? '' : ' (dry-run؛ --apply بدهید)'}`)
++    }
++
++    if (!APPLY) return
++
++    await client.query('BEGIN')
++    try {
++      let changed = 0
++      for (const p of report) {
++        if (p.action !== 'update') continue
++        const never = p.proposed === 'legacy_never_below_manual' || p.proposed === 'max_inventory_replacement'
++        await client.query(
++          `UPDATE pricing_profiles
++           SET config = jsonb_set(
++                 jsonb_set(
++                   jsonb_set(
++                     COALESCE(config, '{}'::jsonb),
++                     '{sourcing}',
++                     COALESCE(config->'sourcing', '{}'::jsonb),
++                     true
++                   ),
++                   '{sourcing,costPolicy}',
++                   to_jsonb($2::text),
++                   true
++                 ),
++                 '{sourcing,neverBelowManualCost}',
++                 to_jsonb($3::boolean),
++                 true
++               ),
++               updated_at = NOW()
++           WHERE id = $1`,
++          [p.id, p.proposed, never],
++        )
++        changed += 1
++      }
++      await client.query('COMMIT')
++      console.log(`✅ ${changed} پروفایل اصلاح شد.`)
++    } catch (error) {
++      await client.query('ROLLBACK')
++      throw error
++    }
++  } finally {
++    client.release()
++    await pool.end()
++  }
++}
++
++main().catch((error) => {
++  console.error('fix-cost-policy failed:', error.message)
++  process.exit(1)
++})
+diff --git a/scripts/fix-wrong-timed-sale.cjs b/scripts/fix-wrong-timed-sale.cjs
+index 11bd55b..8b27f56 100644
+--- a/scripts/fix-wrong-timed-sale.cjs
++++ b/scripts/fix-wrong-timed-sale.cjs
+@@ -1,141 +1,235 @@
+ #!/usr/bin/env node
+ /**
+- * اسکریپت تشخیص، گزارش‌گیری و پاک‌سازی کامل کارت اشتباه در دسته ۳ («فرصت‌های زمان‌دار مالی و تخفیف» / timed_sale)
+- * + بازگردانی خودکار سند Sale و قیمت محصول در MongoDB فروشگاه (ekgkala-backend)
++ * پاک‌سازی کنترل‌شده‌ی «کارت اشتباه timed_sale» + محصولات بدون قیمت خرید.
++ *
++ * نسخه ۴.۱.۲ (بستن N2):
++ *  - پیش‌فرض dry-run است؛ هیچ نوشتنی بدون --apply انجام نمی‌شود.
++ *  - دامنه‌ی UPDATE دقیقاً همان دامنه‌ی SELECT است:
++ *      A) current_campaign = 'timed_sale'            → فقط پاک‌سازی کمپین
++ *      B) cost_price = 0 AND torob_prk IS NOT NULL   → فقط پاک‌سازی لینک/PRK ترب
++ *    دیگر هیچ محصول سالمی با «cost_price <= 0» قربانی نمی‌شود.
++ *  - تاریخچه‌ی تصمیم‌ها بازنویسی نمی‌شود: status تصمیم‌های applied هرگز rejected نمی‌شود.
++ *  - همه‌ی نوشتن‌های PostgreSQL در یک تراکنش انجام می‌شوند.
++ *  - مسیرها/رفتارها با env و فلگ‌ها قابل تطبیق‌اند (بدون hardcode سرور).
++ *
++ * نمونه:
++ *   node scripts/fix-wrong-timed-sale.cjs                 # فقط گزارش (dry-run)
++ *   node scripts/fix-wrong-timed-sale.cjs --json
++ *   node scripts/fix-wrong-timed-sale.cjs --apply
++ *   node scripts/fix-wrong-timed-sale.cjs --apply --mongo-mode=deactivate --no-cache
++ *
++ * env:
++ *   PRICING_APP_DIR، EKGKALA_BACKEND_DIR، DATABASE_URL، MONGODB_URI
+  */
+-const mongoose = require("mongoose");
+-const { Pool } = require("pg");
+-const path = require("path");
+-const fs = require("fs");
+-const os = require("os");
+-
+-const PRICING_APP_DIR = process.env.PRICING_APP_DIR || "/home/debian/apps/ai-driven-competitive-pricing-system";
+-const EKGKALA_BACKEND_DIR = process.env.EKGKALA_BACKEND_DIR || "/home/debian/apps/ekgkala-project/ekgkala-backend";
++const fs = require('fs')
++const os = require('os')
++const path = require('path')
++
++const PRICING_APP_DIR = process.env.PRICING_APP_DIR || path.resolve(__dirname, '..')
++const DEFAULT_BACKEND_CANDIDATES = [
++  process.env.EKGKALA_BACKEND_DIR,
++  path.resolve(PRICING_APP_DIR, '..', 'sgeooole', 'ekgkala-backend'),
++  path.resolve(PRICING_APP_DIR, '..', 'ekgkala-project', 'ekgkala-backend'),
++  '/home/debian/apps/ekgkala-project/ekgkala-backend',
++].filter(Boolean)
++
++const EKGKALA_BACKEND_DIR = DEFAULT_BACKEND_CANDIDATES.find((dir) =>
++  fs.existsSync(path.join(dir, 'models', 'Sale.js')),
++) || DEFAULT_BACKEND_CANDIDATES[0]
++
++const argv = process.argv.slice(2)
++const APPLY = argv.includes('--apply')
++const AS_JSON = argv.includes('--json')
++const SKIP_CACHE = argv.includes('--no-cache')
++const mongoModeArg = argv.find((a) => a.startsWith('--mongo-mode='))
++const MONGO_MODE = mongoModeArg ? mongoModeArg.split('=')[1] : 'delete' // delete | deactivate | skip
++if (!['delete', 'deactivate', 'skip'].includes(MONGO_MODE)) {
++  console.error(`--mongo-mode نامعتبر است: ${MONGO_MODE} (delete | deactivate | skip)`)
++  process.exit(1)
++}
+ 
+-// ایمنی ۴.۱.۱: به‌صورت پیش‌فرض فقط dry-run است. برای هر نوشتن باید صریحاً --apply بدهید.
+-const APPLY = process.argv.includes("--apply");
++const TIMED_SALE_NAMES = [
++  'فروش ویژه زمان‌دار (مالی و تخفیف + منتخب‌ها)',
++  'فروش ویژه هوشمند',
++  'فروش ویژه مشهد',
++]
++
++require('dotenv').config({ path: path.join(PRICING_APP_DIR, '.env') })
++const beEnv = {}
++require('dotenv').config({ path: path.join(EKGKALA_BACKEND_DIR, '.env'), processEnv: beEnv })
++
++const {
++  SELECT_PRODUCTS,
++  SELECT_DECISIONS,
++  SELECT_CAMPAIGNS,
++  UPDATE_PRODUCT_CAMPAIGN,
++  UPDATE_PRODUCT_NO_COST,
++  UPDATE_DECISIONS,
++  UPDATE_CAMPAIGN_SETTINGS,
++} = require('./lib/timed-sale-cleanup.cjs')
++
++const log = (...args) => {
++  if (!AS_JSON) console.log(...args)
++}
++const emit = (payload) => {
++  if (AS_JSON) console.log(JSON.stringify(payload, null, 2))
++}
+ 
+-require("dotenv").config({ path: path.join(PRICING_APP_DIR, ".env") });
+-const beEnv = {};
+-require("dotenv").config({ path: path.join(EKGKALA_BACKEND_DIR, ".env"), processEnv: beEnv });
++const maskUrl = (value) => String(value || '').replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@')
+ 
+ async function main() {
+-  const pgUrl = process.env.DATABASE_URL;
+-  if (!pgUrl) throw new Error("DATABASE_URL در فایل .env یافت نشد");
+-
+-  const pool = new Pool({ connectionString: pgUrl });
+-  const client = await pool.connect();
++  const pgUrl = process.env.DATABASE_URL
++  if (!pgUrl) throw new Error('DATABASE_URL در .env یا محیط یافت نشد')
++
++  const { Pool } = require('pg')
++  const pool = new Pool({ connectionString: pgUrl })
++  const client = await pool.connect()
++  const report = {
++    dryRun: !APPLY,
++    database: maskUrl(pgUrl),
++    backendDir: EKGKALA_BACKEND_DIR,
++    products: [],
++    decisions: [],
++    campaigns: [],
++    actions: {},
++    mongo: null,
++    cache: [],
++  }
+ 
+   try {
+-    console.log("=== ۱. بررسی کارت‌های قرارگرفته در دسته ۳ (timed_sale) در PostgreSQL ===");
+-    const { rows: wrongProducts } = await client.query(`
+-      SELECT id, sku, name, store_external_id, cost_price, torob_prk,
+-             current_base_price, current_final_price, current_discount_pct,
+-             current_campaign, current_campaign_name, last_decision_id
+-      FROM products
+-      WHERE current_campaign = 'timed_sale'
+-         OR (cost_price = 0 AND torob_prk IS NOT NULL)
+-      ORDER BY id ASC
+-    `);
+-
+-    console.log(`تعداد کارت‌های نیازمند پاک‌سازی در PostgreSQL: ${wrongProducts.length}`);
+-    for (const p of wrongProducts) {
+-      console.log(
+-        `  -> کارت #${p.id} | SKU: ${p.sku} | نام: ${p.name} | کمپین فعلی: ${p.current_campaign} (${p.current_campaign_name}) | تخفیف: ${p.current_discount_pct}% | سقف: ${p.current_base_price} | کف: ${p.current_final_price} | PRK ترب: ${p.torob_prk}`,
+-      );
++    log('=== ۱) محصولات در دامنه‌ی پاک‌سازی (PostgreSQL) ===')
++    const { rows: wrongProducts } = await client.query(SELECT_PRODUCTS)
++    report.products = wrongProducts.map((p) => ({
++      id: p.id,
++      sku: p.sku,
++      name: p.name,
++      reason: p.current_campaign === 'timed_sale' ? 'timed_sale' : 'no-cost-prk',
++      campaign: p.current_campaign,
++      discountPct: p.current_discount_pct,
++      price: p.current_final_price,
++      torobPrk: p.torob_prk,
++    }))
++    log(`تعداد: ${wrongProducts.length}`)
++    for (const p of report.products) {
++      log(`  #${p.id} | ${p.sku || '-'} | ${p.name || '-'} | دلیل: ${p.reason} | کمپین: ${p.campaign} | تخفیف: ${p.discountPct}% | قیمت: ${p.price}`)
+     }
+ 
+-    const { rows: wrongDecisions } = await client.query(`
+-      SELECT d.id, d.product_id, p.sku, p.name, d.status, d.campaign_type, d.campaign_name,
+-             d.base_price, d.final_price, d.discount_pct, d.effective_cost_price
+-      FROM price_decisions d
+-      JOIN products p ON p.id = d.product_id
+-      WHERE d.campaign_type = 'timed_sale' OR d.status = 'applied'
+-      ORDER BY d.id DESC
+-    `);
+-
+-    console.log(`تعداد تصمیم‌های ثبت‌شده با timed_sale یا applied: ${wrongDecisions.length}`);
+-    for (const d of wrongDecisions) {
+-      console.log(
+-        `  -> تصمیم #${d.id} | محصول: ${d.name} (${d.sku}) | وضعیت: ${d.status} | کمپین: ${d.campaign_type} | تخفیف: ${d.discount_pct}% | سقف: ${d.base_price} -> کف: ${d.final_price}`,
+-      );
+-    }
++    log('\n=== ۲) تصمیم‌های تاریخی timed_sale (فقط گزارش) ===')
++    const { rows: wrongDecisions } = await client.query(SELECT_DECISIONS)
++    report.decisions = wrongDecisions.map((d) => ({
++      id: d.id,
++      productId: d.product_id,
++      sku: d.sku,
++      name: d.name,
++      status: d.status,
++      campaign: d.campaign_type,
++      discountPct: d.discount_pct,
++    }))
++    const appliedTimed = wrongDecisions.filter((d) => d.status === 'applied')
++    log(`تعداد: ${wrongDecisions.length} (applied: ${appliedTimed.length} — تاریخچه دست‌نخورده می‌ماند)`)
++
++    log('\n=== ۳) کمپین‌های پیش‌فرض timed_sale با تخفیف ≤ ۵٪ ===')
++    const { rows: campaigns } = await client.query(SELECT_CAMPAIGNS)
++    report.campaigns = campaigns
++    log(`تعداد: ${campaigns.length}`)
+ 
+     if (!APPLY) {
+-      console.log("🛑 حالت DRY-RUN: هیچ تغییری در PostgreSQL/MongoDB/کش اعمال نشد.");
+-      console.log("برای اجرای واقعی، اسکریپت را با آرگومان --apply اجرا کنید (فقط پس از بکاپ و بازبینی خروجی).");
+-      return;
++      report.actions = {
++        message: 'DRY-RUN: هیچ تغییری در PostgreSQL/MongoDB/کش اعمال نشد. برای اجرا --apply بدهید.',
++      }
++      log('\n🛑 حالت DRY-RUN: هیچ تغییری اعمال نشد.')
++      emit(report)
++      return
+     }
+ 
+-    // ۲. پاک‌سازی در PostgreSQL
+-    await client.query(`
+-      UPDATE products
+-      SET current_campaign = 'none',
+-          current_campaign_name = NULL,
+-          current_discount_pct = 0,
+-          current_show_in_featured = false,
+-          torob_prk = CASE WHEN cost_price <= 0 THEN NULL ELSE torob_prk END,
+-          torob_details_url = CASE WHEN cost_price <= 0 THEN NULL ELSE torob_details_url END,
+-          auto_apply = CASE WHEN cost_price <= 0 THEN false ELSE auto_apply END,
+-          status = 'active',
+-          updated_at = NOW()
+-      WHERE current_campaign = 'timed_sale' OR cost_price <= 0
+-    `);
+-
+-    await client.query(`
+-      UPDATE price_decisions
+-      SET campaign_type = 'none',
+-          campaign_name = NULL,
+-          show_in_featured = false,
+-          status = CASE WHEN status = 'applied' THEN 'rejected' ELSE status END
+-      WHERE campaign_type = 'timed_sale'
+-    `);
+-
+-    // غیرفعال کردن کمپین پیش‌فرض timed_sale با تخفیف ۳٪ تا دوباره خودکار فعال نشود
+-    await client.query(`
+-      UPDATE discount_campaigns
+-      SET active = false,
+-          min_discount_pct = 10,
+-          card_range_from = 21,
+-          card_range_to = 50
+-      WHERE type = 'timed_sale' AND min_discount_pct <= 5
+-    `);
+-
+-    console.log("✅ دیتابیس PostgreSQL پاک‌سازی شد (current_campaign='none' و auto_apply=false برای کالاهای بدون قیمت خرید).");
+-
+-    // ۳. پاک‌سازی کمپین Sale در MongoDB فروشگاه (ekgkala-backend)
+-    const mongoUri = beEnv.MONGODB_URI || process.env.MONGODB_URI;
+-    if (mongoUri && fs.existsSync(path.join(EKGKALA_BACKEND_DIR, "models/Sale.js"))) {
+-      console.log("=== ۲. پاک‌سازی کمپین‌های Sale هوشمند در MongoDB فروشگاه ===");
+-      await mongoose.connect(mongoUri);
+-      const Sale = require(path.join(EKGKALA_BACKEND_DIR, "models/Sale"));
+-      const delRes = await Sale.deleteMany({
+-        autoManaged: true,
+-        name: { $in: ["فروش ویژه زمان‌دار (مالی و تخفیف + منتخب‌ها)", "فروش ویژه هوشمند", "فروش ویژه مشهد"] },
+-      });
+-      console.log(`✅ تعداد کمپین‌های Sale خودکار حذف‌شده از MongoDB: ${delRes.deletedCount}`);
+-      await mongoose.disconnect();
++    log('\n=== ۴) اعمال تراکنشی پاک‌سازی (PostgreSQL) ===')
++    await client.query('BEGIN')
++    try {
++      // A) فقط کارت‌های timed_sale؛ status محصول و لینک ترب دست‌نخورده می‌ماند.
++      const campaignCleanup = await client.query(UPDATE_PRODUCT_CAMPAIGN)
++
++      // B) فقط محصولات بدون قیمت خرید که PRK ترب دارند (همان شرط SELECT).
++      const torobCleanup = await client.query(UPDATE_PRODUCT_NO_COST)
++
++      // C) تصمیم‌های غیر-applied فقط برچسب کمپینشان پاک می‌شود. status هرگز بازنویسی نمی‌شود.
++      const decisionsCleanup = await client.query(UPDATE_DECISIONS)
++
++      const campaignSetting = await client.query(UPDATE_CAMPAIGN_SETTINGS)
++
++      await client.query('COMMIT')
++      report.actions = {
++        productsCampaignCleaned: campaignCleanup.rowCount,
++        productsNoCostTorobCleaned: torobCleanup.rowCount,
++        decisionsCampaignCleared: decisionsCleanup.rowCount,
++        campaignsDisabled: campaignSetting.rowCount,
++      }
++      log(`✅ محصولات timed_sale: ${campaignCleanup.rowCount}`)
++      log(`✅ محصولات بدون قیمت خرید (PRK پاک شد): ${torobCleanup.rowCount}`)
++      log(`✅ تصمیم‌های غیر-applied (برچسب کمپین پاک شد، status حفظ شد): ${decisionsCleanup.rowCount}`)
++      log(`✅ کمپین پیش‌فرض timed_sale غیرفعال شد: ${campaignSetting.rowCount}`)
++    } catch (error) {
++      await client.query('ROLLBACK')
++      throw error
+     }
+ 
+-    // ۴. حذف کش قفل ضدربات (Wall) در torob-mcp
+-    const cacheDirs = [
+-      path.join(os.homedir(), ".cache", "torob-mcp"),
+-      "/tmp/torob-mcp-cache",
+-      "/home/debian/.cache/torob-mcp",
+-    ];
+-    for (const dir of cacheDirs) {
+-      if (fs.existsSync(dir)) {
+-        fs.rmSync(dir, { recursive: true, force: true });
+-        console.log(`✅ کش قفل ضدربات torob-mcp پاک شد: ${dir}`);
++    // ۵) MongoDB: حذف/غیرفعال‌سازی فقط Saleهای autoManaged با نام‌های مشخص.
++    const mongoUri = beEnv.MONGODB_URI || process.env.MONGODB_URI
++    if (MONGO_MODE === 'skip') {
++      log('\n⏭️ پاک‌سازی MongoDB به‌درخواست رد شد (--mongo-mode=skip).')
++      report.mongo = { mode: 'skip' }
++    } else if (mongoUri && fs.existsSync(path.join(EKGKALA_BACKEND_DIR, 'models', 'Sale.js'))) {
++      log(`\n=== ۵) Saleهای خودکار مرتبط (MongoDB، حالت ${MONGO_MODE}) ===`)
++      const mongoose = require(require.resolve('mongoose', { paths: [EKGKALA_BACKEND_DIR] }))
++      await mongoose.connect(mongoUri)
++      try {
++        const Sale = require(path.join(EKGKALA_BACKEND_DIR, 'models', 'Sale'))
++        const filter = { autoManaged: true, name: { $in: TIMED_SALE_NAMES } }
++        const matched = await Sale.countDocuments(filter)
++        let affected = 0
++        if (MONGO_MODE === 'delete') {
++          const res = await Sale.deleteMany(filter)
++          affected = res.deletedCount || 0
++        } else if (MONGO_MODE === 'deactivate') {
++          const res = await Sale.updateMany(filter, { $set: { isActive: false } })
++          affected = res.modifiedCount || 0
++        } else {
++          throw new Error(`--mongo-mode نامعتبر: ${MONGO_MODE}`)
++        }
++        report.mongo = { mode: MONGO_MODE, matched, affected }
++        log(`✅ Saleهای autoManaged: ${matched} تطبیق، ${affected} تحت تأثیر (${MONGO_MODE}).`)
++      } finally {
++        await mongoose.disconnect()
+       }
++    } else {
++      log('\n⏭️ MongoDB/MONGODB_URI یا مدل Sale در دسترس نیست؛ مرحله Mongo رد شد.')
++      report.mongo = { mode: 'unavailable' }
+     }
++
++    // ۶) کش قفل ضدربات torob-mcp (اختیاری با --no-cache خاموش می‌شود).
++    if (!SKIP_CACHE) {
++      const cacheDirs = [
++        path.join(os.homedir(), '.cache', 'torob-mcp'),
++        '/tmp/torob-mcp-cache',
++        path.join(EKGKALA_BACKEND_DIR, '.cache', 'torob-mcp'),
++      ]
++      for (const dir of [...new Set(cacheDirs)]) {
++        if (!fs.existsSync(dir)) continue
++        fs.rmSync(dir, { recursive: true, force: true })
++        report.cache.push(dir)
++        log(`✅ کش torob-mcp پاک شد: ${dir}`)
++      }
++    }
++
++    report.actions.message = 'APPLY: پاک‌سازی انجام شد.'
++    emit(report)
+   } finally {
+-    client.release();
+-    await pool.end();
++    client.release()
++    await pool.end()
+   }
+ }
+ 
+ main().catch((err) => {
+-  console.error("Cleanup failed:", err);
+-  process.exit(1);
+-});
++  if (AS_JSON) console.log(JSON.stringify({ error: err.message }, null, 2))
++  console.error('Cleanup failed:', err.message)
++  process.exit(1)
++})
+diff --git a/scripts/lib/timed-sale-cleanup.cjs b/scripts/lib/timed-sale-cleanup.cjs
+new file mode 100644
+index 0000000..d7983be
+--- /dev/null
++++ b/scripts/lib/timed-sale-cleanup.cjs
+@@ -0,0 +1,81 @@
++/**
++ * ۴.۱.۲ (N2) — SQLهای پاک‌سازی timed_sale در یک ماژول خالص.
++ *
++ * قاعده‌ی ایمنی که با تست محافظت می‌شود:
++ *  - UPDATE محصولات timed_sale فقط همان ردیف‌ها را می‌گیرد.
++ *  - UPDATE پاک‌سازی ترب دقیقاً همان شرط SELECT است: cost_price = 0 AND torob_prk IS NOT NULL.
++ *  - هیچ UPDATE‌ای status تصمیم‌ها را بازنویسی نمی‌کند (تاریخچه دست‌نخورده).
++ */
++const SELECT_PRODUCTS = `
++  SELECT id, sku, name, cost_price, torob_prk, current_campaign, current_campaign_name,
++         current_discount_pct, current_base_price, current_final_price
++  FROM products
++  WHERE current_campaign = 'timed_sale'
++     OR (cost_price = 0 AND torob_prk IS NOT NULL)
++  ORDER BY id ASC
++`
++
++const SELECT_DECISIONS = `
++  SELECT d.id, d.product_id, p.sku, p.name, d.status, d.campaign_type, d.campaign_name,
++         d.base_price, d.final_price, d.discount_pct
++  FROM price_decisions d
++  JOIN products p ON p.id = d.product_id
++  WHERE d.campaign_type = 'timed_sale'
++  ORDER BY d.id DESC
++`
++
++const SELECT_CAMPAIGNS = `
++  SELECT id, name, type, active, min_discount_pct, card_range_from, card_range_to
++  FROM discount_campaigns
++  WHERE type = 'timed_sale' AND min_discount_pct <= 5 AND active = true
++  ORDER BY id ASC
++`
++
++// A) فقط کارت‌های timed_sale؛ status محصول و لینک ترب دست‌نخورده می‌ماند.
++const UPDATE_PRODUCT_CAMPAIGN = `
++  UPDATE products
++  SET current_campaign = 'none',
++      current_campaign_name = NULL,
++      current_discount_pct = 0,
++      current_show_in_featured = false,
++      updated_at = NOW()
++  WHERE current_campaign = 'timed_sale'
++`
++
++// B) فقط محصولات بدون قیمت خرید که PRK ترب دارند (همان شرط SELECT).
++const UPDATE_PRODUCT_NO_COST = `
++  UPDATE products
++  SET torob_prk = NULL,
++      torob_details_url = NULL,
++      auto_apply = false,
++      updated_at = NOW()
++  WHERE cost_price = 0 AND torob_prk IS NOT NULL
++`
++
++// C) تصمیم‌های غیر-applied فقط برچسب کمپینشان پاک می‌شود. status هرگز بازنویسی نمی‌شود.
++const UPDATE_DECISIONS = `
++  UPDATE price_decisions
++  SET campaign_type = 'none',
++      campaign_name = NULL,
++      show_in_featured = false
++  WHERE campaign_type = 'timed_sale' AND status <> 'applied'
++`
++
++const UPDATE_CAMPAIGN_SETTINGS = `
++  UPDATE discount_campaigns
++  SET active = false,
++      min_discount_pct = 10,
++      card_range_from = 21,
++      card_range_to = 50
++  WHERE type = 'timed_sale' AND min_discount_pct <= 5 AND active = true
++`
++
++module.exports = {
++  SELECT_PRODUCTS,
++  SELECT_DECISIONS,
++  SELECT_CAMPAIGNS,
++  UPDATE_PRODUCT_CAMPAIGN,
++  UPDATE_PRODUCT_NO_COST,
++  UPDATE_DECISIONS,
++  UPDATE_CAMPAIGN_SETTINGS,
++}
+diff --git a/scripts/migrate.cjs b/scripts/migrate.cjs
+new file mode 100644
+index 0000000..4c6e3b6
+--- /dev/null
++++ b/scripts/migrate.cjs
+@@ -0,0 +1,148 @@
++#!/usr/bin/env node
++/**
++ * ۴.۱.۲ — اجراکننده‌ی مهاجرت‌های SQL با ردیابی، dry-run و مسیر قابل‌تطبیق.
++ *
++ * چرا: دستور ممیزی «psql "$DATABASE_URL" -f drizzle/0001..." به مسیر/محیط خاص وابسته
++ * بود و معلوم نمی‌شد کدام فایل قبلاً اجرا شده. این اسکریپت:
++ *  - همه‌ی فایل‌های drizzle/NNNN_*.sql را به ترتیب اجرا می‌کند؛
++ *  - در جدول schema_migrations (filename, checksum, applied_at) ثبت می‌کند؛
++ *  - اگر فایل تغییر کرده باشد هشدار drift می‌دهد و دوباره اجرا نمی‌کند؛
++ *  - تراکنش/قفل advisory دارد و dry-run پیش‌فرضِ --status است.
++ *
++ * استفاده:
++ *   node scripts/migrate.cjs --dry-run
++ *   node scripts/migrate.cjs
++ *   node scripts/migrate.cjs --file 0002_v412_audit_fixes.sql
++ *   node scripts/migrate.cjs --to 0001
++ *   node scripts/migrate.cjs --baseline --to=0001   # فقط ثبت وضعیت فعلی تا ۰۰۰۱ (بدون اجرا)
++ *                                                   # سپس ۰۰۰۲ را با --file اجرا کنید
++ *   node scripts/migrate.cjs --json
++ *
++ * env: DATABASE_URL
++ */
++const crypto = require('crypto')
++const fs = require('fs')
++const path = require('path')
++
++require('dotenv').config({ path: path.join(__dirname, '..', '.env') })
++
++const MIGRATIONS_DIR = path.join(__dirname, '..', 'drizzle')
++const argv = process.argv.slice(2)
++const DRY = argv.includes('--dry-run') || argv.includes('--status')
++const BASELINE = argv.includes('--baseline')
++const AS_JSON = argv.includes('--json')
++const fileArg = argv.find((a) => a.startsWith('--file='))
++const toArg = argv.find((a) => a.startsWith('--to='))
++
++const maskUrl = (value) => String(value || '').replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@')
++
++function listMigrations() {
++  if (!fs.existsSync(MIGRATIONS_DIR)) throw new Error(`پوشه‌ی مهاجرت پیدا نشد: ${MIGRATIONS_DIR}`)
++  return fs
++    .readdirSync(MIGRATIONS_DIR)
++    .filter((name) => /^\d{4}_.+\.sql$/.test(name))
++    .sort()
++    .map((name) => {
++      const full = path.join(MIGRATIONS_DIR, name)
++      const sql = fs.readFileSync(full, 'utf8')
++      return { name, full, sql, checksum: crypto.createHash('sha256').update(sql).digest('hex').slice(0, 16) }
++    })
++}
++
++function selectMigrations(all) {
++  let selected = all
++  if (fileArg) {
++    const wanted = fileArg.split('=')[1]
++    selected = all.filter((m) => m.name === wanted || m.name.startsWith(wanted))
++    if (!selected.length) throw new Error(`فایل مهاجرت پیدا نشد: ${wanted}`)
++  }
++  if (toArg) {
++    const to = toArg.split('=')[1]
++    const index = all.findIndex((m) => m.name === to || m.name.startsWith(to))
++    if (index < 0) throw new Error(`--to پیدا نشد: ${to}`)
++    selected = selected.filter((m) => all.indexOf(m) <= index)
++  }
++  return selected
++}
++
++async function main() {
++  const url = process.env.DATABASE_URL
++  if (!url) throw new Error('DATABASE_URL در .env یا محیط یافت نشد')
++  const migrations = selectMigrations(listMigrations())
++
++  const { Pool } = require('pg')
++  const pool = new Pool({ connectionString: url })
++  const client = await pool.connect()
++  const output = { database: maskUrl(url), dryRun: DRY, baseline: BASELINE, migrations: [] }
++
++  try {
++    await client.query(`
++      CREATE TABLE IF NOT EXISTS schema_migrations (
++        filename text PRIMARY KEY,
++        checksum text NOT NULL,
++        applied_at timestamptz NOT NULL DEFAULT NOW()
++      )
++    `)
++    const { rows: applied } = await client.query('SELECT filename, checksum, applied_at FROM schema_migrations')
++    const appliedMap = new Map(applied.map((r) => [r.filename, r]))
++
++    await client.query("SELECT pg_advisory_lock(hashtext('pricing_schema_migrations'))")
++    try {
++      for (const m of migrations) {
++        const prev = appliedMap.get(m.name)
++        let action = 'apply'
++        if (prev) action = prev.checksum === m.checksum ? 'already-applied' : 'drift'
++        if (BASELINE) action = prev ? 'already-applied' : 'baseline-record'
++        if (DRY && action === 'apply') action = 'would-apply'
++        output.migrations.push({ name: m.name, checksum: m.checksum, action, appliedAt: prev?.applied_at || null })
++
++        if (action === 'already-applied' || action === 'drift' || action === 'would-apply') continue
++        if (action === 'baseline-record') {
++          if (!DRY) {
++            await client.query('INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)', [m.name, m.checksum])
++          }
++          continue
++        }
++        if (DRY) continue
++
++        // فایل‌های ما BEGIN/COMMIT دارند؛ اگر نداشتند خودمان تراکنش می‌سازیم.
++        const hasTx = /\bBEGIN\b/i.test(m.sql) && /\bCOMMIT\b/i.test(m.sql)
++        try {
++          if (!hasTx) await client.query('BEGIN')
++          await client.query(m.sql)
++          if (!hasTx) {
++            await client.query('INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)', [m.name, m.checksum])
++            await client.query('COMMIT')
++          } else {
++            await client.query('INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)', [m.name, m.checksum])
++          }
++        } catch (error) {
++          try { await client.query('ROLLBACK') } catch { /* ignore */ }
++          throw new Error(`${m.name}: ${error.message}`)
++        }
++      }
++    } finally {
++      await client.query("SELECT pg_advisory_unlock(hashtext('pricing_schema_migrations'))")
++    }
++
++    if (AS_JSON) {
++      console.log(JSON.stringify(output, null, 2))
++    } else {
++      console.log(`دیتابیس: ${output.database} | حالت: ${DRY ? 'DRY-RUN' : BASELINE ? 'BASELINE' : 'APPLY'}`)
++      for (const m of output.migrations) console.log(`  ${m.name}  →  ${m.action}`)
++      const pending = output.migrations.filter((m) => m.action === 'would-apply' || m.action === 'apply').length
++      const drift = output.migrations.filter((m) => m.action === 'drift').length
++      console.log(`جمع: ${pending} در انتظار اجرا${drift ? ` | ${drift} drift (فایل پس از اجرا تغییر کرده)` : ''}`)
++    }
++    if (output.migrations.some((m) => m.action === 'drift')) process.exitCode = 2
++  } finally {
++    client.release()
++    await pool.end()
++  }
++}
++
++main().catch((error) => {
++  if (AS_JSON) console.log(JSON.stringify({ error: error.message }, null, 2))
++  console.error('migrate failed:', error.message)
++  process.exit(1)
++})
+diff --git a/scripts/verify-release.cjs b/scripts/verify-release.cjs
+new file mode 100644
+index 0000000..404057a
+--- /dev/null
++++ b/scripts/verify-release.cjs
+@@ -0,0 +1,109 @@
++#!/usr/bin/env node
++/**
++ * ۴.۱.۲ — صحت‌سنجی قابل‌تطبیق پیش از استقرار.
++ *
++ * بدون وابستگی به مسیر/سیستم‌عامل خاص:
++ *  - typecheck موتور قیمت‌گذاری
++ *  - تست موتور (node --test)
++ *  - تست فروشگاه (npm test) اگر ریپوی فروشگاه پیدا شود
++ *  - اختیاری: dry-run مهاجرت PostgreSQL و گزارش کف‌های کهنه MongoDB
++ *
++ * استفاده:
++ *   node scripts/verify-release.cjs                 # همه‌ی بررسی‌های کد
++ *   node scripts/verify-release.cjs --quick         # بدون تست فروشگاه
++ *   node scripts/verify-release.cjs --db            # + dry-run مهاجرت
++ *   node scripts/verify-release.cjs --mongo         # + گزارش کف‌های کهنه
++ *   node scripts/verify-release.cjs --store-dir=/path/to/ekgkala-backend
++ */
++const { spawnSync } = require('child_process')
++const fs = require('fs')
++const path = require('path')
++
++require('dotenv').config({ path: path.join(__dirname, '..', '.env') })
++
++const ROOT = path.resolve(__dirname, '..')
++const argv = new Set(process.argv.slice(2))
++const QUICK = argv.has('--quick')
++const WITH_DB = argv.has('--db')
++const WITH_MONGO = argv.has('--mongo')
++const storeArg = [...argv].find((a) => a.startsWith('--store-dir='))
++const STORE_CANDIDATES = [
++  storeArg ? storeArg.split('=')[1] : null,
++  process.env.EKGKALA_BACKEND_DIR,
++  path.resolve(ROOT, '..', 'sgeooole', 'ekgkala-backend'),
++  path.resolve(ROOT, '..', 'ekgkala-project', 'ekgkala-backend'),
++  '/home/debian/apps/ekgkala-project/ekgkala-backend',
++].filter(Boolean)
++const STORE_DIR = STORE_CANDIDATES.find((dir) => fs.existsSync(path.join(dir, 'package.json')))
++
++const results = []
++function run(name, command, args, options = {}) {
++  const started = Date.now()
++  const res = spawnSync(command, args, {
++    cwd: options.cwd || ROOT,
++    stdio: 'inherit',
++    // فقط npm (که روی ویندوز npm.cmd است) به shell نیاز دارد؛ node.exe مسیرش فاصله دارد
++    // و با shell=true تکه‌تکه می‌شود.
++    shell: Boolean(options.shell),
++    env: { ...process.env, ...(options.env || {}) },
++  })
++  const ok = res.status === 0
++  results.push({ name, ok, ms: Date.now() - started, code: res.status })
++  return ok
++}
++
++function note(name, ok, detail = '') {
++  results.push({ name, ok, ms: 0, detail })
++}
++
++function main() {
++  console.log('=== ۴.۱.۲ verify-release ===')
++  console.log(`ریپوی موتور: ${ROOT}`)
++  console.log(`ریپوی فروشگاه: ${STORE_DIR || 'پیدا نشد (با --store-dir بدهید)'}`)
++
++  const tsc = path.join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
++  if (!fs.existsSync(tsc)) {
++    note('pricing typecheck', false, 'typescript نصب نیست (npm install)')
++  } else {
++    run('pricing typecheck', process.execPath, [tsc, '--noEmit', '--pretty', 'false'])
++  }
++
++  if (!run('pricing tests', process.execPath, ['--test', 'tests/pricing-engine.test.cjs', 'tests/cleanup-script-safety.test.cjs', 'tests/migration-safety.test.cjs'])) {
++    // ادامه می‌دهیم تا همه‌ی خرابی‌ها یک‌جا دیده شوند
++  }
++
++  if (!QUICK && STORE_DIR && fs.existsSync(path.join(STORE_DIR, 'tests'))) {
++    if (process.platform === 'win32') {
++      // npm.cmd با shell=true هشدار deprecation می‌دهد؛ cmd مستقیم امن‌تر است.
++      run('store tests', process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm test'], { cwd: STORE_DIR })
++    } else {
++      run('store tests', 'npm', ['test'], { cwd: STORE_DIR })
++    }
++  } else if (!QUICK) {
++    note('store tests', false, 'ریپوی فروشگاه پیدا نشد')
++  }
++
++  if (WITH_DB) {
++    if (!process.env.DATABASE_URL) note('db migrate dry-run', false, 'DATABASE_URL تنظیم نشده')
++    else run('db migrate dry-run', process.execPath, ['scripts/migrate.cjs', '--dry-run'])
++  }
++
++  if (WITH_MONGO && STORE_DIR) {
++    const script = path.join(STORE_DIR, 'scripts', 'report-stale-floors.cjs')
++    if (!fs.existsSync(script)) note('stale floors', false, 'اسکریپت گزارش کف‌های کهنه پیدا نشد')
++    else run('stale floors', process.execPath, [script, '--json'], { cwd: STORE_DIR })
++  }
++
++  console.log('\n=== خلاصه ===')
++  for (const r of results) {
++    console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ms ? ` (${r.ms}ms)` : ''}${r.detail ? ` — ${r.detail}` : ''}`)
++  }
++  const failed = results.filter((r) => !r.ok)
++  if (failed.length) {
++    console.error(`\n${failed.length} بررسی ناموفق.`)
++    process.exit(1)
++  }
++  console.log('\nهمه‌ی بررسی‌ها سبز شد ✅')
++}
++
++main()
+diff --git a/src/app/review/page.tsx b/src/app/review/page.tsx
+index 3c9d4dd..991569c 100644
+--- a/src/app/review/page.tsx
++++ b/src/app/review/page.tsx
+@@ -37,6 +37,14 @@ export default async function ReviewPage() {
+         const reasons = steps.find((s) => s.step === "decision")?.message ?? "";
+         const supMsg = steps.find((s) => s.step === "supervisor")?.message;
+         const aiMsg = steps.find((s) => s.step === "ai_review")?.message;
++        // ۴.۱.۲ (N5): رتبه‌ی رسمی فقط روی فروشنده‌های قابل‌اتکاست؛ رتبه‌ی «با احتساب
++        // فروشنده‌های مشکوک/کهنه» کنارش نمایش داده می‌شود تا ریویوور بداند آیا ارزان‌فروش
++        // تازه‌ای زیر قیمت ما هست یا نه. برای تصمیم‌های قدیمی از steps می‌خوانیم.
++        const positionStep = steps.find((s) => s.step === "position");
++        const rankIncludingSuspect =
++          d.rankIncludingSuspect ?? (Number(positionStep?.data?.rankIncludingSuspect) || null);
++        const totalIncludingSuspect =
++          d.totalSellersIncludingSuspect || Number(positionStep?.data?.totalSellersIncludingSuspect) || 0;
+         return (
+           <div key={d.id} className="card">
+             <div className="flex flex-wrap items-start justify-between gap-3">
+@@ -50,14 +58,24 @@ export default async function ReviewPage() {
+               </div>
+               <DecisionActions decisionId={d.id} />
+             </div>
+-            <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-6">
++            <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-7">
+               <Item k="تمام‌شده" v={toman(cost)} />
+               <Item k="قیمت فعلی" v={toman(current)} />
+               <Item k="مرجع بازار" v={toman(d.referencePrice)} />
+               <Item k="پیشنهاد: اصلی" v={toman(d.basePrice)} />
+               <Item k="پیشنهاد: نهایی" v={toman(d.finalPrice)} strong />
+               <Item k="تخفیف / کمپین" v={`${pct(d.discountPct)} · ${campaignLabel[d.campaignType ?? "none"]}`} />
++              <Item
++                k="رتبه ملی / با مشکوک"
++                v={`${d.projectedNationalRank ?? "—"} / ${rankIncludingSuspect ?? "—"} از ${totalIncludingSuspect || "—"}`}
++              />
+             </div>
++            {d.marketConflict && (
++              <p className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-800">
++                ⚠️ تعارض بازار: فروشنده‌ی «مشکوک پایین» زیر قیمت پیشنهادی ما هست — پیش از تأیید، رتبه‌ی ستون
++                «با مشکوک» را با رتبه‌ی رسمی مقایسه کنید.
++              </p>
++            )}
+             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{reasons}</p>
+             {supMsg && <p className="mt-2 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-900">🛡️ ناظر: {supMsg}</p>}
+             {aiMsg && <p className="mt-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-700">🤖 هوش مصنوعی: {aiMsg}</p>}
+diff --git a/src/components/settings-panels.tsx b/src/components/settings-panels.tsx
+index ec424be..2c835d0 100644
+--- a/src/components/settings-panels.tsx
++++ b/src/components/settings-panels.tsx
+@@ -71,6 +71,7 @@ const labels: Record<string, string> = {
+   minConfidenceAutoApply: "حداقل اعتماد برای اعمال خودکار (0-1)",
+   minValidOffers: "حداقل پیشنهاد معتبر",
+   hysteresisPct: "آستانه هیسترزیس (جلوگیری از نوسان جزئی) ٪",
++  profitApproveMarginPct: "حداقل حاشیه سود برای اعمال خودکار ٪ (۰ = هر قیمت بالای کف سود؛ بیشتر = ریویو)",
+   discount: "۷) کشف سقف واقعی بازار (معیار تخفیف) و اعمال درصد تخفیف روی کف",
+   mode: "روش کشف سقف قیمت بازار (معیار تخفیف)",
+   basePriceMode: "روش پایه سنتی (سازگاری)",
+diff --git a/src/db/schema.ts b/src/db/schema.ts
+index f3abd79..15563d9 100644
+--- a/src/db/schema.ts
++++ b/src/db/schema.ts
+@@ -46,7 +46,11 @@ export const products = pgTable(
+     torobDetailsUrl: text("torob_details_url"),
+     /** قیمت تمام‌شده پایه/دستی (تومان) */
+     costPrice: integer("cost_price").default(0).notNull(),
+-    /** آخرین قیمت خرید جایگزینِ تاییدشده از لیست همکار (M2 — قیمت باز خرید در تاریخ …) */
++    /**
++     * آخرین قیمت خرید جایگزینِ تاییدشده از لیست همکار (M2 — قیمت باز خرید در تاریخ …).
++     * فقط گزارشی است و موتور هیچ‌جا آن را به‌عنوان مبنای قیمت نمی‌خواند (منبع زنده،
++     * supplierQuotes است)؛ در UI به‌عنوان «قیمت جایگزینی قطعی» نمایش داده نشود.
++     */
+     replacementCost: integer("replacement_cost"),
+     replacementCostAt: timestamp("replacement_cost_at"),
+     /** پایان کمپین مجاز تخفیف site (برای پیوستگی تایمر) */
+@@ -145,6 +149,9 @@ export const priceDecisions = pgTable(
+     competitionTier: varchar("competition_tier", { length: 40 }),
+     projectedNationalRank: integer("projected_national_rank"),
+     projectedLocalRank: integer("projected_local_rank"),
++    /** رتبه با احتساب فروشنده‌های مشکوک/کهنه (برای نمایش کنار رتبه‌ی رسمی در صف بازبینی) */
++    rankIncludingSuspect: integer("rank_including_suspect"),
++    totalSellersIncludingSuspect: integer("total_sellers_including_suspect").default(0).notNull(),
+     netProfitToman: integer("net_profit_toman"),
+     netMarginPct: real("net_margin_pct"),
+     confidence: real("confidence").default(0).notNull(),
+@@ -163,7 +170,12 @@ export const priceDecisions = pgTable(
+     pushedAt: timestamp("pushed_at"),
+     createdAt: timestamp("created_at").defaultNow().notNull(),
+   },
+-  (t) => [index("decisions_product_idx").on(t.productId), index("decisions_run_idx").on(t.runId)],
++  (t) => [
++    index("decisions_product_idx").on(t.productId),
++    index("decisions_run_idx").on(t.runId),
++    // هم‌نام با ایندکس SQL مهاجرت؛ بدون این تعریف drizzle-kit push آن را drift می‌دید (N3).
++    index("decisions_push_recovery_idx").on(t.status, t.pushStatus, t.createdAt),
++  ],
+ );
+ 
+ /** پیشنهادهای رقبا (اسنپ‌شات ترب شامل شهر فروشنده و نوع آنلاین/حضوری) برای هر تصمیم */
+diff --git a/src/lib/pricing/approval.ts b/src/lib/pricing/approval.ts
+new file mode 100644
+index 0000000..72afed3
+--- /dev/null
++++ b/src/lib/pricing/approval.ts
+@@ -0,0 +1,44 @@
++/**
++ * ۴.۱.۲ — گیت حداقل حاشیه برای «اعمال خودکار».
++ *
++ * پیش‌فرض profitApproveMarginPct=0 یعنی رفتار ۴.۱.۱: هر قیمت بالای کف سود، اگر
++ * ناظر/گاردها ریویو نخواسته باشند، خودکار اعمال می‌شود. اگر اپراتور عددی مثبت
++ * بگذارد، حاشیه‌ی کمتر از آن به صف بازبینی می‌رود. این تابع خالص است تا بدون
++ * دیتابیس تست شود و منطق runner/گزارش یکسان بماند.
++ */
++export interface ApproveMarginInput {
++  approveMarginPct: number
++  netMarginPct: number
++  strictlyAboveCost: boolean
++  autoApply: boolean
++  needsReview: boolean
++  rejectedBySupervisor: boolean
++  isProvisional: boolean
++  hasPrice: boolean
++}
++
++export interface ApproveMarginResult {
++  needsReview: boolean
++  reason: string | null
++}
++
++export function evaluateApproveMargin(input: ApproveMarginInput): ApproveMarginResult {
++  const threshold = Math.max(0, Number(input.approveMarginPct) || 0)
++  const margin = Number(input.netMarginPct) || 0
++  if (
++    threshold <= 0 ||
++    !input.hasPrice ||
++    !input.strictlyAboveCost ||
++    !input.autoApply ||
++    input.needsReview ||
++    input.rejectedBySupervisor ||
++    input.isProvisional
++  ) {
++    return { needsReview: false, reason: null }
++  }
++  if (margin >= threshold) return { needsReview: false, reason: null }
++  return {
++    needsReview: true,
++    reason: `حاشیه‌ی سود ${margin.toFixed(1)}% کمتر از حد تأیید خودکار ${threshold}% است — نیازمند بازبینی`,
++  }
++}
+diff --git a/src/lib/pricing/types.ts b/src/lib/pricing/types.ts
+index 891480f..7ec785d 100644
+--- a/src/lib/pricing/types.ts
++++ b/src/lib/pricing/types.ts
+@@ -335,6 +335,11 @@ export interface PricingProfileConfig {
+     hysteresisPct: number;
+     /** حداقل نسبت پیشنهادهای «به‌روز» (fresh) از کل معتبرها — رد آن → review نه reject */
+     minFreshRatio: number;
++    /**
++     * ۴.۱.۲: حداقل حاشیه‌ی سود (٪) برای اعمال خودکار. ۰ = رفتار قبلی (هر قیمت بالای کف سود).
++     * اگر مثبت باشد، تصمیم‌های با حاشیه‌ی کمتر از این عدد به‌جای applied به pending_review می‌روند.
++     */
++    profitApproveMarginPct: number;
+   };
+   /** ---------- ۷) کشف «سقف و کف اصولی بازار» و سیستم تخفیف سهگانه sgeooole ---------- */
+   discount: {
+@@ -389,8 +394,13 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
+     defaultOverheadPct: 0.5,
+     defaultNonLocalShippingToman: 0,
+     staleSafetyBufferPct: 2.5,
++    // M2: neverBelowManualCost فقط نام قدیمی «کف از هزینه‌ی انبار» است؛ منبع حقیقت
++    // costPolicy است. پیش‌فرض ۴.۱.۲ محافظه‌کارانه است تا این دو فیلد متناقض نباشند:
++    // max_inventory_replacement یعنی هیچ‌گاه زیر max(هزینه انبار، ریپلیس) فروش نکن.
++    // اگر می‌خواهید برای رقابت، ریپلیس ارزان‌تر ملاک باشد، costPolicy را در تنظیمات
++    // به replacement_floor تغییر دهید (و neverBelowManualCost را false کنید).
+     neverBelowManualCost: true,
+-    costPolicy: "replacement_floor",
++    costPolicy: "max_inventory_replacement",
+     allowAutoApplyWithoutCost: false,
+     costlessSafePercentile: 55,
+     costlessSafetyMarginPct: 1.0,
+@@ -462,6 +472,8 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
+     minValidOffers: 2,
+     hysteresisPct: 0.15,
+     minFreshRatio: 0.3,
++    // ۰ = سازگاری کامل با ۴.۱.۱؛ برای محافظه‌کاری بیشتر مثلاً ۵ بگذارید.
++    profitApproveMarginPct: 0,
+   },
+   discount: {
+     mode: "market_percentile_ceiling",
+diff --git a/src/lib/services/bootstrap.ts b/src/lib/services/bootstrap.ts
+index da2e58e..74ac997 100644
+--- a/src/lib/services/bootstrap.ts
++++ b/src/lib/services/bootstrap.ts
+@@ -116,12 +116,40 @@ export async function getProfileConfig(profileId?: number | null): Promise<{ id:
+   await ensureDefaults();
+   if (profileId) {
+     const r = await db.select().from(pricingProfiles).where(eq(pricingProfiles.id, profileId)).limit(1);
+-    if (r[0]) return { id: r[0].id, config: mergeConfig(r[0].config) };
++    if (r[0]) return withProfileAudit(r[0].id, r[0].config);
+   }
+   const d = await db.select().from(pricingProfiles).where(eq(pricingProfiles.isDefault, true)).limit(1);
+-  if (d[0]) return { id: d[0].id, config: mergeConfig(d[0].config) };
++  if (d[0]) return withProfileAudit(d[0].id, d[0].config);
+   const any = await db.select().from(pricingProfiles).limit(1);
+-  return { id: any[0].id, config: mergeConfig(any[0].config) };
++  return withProfileAudit(any[0].id, any[0].config);
++}
++
++const auditedProfileIds = new Set<number>()
++
++function withProfileAudit(id: number, partial: Partial<PricingProfileConfig> | null | undefined) {
++  const config = mergeConfig(partial)
++  const conflicts = findConfigConflicts(config)
++  if (conflicts.length && !auditedProfileIds.has(id)) {
++    auditedProfileIds.add(id)
++    const message = `پروفایل ${id}: ${conflicts.map((c) => c.message).join(" | ")}`
++    console.warn(`[PRICING-PROFILE] ${message}`)
++    void logActivity("profile", message, { profileId: id, conflicts }, "warn")
++  }
++  return { id, config }
++}
++
++/** تعارض‌های قابل‌تشخیص در پروفایل ذخیره‌شده (بدون تغییر خودکار). */
++export function findConfigConflicts(config: PricingProfileConfig): { code: string; message: string }[] {
++  const conflicts: { code: string; message: string }[] = []
++  const s = config.sourcing
++  if (s.costPolicy === "replacement_floor" && s.neverBelowManualCost === true) {
++    conflicts.push({
++      code: "COST_POLICY_CONFLICT",
++      message:
++        "costPolicy=replacement_floor با neverBelowManualCost=true متناقض است؛ اگر عمدی است neverBelowManualCost را false کنید، وگرنه با scripts/fix-cost-policy.cjs به max_inventory_replacement مهاجرت دهید",
++    })
++  }
++  return conflicts
+ }
+ 
+ /** ادغام با پیش‌فرض‌ها تا اگر فیلد جدیدی اضافه شد، پروفایل‌های قدیمی نشکنند */
+diff --git a/src/lib/services/runner.ts b/src/lib/services/runner.ts
+index 86fef63..9e6455a 100644
+--- a/src/lib/services/runner.ts
++++ b/src/lib/services/runner.ts
+@@ -10,6 +10,7 @@ import {
+ } from "@/db/schema";
+ import { reviewDecisionWithAI } from "@/lib/ai/client";
+ import { resolveSubqRuntime } from "@/lib/ai/config";
++import { evaluateApproveMargin } from "@/lib/pricing/approval";
+ import { pickCampaign } from "@/lib/pricing/campaigns";
+ import { runPricingPipeline } from "@/lib/pricing/engine";
+ import { summarizeOwnPriceHistory } from "@/lib/pricing/own-price-history";
+@@ -624,6 +625,24 @@ async function priceOneProduct(
+     result.finalPrice >= result.supply.hardFloorPrice &&
+     result.finalPrice > result.supply.effectiveCostPrice;
+ 
++  // ۴.۱.۲ (تصمیم #۲): حداقل حاشیه‌ی سود برای اعمال خودکار. پیش‌فرض ۰ = رفتار قبلی؛
++  // اگر اپراتور profitApproveMarginPct را مثبت کند، قیمت‌های بالای کف سود ولی با
++  // حاشیه‌ی کم به‌جای اعمال خودکار به صف بازبینی می‌روند (برای کالاهای کم‌حاشیه محافظه‌کارانه‌تر).
++  const marginGate = evaluateApproveMargin({
++    approveMarginPct: config.guards.profitApproveMarginPct,
++    netMarginPct: Number(result.position.netMarginPct) || 0,
++    strictlyAboveCost,
++    autoApply: product.autoApply,
++    needsReview: result.needsReview,
++    rejectedBySupervisor: Boolean(result.rejectedBySupervisor),
++    isProvisional: Boolean(result.isProvisional),
++    hasPrice: Boolean(result.finalPrice),
++  });
++  if (marginGate.needsReview) {
++    result.needsReview = true;
++    if (marginGate.reason) result.reviewReasons.push(marginGate.reason);
++  }
++
+   let status: string;
+   if (result.rejectedBySupervisor) {
+     status = "rejected";
+@@ -729,6 +748,9 @@ async function priceOneProduct(
+       competitionTier: result.position.competitionTier,
+       projectedNationalRank: safeInt(result.position.projectedNationalRank),
+       projectedLocalRank: safeInt(result.position.projectedLocalRank),
++      // ۴.۱.۲ (N5): هر دو رتبه در تصمیم ذخیره می‌شوند تا رابط بازبینی هر دو را نشان دهد
++      rankIncludingSuspect: safeInt(result.position.rankIncludingSuspect),
++      totalSellersIncludingSuspect: safeInt(result.position.totalSellersIncludingSuspect) ?? 0,
+       netProfitToman: safeInt(result.position.netProfitToman),
+       netMarginPct: safeReal(result.position.netMarginPct),
+       confidence: safeReal(result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence),
+diff --git a/tests/cleanup-script-safety.test.cjs b/tests/cleanup-script-safety.test.cjs
+new file mode 100644
+index 0000000..056d895
+--- /dev/null
++++ b/tests/cleanup-script-safety.test.cjs
+@@ -0,0 +1,41 @@
++// ۴.۱.۲ (N2) — گارد رگرسیون برای اسکریپت پاک‌سازی timed_sale.
++// ممیزی نشان داد UPDATE قبلی با شرط «cost_price <= 0» دامنه‌ی SELECT را می‌شکست و
++// status تصمیم‌های applied را به rejected بازنویسی می‌کرد. این تست تضمین می‌کند
++// دامنه‌ها دوباره باز نشوند.
++const assert = require('node:assert/strict')
++const fs = require('node:fs')
++const path = require('node:path')
++const test = require('node:test')
++
++const sql = require('../scripts/lib/timed-sale-cleanup.cjs')
++
++test('SELECT محصولات: فقط timed_sale یا exact no-cost-prk — نه cost_price <= 0', () => {
++  assert.match(sql.SELECT_PRODUCTS, /current_campaign = 'timed_sale'/)
++  assert.match(sql.SELECT_PRODUCTS, /cost_price = 0 AND torob_prk IS NOT NULL/)
++  assert.doesNotMatch(sql.SELECT_PRODUCTS, /cost_price\s*<=\s*0/)
++})
++
++test('UPDATE محصولات timed_sale فقط همان دامنه را می‌گیرد و لینک ترب را پاک نمی‌کند', () => {
++  assert.match(sql.UPDATE_PRODUCT_CAMPAIGN, /WHERE current_campaign = 'timed_sale'/)
++  assert.doesNotMatch(sql.UPDATE_PRODUCT_CAMPAIGN, /torob_prk/)
++  assert.doesNotMatch(sql.UPDATE_PRODUCT_CAMPAIGN, /cost_price/)
++})
++
++test('UPDATE پاک‌سازی ترب دقیقاً همان شرط SELECT است (بدون دامنه‌ی گشادتر)', () => {
++  assert.match(sql.UPDATE_PRODUCT_NO_COST, /WHERE cost_price = 0 AND torob_prk IS NOT NULL/)
++  assert.doesNotMatch(sql.UPDATE_PRODUCT_NO_COST, /current_campaign\s*=\s*'timed_sale'/)
++  assert.doesNotMatch(sql.UPDATE_PRODUCT_NO_COST, /cost_price\s*<=/)
++})
++
++test('تاریخچه‌ی تصمیم‌ها: status هرگز در UPDATE بازنویسی نمی‌شود', () => {
++  assert.doesNotMatch(sql.UPDATE_DECISIONS, /\bstatus\s*=/i, 'هیچ انتساب status نباید باشد')
++  assert.doesNotMatch(sql.UPDATE_DECISIONS, /rejected/i)
++  assert.match(sql.UPDATE_DECISIONS, /status <> 'applied'/, 'appliedها باید کنار گذاشته شوند')
++})
++
++test('اسکریپت پیش‌فرض dry-run است و --apply صریح می‌خواهد', () => {
++  const source = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'fix-wrong-timed-sale.cjs'), 'utf8')
++  assert.match(source, /const APPLY = argv\.includes\('--apply'\)/)
++  assert.match(source, /if \(!APPLY\)/)
++  assert.match(source, /DRY-RUN/)
++})
+diff --git a/tests/migration-safety.test.cjs b/tests/migration-safety.test.cjs
+new file mode 100644
+index 0000000..26a0dc8
+--- /dev/null
++++ b/tests/migration-safety.test.cjs
+@@ -0,0 +1,44 @@
++// ۴.۱.۲ (N3) — گاردهای مهاجرت و هم‌خوانی schema/SQL.
++//  - برچسب‌گذاری 4.1.0 → 3.6.0 نباید خودکار باشد؛ فقط با SET pricing.relabel_410='on'.
++//  - مهاجرت 0002 باید idempotent باشد و ستون‌های رتبه و ایندکس push را اضافه کند.
++//  - ایندکس باید در schema.ts هم باشد تا drizzle-kit push آن را drift نبیند.
++const assert = require('node:assert/strict')
++const fs = require('node:fs')
++const path = require('node:path')
++const test = require('node:test')
++
++const root = path.join(__dirname, '..')
++const read = (p) => fs.readFileSync(path.join(root, p), 'utf8')
++
++test('0001: relabel خودکار نیست و پشت current_setting اپراتور است', () => {
++  const sql = read('drizzle/0001_v411_incremental.sql')
++  const guardIndex = sql.indexOf("current_setting('pricing.relabel_410', true) = 'on'")
++  const relabelIndex = sql.indexOf('WHERE "engine_version" = \'4.1.0\'')
++  assert.ok(guardIndex > -1, 'گارد current_setting باید وجود داشته باشد')
++  assert.ok(relabelIndex > guardIndex, 'UPDATE مربوط به 4.1.0 باید بعد از گارد باشد')
++  assert.match(
++    sql.slice(guardIndex, relabelIndex),
++    /current_setting\('pricing\.relabel_410', true\) = 'on' THEN\s+UPDATE/,
++    'UPDATE باید داخل شاخه‌ی IF باشد',
++  )
++})
++
++test('0002: ستون‌های رتبه و ایندکس push به‌صورت idempotent اضافه می‌شوند', () => {
++  const sql = read('drizzle/0002_v412_audit_fixes.sql')
++  assert.match(sql, /ADD COLUMN IF NOT EXISTS "rank_including_suspect"/)
++  assert.match(sql, /ADD COLUMN IF NOT EXISTS "total_sellers_including_suspect"/)
++  assert.match(sql, /CREATE INDEX IF NOT EXISTS "decisions_push_recovery_idx"/)
++  assert.match(sql, /current_setting\('pricing\.relabel_410', true\) = 'on'/)
++})
++
++test('schema.ts: ایندکس decisions_push_recovery_idx و ستون‌های رتبه تعریف شده‌اند', () => {
++  const schema = read('src/db/schema.ts')
++  assert.match(schema, /index\("decisions_push_recovery_idx"\)\.on\(t\.status, t\.pushStatus, t\.createdAt\)/)
++  assert.match(schema, /rankIncludingSuspect: integer\("rank_including_suspect"\)/)
++  assert.match(schema, /totalSellersIncludingSuspect: integer\("total_sellers_including_suspect"\)/)
++})
++
++test('journal: 0002 ثبت شده تا migrate/runner آن را ببیند', () => {
++  const journal = JSON.parse(read('drizzle/meta/_journal.json'))
++  assert.ok(journal.entries.some((e) => e.tag === '0002_v412_audit_fixes'))
++})
+diff --git a/tests/pricing-engine.test.cjs b/tests/pricing-engine.test.cjs
+index 15ba4b6..17f2edc 100644
+--- a/tests/pricing-engine.test.cjs
++++ b/tests/pricing-engine.test.cjs
+@@ -18,6 +18,7 @@ const { pickCampaign } = loadTsModule('src/lib/pricing/campaigns.ts')
+ const { selectBestTorobSearchMatch, evaluateTorobCandidate, extractModelAndSpecTokens, isInternalOrDatabaseId } = loadTsModule('src/lib/pricing/matcher.ts')
+ const { classifyThreeZoneScore, buildSubqSystemOneRequestBody } = loadTsModule('src/lib/pricing/systemone-supervisor.ts')
+ const { computeConfidence } = loadTsModule('src/lib/pricing/confidence.ts')
++const { evaluateApproveMargin } = loadTsModule('src/lib/pricing/approval.ts')
+ const { parseTorobJson } = loadTsModule('src/lib/sources/torob.ts')
+ const { convertMcpDetailsToOffers, analyzeMcpPriceHistory, extractSellerCountFromMcpCard } = loadTsModule('src/lib/sources/torob-mcp-client.ts')
+ 
+@@ -899,11 +900,21 @@ test('۲۰. آمار وزنی (میانه وزنی) و هیسترزیس یک‌
+   assert.equal(jump.needsReview, true)
+ })
+ 
+-test('۲۱. سیاست تقاطع قیمت انبار/ریپلیس (M2): replacement_floor هشدار می‌دهد ولی ملاک ریپلیس است', () => {
++test('۲۱. سیاست تقاطع قیمت انبار/ریپلیس (M2): پیش‌فرض ۴.۱.۲ محافظه‌کارانه است و replacement_floor صریح هشدار می‌دهد', () => {
+   const q = [{ supplierName: 'پخش شرق مشهد', rawPrice: '23,200,000 ریال', supplierCity: 'مشهد', priority: 9, inStock: true, updatedAt: now }]
+   const manualCost = 2500000 // انبار گران‌تر از بازار
+ 
+-  const x0 = resolveSupplyCost({ supplierQuotes: q, manualCostPrice: manualCost, config: DEFAULT_PROFILE_CONFIG, now })
++  // ۴.۱.۲ (N4): پیش‌فرض اصلاح شد تا با neverBelowManualCost=true متناقض نباشد؛
++  // کف از بیشینه‌ی هزینه انبار و ریپلیس گرفته می‌شود.
++  const xDefault = resolveSupplyCost({ supplierQuotes: q, manualCostPrice: manualCost, config: DEFAULT_PROFILE_CONFIG, now })
++  assert.equal(xDefault.costPolicyUsed, 'max_inventory_replacement')
++  assert.equal(xDefault.effectiveCostPrice, 2500000, 'پیش‌فرض: کف از بیشینه انبار/ریپلیس')
++
++  const floorCfg = {
++    ...DEFAULT_PROFILE_CONFIG,
++    sourcing: { ...DEFAULT_PROFILE_CONFIG.sourcing, costPolicy: 'replacement_floor', neverBelowManualCost: false },
++  }
++  const x0 = resolveSupplyCost({ supplierQuotes: q, manualCostPrice: manualCost, config: floorCfg, now })
+   assert.equal(x0.costPolicyUsed, 'replacement_floor')
+   assert.equal(x0.effectiveCostPrice, 2331600, 'ملاک = ریپلیس ارزان‌تر')
+   assert.equal(x0.selectedQuote.supplierName, 'پخش شرق مشهد')
+@@ -1382,3 +1393,25 @@ test('۳۴. own_price_7d (۴.۱.۱): دوام تا ردیف بعدی سنجید
+   assert.equal(summary.ownStableHigh7d, 2500000, 'قیمت گذرا/۷۰ساعته‌ی یک‌ساعته نباید مرجع تخفیف شود')
+   assert.equal(summary.ownAvg7d, Math.round((2600000 + 2500000 + 2550000 + 2400000) / 4))
+ })
++
++test('۳۵. گیت حداقل حاشیه برای اعمال خودکار (۴.۱.۲): ۰ = رفتار قبلی، مثبت = ریویو', () => {
++  const base = {
++    approveMarginPct: 0,
++    netMarginPct: 2,
++    strictlyAboveCost: true,
++    autoApply: true,
++    needsReview: false,
++    rejectedBySupervisor: false,
++    isProvisional: false,
++    hasPrice: true,
++  }
++  assert.equal(evaluateApproveMargin(base).needsReview, false, 'پیش‌فرض باید کاملاً سازگار بماند')
++
++  const strict = evaluateApproveMargin({ ...base, approveMarginPct: 5 })
++  assert.equal(strict.needsReview, true)
++  assert.match(strict.reason, /کمتر از حد تأیید خودکار 5%/)
++
++  assert.equal(evaluateApproveMargin({ ...base, approveMarginPct: 5, netMarginPct: 7 }).needsReview, false)
++  assert.equal(evaluateApproveMargin({ ...base, approveMarginPct: 5, autoApply: false }).needsReview, false)
++  assert.equal(evaluateApproveMargin({ ...base, approveMarginPct: 5, rejectedBySupervisor: true }).needsReview, false)
++})

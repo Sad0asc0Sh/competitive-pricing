@@ -116,12 +116,40 @@ export async function getProfileConfig(profileId?: number | null): Promise<{ id:
   await ensureDefaults();
   if (profileId) {
     const r = await db.select().from(pricingProfiles).where(eq(pricingProfiles.id, profileId)).limit(1);
-    if (r[0]) return { id: r[0].id, config: mergeConfig(r[0].config) };
+    if (r[0]) return withProfileAudit(r[0].id, r[0].config);
   }
   const d = await db.select().from(pricingProfiles).where(eq(pricingProfiles.isDefault, true)).limit(1);
-  if (d[0]) return { id: d[0].id, config: mergeConfig(d[0].config) };
+  if (d[0]) return withProfileAudit(d[0].id, d[0].config);
   const any = await db.select().from(pricingProfiles).limit(1);
-  return { id: any[0].id, config: mergeConfig(any[0].config) };
+  return withProfileAudit(any[0].id, any[0].config);
+}
+
+const auditedProfileIds = new Set<number>()
+
+function withProfileAudit(id: number, partial: Partial<PricingProfileConfig> | null | undefined) {
+  const config = mergeConfig(partial)
+  const conflicts = findConfigConflicts(config)
+  if (conflicts.length && !auditedProfileIds.has(id)) {
+    auditedProfileIds.add(id)
+    const message = `پروفایل ${id}: ${conflicts.map((c) => c.message).join(" | ")}`
+    console.warn(`[PRICING-PROFILE] ${message}`)
+    void logActivity("profile", message, { profileId: id, conflicts }, "warn")
+  }
+  return { id, config }
+}
+
+/** تعارض‌های قابل‌تشخیص در پروفایل ذخیره‌شده (بدون تغییر خودکار). */
+export function findConfigConflicts(config: PricingProfileConfig): { code: string; message: string }[] {
+  const conflicts: { code: string; message: string }[] = []
+  const s = config.sourcing
+  if (s.costPolicy === "replacement_floor" && s.neverBelowManualCost === true) {
+    conflicts.push({
+      code: "COST_POLICY_CONFLICT",
+      message:
+        "costPolicy=replacement_floor با neverBelowManualCost=true متناقض است؛ اگر عمدی است neverBelowManualCost را false کنید، وگرنه با scripts/fix-cost-policy.cjs به max_inventory_replacement مهاجرت دهید",
+    })
+  }
+  return conflicts
 }
 
 /** ادغام با پیش‌فرض‌ها تا اگر فیلد جدیدی اضافه شد، پروفایل‌های قدیمی نشکنند */

@@ -10,6 +10,7 @@ import {
 } from "@/db/schema";
 import { reviewDecisionWithAI } from "@/lib/ai/client";
 import { resolveSubqRuntime } from "@/lib/ai/config";
+import { evaluateApproveMargin } from "@/lib/pricing/approval";
 import { pickCampaign } from "@/lib/pricing/campaigns";
 import { runPricingPipeline } from "@/lib/pricing/engine";
 import { summarizeOwnPriceHistory } from "@/lib/pricing/own-price-history";
@@ -624,6 +625,24 @@ async function priceOneProduct(
     result.finalPrice >= result.supply.hardFloorPrice &&
     result.finalPrice > result.supply.effectiveCostPrice;
 
+  // ۴.۱.۲ (تصمیم #۲): حداقل حاشیه‌ی سود برای اعمال خودکار. پیش‌فرض ۰ = رفتار قبلی؛
+  // اگر اپراتور profitApproveMarginPct را مثبت کند، قیمت‌های بالای کف سود ولی با
+  // حاشیه‌ی کم به‌جای اعمال خودکار به صف بازبینی می‌روند (برای کالاهای کم‌حاشیه محافظه‌کارانه‌تر).
+  const marginGate = evaluateApproveMargin({
+    approveMarginPct: config.guards.profitApproveMarginPct,
+    netMarginPct: Number(result.position.netMarginPct) || 0,
+    strictlyAboveCost,
+    autoApply: product.autoApply,
+    needsReview: result.needsReview,
+    rejectedBySupervisor: Boolean(result.rejectedBySupervisor),
+    isProvisional: Boolean(result.isProvisional),
+    hasPrice: Boolean(result.finalPrice),
+  });
+  if (marginGate.needsReview) {
+    result.needsReview = true;
+    if (marginGate.reason) result.reviewReasons.push(marginGate.reason);
+  }
+
   let status: string;
   if (result.rejectedBySupervisor) {
     status = "rejected";
@@ -729,6 +748,9 @@ async function priceOneProduct(
       competitionTier: result.position.competitionTier,
       projectedNationalRank: safeInt(result.position.projectedNationalRank),
       projectedLocalRank: safeInt(result.position.projectedLocalRank),
+      // ۴.۱.۲ (N5): هر دو رتبه در تصمیم ذخیره می‌شوند تا رابط بازبینی هر دو را نشان دهد
+      rankIncludingSuspect: safeInt(result.position.rankIncludingSuspect),
+      totalSellersIncludingSuspect: safeInt(result.position.totalSellersIncludingSuspect) ?? 0,
       netProfitToman: safeInt(result.position.netProfitToman),
       netMarginPct: safeReal(result.position.netMarginPct),
       confidence: safeReal(result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence),

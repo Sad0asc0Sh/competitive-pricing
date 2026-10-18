@@ -335,6 +335,11 @@ export interface PricingProfileConfig {
     hysteresisPct: number;
     /** حداقل نسبت پیشنهادهای «به‌روز» (fresh) از کل معتبرها — رد آن → review نه reject */
     minFreshRatio: number;
+    /**
+     * ۴.۱.۲: حداقل حاشیه‌ی سود (٪) برای اعمال خودکار. ۰ = رفتار قبلی (هر قیمت بالای کف سود).
+     * اگر مثبت باشد، تصمیم‌های با حاشیه‌ی کمتر از این عدد به‌جای applied به pending_review می‌روند.
+     */
+    profitApproveMarginPct: number;
   };
   /** ---------- ۷) کشف «سقف و کف اصولی بازار» و سیستم تخفیف سهگانه sgeooole ---------- */
   discount: {
@@ -389,8 +394,13 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     defaultOverheadPct: 0.5,
     defaultNonLocalShippingToman: 0,
     staleSafetyBufferPct: 2.5,
+    // M2: neverBelowManualCost فقط نام قدیمی «کف از هزینه‌ی انبار» است؛ منبع حقیقت
+    // costPolicy است. پیش‌فرض ۴.۱.۲ محافظه‌کارانه است تا این دو فیلد متناقض نباشند:
+    // max_inventory_replacement یعنی هیچ‌گاه زیر max(هزینه انبار، ریپلیس) فروش نکن.
+    // اگر می‌خواهید برای رقابت، ریپلیس ارزان‌تر ملاک باشد، costPolicy را در تنظیمات
+    // به replacement_floor تغییر دهید (و neverBelowManualCost را false کنید).
     neverBelowManualCost: true,
-    costPolicy: "replacement_floor",
+    costPolicy: "max_inventory_replacement",
     allowAutoApplyWithoutCost: false,
     costlessSafePercentile: 55,
     costlessSafetyMarginPct: 1.0,
@@ -462,6 +472,8 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     minValidOffers: 2,
     hysteresisPct: 0.15,
     minFreshRatio: 0.3,
+    // ۰ = سازگاری کامل با ۴.۱.۱؛ برای محافظه‌کاری بیشتر مثلاً ۵ بگذارید.
+    profitApproveMarginPct: 0,
   },
   discount: {
     mode: "market_percentile_ceiling",
