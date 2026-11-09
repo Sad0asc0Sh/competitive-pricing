@@ -22,10 +22,16 @@ async function run() {
 
   const Product = require(path.join(EKGKALA_BACKEND_DIR, "models/Product"));
   const Category = require(path.join(EKGKALA_BACKEND_DIR, "models/Category"));
+  let Brand = null;
+  try { Brand = require(path.join(EKGKALA_BACKEND_DIR, "models/Brand")); } catch {}
 
   console.log("Fetching active products from MongoDB...");
+  // ۴.۲.۰: در مدل فروشگاه costPrice/hardFloorPrice/supplierQuotes «select:false» هستند (محرمانه؛ از پاسخ‌های API حذف می‌شوند).
+  // ایمپورتر صراحتاً قیمت خرید را می‌خواهد؛ وگرنه costPrice=0 و auto_apply همهٔ محصولات بی‌صدا خاموش می‌شد.
   const mongoProducts = await Product.find({ isActive: true })
+    .select("+costPrice")
     .populate("category", "name")
+    .populate("brand", "name slug")
     .sort({ createdAt: -1 })
     .lean();
 
@@ -54,7 +60,9 @@ async function run() {
       }
       seenSkus.add(sku.toLowerCase());
 
-      const name = p.name ? String(p.name).trim() : `محصول ${sku}`;
+      const rawName = p.name ? String(p.name).trim() : `محصول ${sku}`;
+      const brandName = p.brand && p.brand.name ? String(p.brand.name).trim() : "";
+      const name = brandName && !rawName.toLowerCase().includes(brandName.toLowerCase()) ? `${rawName} (${brandName})` : rawName;
       const category = p.category && p.category.name ? String(p.category.name).trim() : null;
       const storeExternalId = cleanCode || String(p._id);
       const costPrice = Math.max(0, Math.round(Number(p.costPrice) || 0));

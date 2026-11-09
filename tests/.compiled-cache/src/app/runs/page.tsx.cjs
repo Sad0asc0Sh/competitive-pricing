@@ -1,136 +1,28 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.default = RunsPage;
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
-var _db = require("@/db");
-var _schema = require("../../db/schema");
-var _format = require("../../lib/format");
-var _drizzleOrm = require("drizzle-orm");
-var _link = _interopRequireDefault(require("next/link"));
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
-const dynamic = "force-dynamic";
-exports.dynamic = dynamic;
-async function RunsPage({
-  searchParams
-}) {
-  const {
-    run
-  } = await searchParams;
-  const runs = await _db.db.select().from(_schema.priceRuns).orderBy((0, _drizzleOrm.desc)(_schema.priceRuns.startedAt)).limit(50);
-  const selected = run ? Number(run) : runs[0]?.id;
-  const decisions = selected ? await _db.db.select({
-    d: _schema.priceDecisions,
-    name: _schema.products.name,
-    sku: _schema.products.sku
-  }).from(_schema.priceDecisions).innerJoin(_schema.products, (0, _drizzleOrm.eq)(_schema.products.id, _schema.priceDecisions.productId)).where((0, _drizzleOrm.eq)(_schema.priceDecisions.runId, selected)).orderBy((0, _drizzleOrm.desc)(_schema.priceDecisions.createdAt)) : [];
-  return <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-      <div className="card">
-        <h1 className="mb-3 text-lg font-bold">اجراها</h1>
-        <ul className="space-y-1">
-          {runs.map(r => <li key={r.id}>
-              <_link.default href={`/runs?run=${r.id}`} className={`block rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${selected === r.id ? "bg-indigo-50 text-indigo-800" : ""}`}>
-                <div className="flex items-center justify-between">
-                  <span>
-                    #{r.id} · {r.trigger === "schedule" ? "زمان‌بندی" : r.trigger === "manual" ? "دستی" : "API"}
-                  </span>
-                  <span className={`badge ${_format.statusColor[r.status]}`}>{_format.statusLabel[r.status]}</span>
-                </div>
-                <div className="text-xs text-slate-500">
-                  {(0, _format.faDate)(r.startedAt)} · {(0, _format.faNum)(r.totalProducts)} محصول · {(0, _format.faNum)(r.applied)}✓ {(0, _format.faNum)(r.pendingReview)}⏳ {(0, _format.faNum)(r.failed)}✗
-                </div>
-              </_link.default>
-            </li>)}
-          {!runs.length && <li className="text-sm text-slate-400">اجرایی ثبت نشده</li>}
-        </ul>
-      </div>
-      <div className="space-y-3 lg:hidden">
-        <h2 className="px-1 font-bold">تصمیم‌های اجرای #{selected ?? "—"}</h2>
-        {decisions.map(({
-        d,
-        name,
-        sku
-      }) => <div key={d.id} className="m-row">
-            <div className="mb-2 flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <_link.default href={`/products/${d.productId}`} className="block truncate font-bold text-indigo-700">
-                  {name}
-                </_link.default>
-                <div className="text-xs text-slate-400">{sku}</div>
-              </div>
-              <span className={`badge ${_format.statusColor[d.status]}`}>{_format.statusLabel[d.status]}</span>
-            </div>
-            <div className="m-row-kv">
-              <span>قیمت نهایی</span>
-              <span className="num font-bold text-emerald-700">{(0, _format.toman)(d.finalPrice)}</span>
-            </div>
-            <div className="m-row-kv">
-              <span>مرجع / اصلی</span>
-              <span className="num text-xs">
-                {(0, _format.toman)(d.referencePrice)} / {(0, _format.toman)(d.basePrice)}
-              </span>
-            </div>
-            <div className="m-row-kv">
-              <span>تخفیف / کمپین / اعتماد</span>
-              <span className="num text-xs">
-                {(0, _format.pct)(d.discountPct)} · {_format.campaignLabel[d.campaignType ?? "none"]} · {(0, _format.pct)(d.confidence * 100, 0)}
-              </span>
-            </div>
-          </div>)}
-        {!decisions.length && <div className="empty-state">تصمیمی وجود ندارد</div>}
-      </div>
-      <div className="card hidden lg:block">
-        <h2 className="mb-3 font-bold">تصمیم‌های اجرای #{selected ?? "—"}</h2>
-        <table className="data">
-          <thead>
-            <tr>
-              <th>محصول</th>
-              <th>منبع</th>
-              <th>معتبر/کل</th>
-              <th>مرجع</th>
-              <th>اصلی</th>
-              <th>نهایی</th>
-              <th>تخفیف</th>
-              <th>کمپین</th>
-              <th>اعتماد</th>
-              <th>وضعیت</th>
-            </tr>
-          </thead>
-          <tbody>
-            {decisions.map(({
-            d,
-            name,
-            sku
-          }) => <tr key={d.id}>
-                <td>
-                  <_link.default href={`/products/${d.productId}`} className="text-indigo-700 hover:underline">
-                    {name}
-                  </_link.default>
-                  <div className="text-xs text-slate-400">{sku}</div>
-                </td>
-                <td>{d.source}</td>
-                <td className="num">
-                  {(0, _format.faNum)(d.offersUsed)}/{(0, _format.faNum)(d.offersTotal)}
-                </td>
-                <td className="num">{(0, _format.toman)(d.referencePrice)}</td>
-                <td className="num line-through decoration-slate-400">{(0, _format.toman)(d.basePrice)}</td>
-                <td className="num font-bold text-emerald-700">{(0, _format.toman)(d.finalPrice)}</td>
-                <td className="num">{(0, _format.pct)(d.discountPct)}</td>
-                <td>{_format.campaignLabel[d.campaignType ?? "none"]}</td>
-                <td className="num">{(0, _format.pct)(d.confidence * 100, 0)}</td>
-                <td>
-                  <span className={`badge ${_format.statusColor[d.status]}`}>{_format.statusLabel[d.status]}</span>
-                </td>
-              </tr>)}
-            {!decisions.length && <tr>
-                <td colSpan={10} className="py-6 text-center text-slate-400">
-                  تصمیمی وجود ندارد
-                </td>
-              </tr>}
-          </tbody>
-        </table>
-      </div>
-    </div>;
+exports.default = RunsPage;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const db_1 = require("@/db");
+const schema_1 = require("../../db/schema");
+const format_1 = require("../../lib/format");
+const drizzle_orm_1 = require("drizzle-orm");
+const link_1 = __importDefault(require("next/link"));
+exports.dynamic = "force-dynamic";
+async function RunsPage({ searchParams }) {
+    const { run } = await searchParams;
+    const runs = await db_1.db.select().from(schema_1.priceRuns).orderBy((0, drizzle_orm_1.desc)(schema_1.priceRuns.startedAt)).limit(50);
+    const selected = run ? Number(run) : runs[0]?.id;
+    const decisions = selected
+        ? await db_1.db
+            .select({ d: schema_1.priceDecisions, name: schema_1.products.name, sku: schema_1.products.sku })
+            .from(schema_1.priceDecisions)
+            .innerJoin(schema_1.products, (0, drizzle_orm_1.eq)(schema_1.products.id, schema_1.priceDecisions.productId))
+            .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.runId, selected))
+            .orderBy((0, drizzle_orm_1.desc)(schema_1.priceDecisions.createdAt))
+        : [];
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "grid gap-6 lg:grid-cols-[320px_1fr]", children: [(0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsx)("h1", { className: "mb-3 text-lg font-bold", children: "\u0627\u062C\u0631\u0627\u0647\u0627" }), (0, jsx_runtime_1.jsxs)("ul", { className: "space-y-1", children: [runs.map((r) => ((0, jsx_runtime_1.jsx)("li", { children: (0, jsx_runtime_1.jsxs)(link_1.default, { href: `/runs?run=${r.id}`, className: `block rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${selected === r.id ? "bg-indigo-50 text-indigo-800" : ""}`, children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex items-center justify-between", children: [(0, jsx_runtime_1.jsxs)("span", { children: ["#", r.id, " \u00B7 ", r.trigger === "schedule" ? "زمان‌بندی" : r.trigger === "manual" ? "دستی" : "API"] }), (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[r.status]}`, children: format_1.statusLabel[r.status] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "text-xs text-slate-500", children: [(0, format_1.faDate)(r.startedAt), " \u00B7 ", (0, format_1.faNum)(r.totalProducts), " \u0645\u062D\u0635\u0648\u0644 \u00B7 ", (0, format_1.faNum)(r.applied), "\u2713 ", (0, format_1.faNum)(r.pendingReview), "\u23F3 ", (0, format_1.faNum)(r.failed), "\u2717"] })] }) }, r.id))), !runs.length && (0, jsx_runtime_1.jsx)("li", { className: "text-sm text-slate-400", children: "\u0627\u062C\u0631\u0627\u06CC\u06CC \u062B\u0628\u062A \u0646\u0634\u062F\u0647" })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "space-y-3 lg:hidden", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "px-1 font-bold", children: ["\u062A\u0635\u0645\u06CC\u0645\u200C\u0647\u0627\u06CC \u0627\u062C\u0631\u0627\u06CC #", selected ?? "—"] }), decisions.map(({ d, name, sku }) => ((0, jsx_runtime_1.jsxs)("div", { className: "m-row", children: [(0, jsx_runtime_1.jsxs)("div", { className: "mb-2 flex items-start justify-between gap-2", children: [(0, jsx_runtime_1.jsxs)("div", { className: "min-w-0", children: [(0, jsx_runtime_1.jsx)(link_1.default, { href: `/products/${d.productId}`, className: "block truncate font-bold text-indigo-700", children: name }), (0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-400", children: sku })] }), (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[d.status]}`, children: format_1.statusLabel[d.status] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u0642\u06CC\u0645\u062A \u0646\u0647\u0627\u06CC\u06CC" }), (0, jsx_runtime_1.jsx)("span", { className: "num font-bold text-emerald-700", children: (0, format_1.toman)(d.finalPrice) })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u0645\u0631\u062C\u0639 / \u0627\u0635\u0644\u06CC" }), (0, jsx_runtime_1.jsxs)("span", { className: "num text-xs", children: [(0, format_1.toman)(d.referencePrice), " / ", (0, format_1.toman)(d.basePrice)] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u062A\u062E\u0641\u06CC\u0641 / \u06A9\u0645\u067E\u06CC\u0646 / \u0627\u0639\u062A\u0645\u0627\u062F" }), (0, jsx_runtime_1.jsxs)("span", { className: "num text-xs", children: [(0, format_1.pct)(d.discountPct), " \u00B7 ", format_1.campaignLabel[d.campaignType ?? "none"], " \u00B7 ", (0, format_1.pct)(d.confidence * 100, 0)] })] })] }, d.id))), !decisions.length && (0, jsx_runtime_1.jsx)("div", { className: "empty-state", children: "\u062A\u0635\u0645\u06CC\u0645\u06CC \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F" })] }), (0, jsx_runtime_1.jsxs)("div", { className: "card hidden lg:block", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "mb-3 font-bold", children: ["\u062A\u0635\u0645\u06CC\u0645\u200C\u0647\u0627\u06CC \u0627\u062C\u0631\u0627\u06CC #", selected ?? "—"] }), (0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "\u0645\u062D\u0635\u0648\u0644" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0645\u0646\u0628\u0639" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0645\u0639\u062A\u0628\u0631/\u06A9\u0644" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0645\u0631\u062C\u0639" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0627\u0635\u0644\u06CC" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0646\u0647\u0627\u06CC\u06CC" }), (0, jsx_runtime_1.jsx)("th", { children: "\u062A\u062E\u0641\u06CC\u0641" }), (0, jsx_runtime_1.jsx)("th", { children: "\u06A9\u0645\u067E\u06CC\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0627\u0639\u062A\u0645\u0627\u062F" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0636\u0639\u06CC\u062A" })] }) }), (0, jsx_runtime_1.jsxs)("tbody", { children: [decisions.map(({ d, name, sku }) => ((0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsxs)("td", { children: [(0, jsx_runtime_1.jsx)(link_1.default, { href: `/products/${d.productId}`, className: "text-indigo-700 hover:underline", children: name }), (0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-400", children: sku })] }), (0, jsx_runtime_1.jsx)("td", { children: d.source }), (0, jsx_runtime_1.jsxs)("td", { className: "num", children: [(0, format_1.faNum)(d.offersUsed), "/", (0, format_1.faNum)(d.offersTotal)] }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.toman)(d.referencePrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num line-through decoration-slate-400", children: (0, format_1.toman)(d.basePrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num font-bold text-emerald-700", children: (0, format_1.toman)(d.finalPrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.pct)(d.discountPct) }), (0, jsx_runtime_1.jsx)("td", { children: format_1.campaignLabel[d.campaignType ?? "none"] }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.pct)(d.confidence * 100, 0) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[d.status]}`, children: format_1.statusLabel[d.status] }) })] }, d.id))), !decisions.length && ((0, jsx_runtime_1.jsx)("tr", { children: (0, jsx_runtime_1.jsx)("td", { colSpan: 10, className: "py-6 text-center text-slate-400", children: "\u062A\u0635\u0645\u06CC\u0645\u06CC \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F" }) }))] })] })] })] }));
 }

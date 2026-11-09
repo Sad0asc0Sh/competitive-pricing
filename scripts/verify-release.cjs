@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ۴.۱.۲ — صحت‌سنجی قابل‌تطبیق پیش از استقرار.
+ * ۴.۲.۰ — صحت‌سنجی قابل‌تطبیق پیش از استقرار.
  *
  * بدون وابستگی به مسیر/سیستم‌عامل خاص:
  *  - typecheck موتور قیمت‌گذاری
@@ -19,7 +19,12 @@ const { spawnSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') })
+// dotenv اختیاری است: نبودنش (پیش از npm install) نباید کل صحت‌سنجی را قبل از گزارش «چه چیزی نصب نیست» کرش دهد.
+try {
+  require('dotenv').config({ path: path.join(__dirname, '..', '.env') })
+} catch (e) {
+  if (!e || e.code !== 'MODULE_NOT_FOUND') throw e
+}
 
 const ROOT = path.resolve(__dirname, '..')
 const argv = new Set(process.argv.slice(2))
@@ -57,7 +62,7 @@ function note(name, ok, detail = '') {
 }
 
 function main() {
-  console.log('=== ۴.۱.۲ verify-release ===')
+  console.log('=== ۴.۲.۰ verify-release ===')
   console.log(`ریپوی موتور: ${ROOT}`)
   console.log(`ریپوی فروشگاه: ${STORE_DIR || 'پیدا نشد (با --store-dir بدهید)'}`)
 
@@ -68,7 +73,13 @@ function main() {
     run('pricing typecheck', process.execPath, [tsc, '--noEmit', '--pretty', 'false'])
   }
 
-  if (!run('pricing tests', process.execPath, ['--test', 'tests/pricing-engine.test.cjs', 'tests/cleanup-script-safety.test.cjs', 'tests/migration-safety.test.cjs'])) {
+  // فهرست تست‌ها از «scripts.test» در package.json خوانده می‌شود (تنها منبع حقیقت؛ تست release-hygiene تضمین می‌کند
+  // هر فایل tests/*.test.cjs در آن هست) تا تست جدید بی‌صدا از تأیید انتشار جا نیفتد.
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+  const testFiles = String((pkg.scripts && pkg.scripts.test) || '')
+    .split(/\s+/)
+    .filter((t) => /^tests\/.+\.test\.cjs$/.test(t))
+  if (!run('pricing tests', process.execPath, ['--test', ...testFiles])) {
     // ادامه می‌دهیم تا همه‌ی خرابی‌ها یک‌جا دیده شوند
   }
 

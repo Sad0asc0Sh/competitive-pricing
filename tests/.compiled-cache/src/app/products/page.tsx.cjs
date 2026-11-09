@@ -1,143 +1,20 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.default = ProductsPage;
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
-var _db = require("@/db");
-var _schema = require("../../db/schema");
-var _actions = require("@/components/actions");
-var _productForm = require("@/components/product-form");
-var _format = require("../../lib/format");
-var _drizzleOrm = require("drizzle-orm");
-var _link = _interopRequireDefault(require("next/link"));
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
-const dynamic = "force-dynamic";
-exports.dynamic = dynamic;
+exports.default = ProductsPage;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const db_1 = require("@/db");
+const schema_1 = require("../../db/schema");
+const actions_1 = require("@/components/actions");
+const product_form_1 = require("@/components/product-form");
+const format_1 = require("../../lib/format");
+const drizzle_orm_1 = require("drizzle-orm");
+const link_1 = __importDefault(require("next/link"));
+exports.dynamic = "force-dynamic";
 async function ProductsPage() {
-  const rows = await _db.db.select().from(_schema.products).orderBy((0, _drizzleOrm.asc)(_schema.products.id));
-  return <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">مدیریت کارت‌های محصول و رنج‌های تخفیف</h1>
-          <p className="mt-1 text-xs text-slate-500">
-            هر محصول دارای یک شماره کارت (`کارت #۱`، `کارت #۲` و ...) است که می‌توانید در نوار زیر یا در صفحه «کمپین‌ها»، استعلام سقف و کف و اعمال تخفیف را روی رنج دلخواهی از کارت‌ها اجرا کنید.
-          </p>
-        </div>
-        <_actions.RunButton label="استعلام و بروزرسانی همه کارت‌ها" />
-      </div>
-
-      <_actions.CardRangeRunner totalCards={rows.length} />
-
-      <div className="card">
-        <h2 className="mb-3 font-bold">افزودن کارت محصول جدید</h2>
-        <_productForm.ProductForm />
-      </div>
-
-      {/* نمای موبایل محصولات: کارت به‌جای جدول ۱۱ ستونه */}
-      <div className="space-y-3 lg:hidden">
-        {rows.map((p, idx) => <div key={p.id} className="m-row">
-            <div className="mb-2 flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <_link.default href={`/products/${p.id}`} className="block truncate font-bold text-indigo-700">
-                  {p.name}
-                </_link.default>
-                <div className="text-xs text-slate-400">
-                  کارت #{idx + 1} · {p.sku}
-                  {p.category ? ` · ${p.category}` : ""}
-                </div>
-              </div>
-              <span className={`badge ${_format.statusColor[p.status]}`}>{_format.statusLabel[p.status]}</span>
-            </div>
-            <div className="m-row-kv">
-              <span>منبع استعلام</span>
-              <span>{p.sourceType === "torob" ? "ترب" : p.sourceType}</span>
-            </div>
-            <div className="m-row-kv">
-              <span>کف قطعی فروش</span>
-              <span className="num font-bold text-emerald-700">{(0, _format.toman)(p.currentFinalPrice)}</span>
-            </div>
-            <div className="m-row-kv">
-              <span>سقف معیار (خط‌خورده)</span>
-              <span className="num line-through decoration-slate-400">{(0, _format.toman)(p.currentBasePrice)}</span>
-            </div>
-            <div className="m-row-kv">
-              <span>تخفیف / سیستم</span>
-              <span className="num font-bold text-rose-600">
-                {(0, _format.pct)(p.currentDiscountPct, 0)} · {p.currentCampaignName || _format.campaignLabel[p.currentCampaign ?? "none"]}
-              </span>
-            </div>
-            <div className="m-row-kv">
-              <span>آخرین استعلام</span>
-              <span className="text-xs">{(0, _format.faDate)(p.lastCheckedAt)}</span>
-            </div>
-            <div className="mt-3">
-              <_actions.RunButton productIds={[p.id]} label="استعلام این کارت" className="btn-secondary w-full" />
-            </div>
-          </div>)}
-        {!rows.length && <div className="empty-state">محصولی ثبت نشده است</div>}
-      </div>
-
-      <div className="card hidden lg:block">
-        <table className="data">
-          <thead>
-            <tr>
-              <th># کارت</th>
-              <th>محصول</th>
-              <th>منبع</th>
-              <th>تمام‌شده / کف امن</th>
-              <th>سقف معیار (خط‌خورده)</th>
-              <th>کف قطعی فروش</th>
-              <th>درصد تخفیف</th>
-              <th>سیستم تخفیف فعال</th>
-              <th>آخرین استعلام</th>
-              <th>وضعیت</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((p, idx) => <tr key={p.id}>
-                <td className="num">
-                  <span className="badge bg-slate-100 text-slate-700 font-bold">کارت #{idx + 1}</span>
-                </td>
-                <td>
-                  <_link.default href={`/products/${p.id}`} className="font-medium text-indigo-700 hover:underline">
-                    {p.name}
-                  </_link.default>
-                  <div className="text-xs text-slate-400">
-                    {p.sku}
-                    {p.category ? ` · ${p.category}` : ""}
-                  </div>
-                </td>
-                <td>{p.sourceType === "torob" ? "ترب" : p.sourceType}</td>
-                <td className="num">{(0, _format.toman)(p.costPrice || p.currentHardFloorPrice)}</td>
-                <td className="num line-through decoration-slate-400">{(0, _format.toman)(p.currentBasePrice)}</td>
-                <td className="num font-bold text-emerald-700">{(0, _format.toman)(p.currentFinalPrice)}</td>
-                <td className="num font-bold text-rose-600">{(0, _format.pct)(p.currentDiscountPct, 0)}</td>
-                <td>
-                  <div className="flex flex-col gap-1">
-                    <span className={`badge border ${_format.campaignColor[p.currentCampaign ?? "none"] ?? "bg-slate-100"}`}>
-                      {p.currentCampaignName || _format.campaignLabel[p.currentCampaign ?? "none"]}
-                    </span>
-                    {p.currentShowInFeatured && <span className="text-[10px] font-medium text-indigo-700">★ در منتخب‌های صفحه اصلی</span>}
-                  </div>
-                </td>
-                <td className="text-xs">{(0, _format.faDate)(p.lastCheckedAt)}</td>
-                <td>
-                  <span className={`badge ${_format.statusColor[p.status]}`}>{_format.statusLabel[p.status]}</span>
-                </td>
-                <td>
-                  <_actions.RunButton productIds={[p.id]} label="استعلام" className="btn-secondary" />
-                </td>
-              </tr>)}
-            {!rows.length && <tr>
-                <td colSpan={11} className="py-8 text-center text-slate-400">
-                  محصولی ثبت نشده است
-                </td>
-              </tr>}
-          </tbody>
-        </table>
-      </div>
-    </div>;
+    const rows = await db_1.db.select().from(schema_1.products).orderBy((0, drizzle_orm_1.asc)(schema_1.products.id));
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-6", children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-center justify-between gap-3", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("h1", { className: "text-2xl font-bold", children: "\u0645\u062F\u06CC\u0631\u06CC\u062A \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC \u0645\u062D\u0635\u0648\u0644 \u0648 \u0631\u0646\u062C\u200C\u0647\u0627\u06CC \u062A\u062E\u0641\u06CC\u0641" }), (0, jsx_runtime_1.jsx)("p", { className: "mt-1 text-xs text-slate-500", children: "\u0647\u0631 \u0645\u062D\u0635\u0648\u0644 \u062F\u0627\u0631\u0627\u06CC \u06CC\u06A9 \u0634\u0645\u0627\u0631\u0647 \u06A9\u0627\u0631\u062A (`\u06A9\u0627\u0631\u062A #\u06F1`\u060C `\u06A9\u0627\u0631\u062A #\u06F2` \u0648 ...) \u0627\u0633\u062A \u06A9\u0647 \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u06CC\u062F \u062F\u0631 \u0646\u0648\u0627\u0631 \u0632\u06CC\u0631 \u06CC\u0627 \u062F\u0631 \u0635\u0641\u062D\u0647 \u00AB\u06A9\u0645\u067E\u06CC\u0646\u200C\u0647\u0627\u00BB\u060C \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0633\u0642\u0641 \u0648 \u06A9\u0641 \u0648 \u0627\u0639\u0645\u0627\u0644 \u062A\u062E\u0641\u06CC\u0641 \u0631\u0627 \u0631\u0648\u06CC \u0631\u0646\u062C \u062F\u0644\u062E\u0648\u0627\u0647\u06CC \u0627\u0632 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F." })] }), (0, jsx_runtime_1.jsx)(actions_1.RunButton, { label: "\u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0648 \u0628\u0631\u0648\u0632\u0631\u0633\u0627\u0646\u06CC \u0647\u0645\u0647 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627" })] }), (0, jsx_runtime_1.jsx)(actions_1.CardRangeRunner, { totalCards: rows.length }), (0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 font-bold", children: "\u0627\u0641\u0632\u0648\u062F\u0646 \u06A9\u0627\u0631\u062A \u0645\u062D\u0635\u0648\u0644 \u062C\u062F\u06CC\u062F" }), (0, jsx_runtime_1.jsx)(product_form_1.ProductForm, {})] }), (0, jsx_runtime_1.jsxs)("div", { className: "space-y-3 lg:hidden", children: [rows.map((p, idx) => ((0, jsx_runtime_1.jsxs)("div", { className: "m-row", children: [(0, jsx_runtime_1.jsxs)("div", { className: "mb-2 flex items-start justify-between gap-2", children: [(0, jsx_runtime_1.jsxs)("div", { className: "min-w-0", children: [(0, jsx_runtime_1.jsx)(link_1.default, { href: `/products/${p.id}`, className: "block truncate font-bold text-indigo-700", children: p.name }), (0, jsx_runtime_1.jsxs)("div", { className: "text-xs text-slate-400", children: ["\u06A9\u0627\u0631\u062A #", idx + 1, " \u00B7 ", p.sku, p.category ? ` · ${p.category}` : ""] })] }), (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[p.status]}`, children: format_1.statusLabel[p.status] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u0645\u0646\u0628\u0639 \u0627\u0633\u062A\u0639\u0644\u0627\u0645" }), (0, jsx_runtime_1.jsx)("span", { children: p.sourceType === "torob" ? "ترب" : p.sourceType })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u06A9\u0641 \u0642\u0637\u0639\u06CC \u0641\u0631\u0648\u0634" }), (0, jsx_runtime_1.jsx)("span", { className: "num font-bold text-emerald-700", children: (0, format_1.toman)(p.currentFinalPrice) })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u0633\u0642\u0641 \u0645\u0639\u06CC\u0627\u0631 (\u062E\u0637\u200C\u062E\u0648\u0631\u062F\u0647)" }), (0, jsx_runtime_1.jsx)("span", { className: "num line-through decoration-slate-400", children: (0, format_1.toman)(p.currentBasePrice) })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u062A\u062E\u0641\u06CC\u0641 / \u0633\u06CC\u0633\u062A\u0645" }), (0, jsx_runtime_1.jsxs)("span", { className: "num font-bold text-rose-600", children: [(0, format_1.pct)(p.currentDiscountPct, 0), " \u00B7 ", p.currentCampaignName || format_1.campaignLabel[p.currentCampaign ?? "none"]] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u0622\u062E\u0631\u06CC\u0646 \u0627\u0633\u062A\u0639\u0644\u0627\u0645" }), (0, jsx_runtime_1.jsx)("span", { className: "text-xs", children: (0, format_1.faDate)(p.lastCheckedAt) })] }), (0, jsx_runtime_1.jsx)("div", { className: "mt-3", children: (0, jsx_runtime_1.jsx)(actions_1.RunButton, { productIds: [p.id], label: "\u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u06CC\u0646 \u06A9\u0627\u0631\u062A", className: "btn-secondary w-full" }) })] }, p.id))), !rows.length && (0, jsx_runtime_1.jsx)("div", { className: "empty-state", children: "\u0645\u062D\u0635\u0648\u0644\u06CC \u062B\u0628\u062A \u0646\u0634\u062F\u0647 \u0627\u0633\u062A" })] }), (0, jsx_runtime_1.jsx)("div", { className: "card hidden lg:block", children: (0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "# \u06A9\u0627\u0631\u062A" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0645\u062D\u0635\u0648\u0644" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0645\u0646\u0628\u0639" }), (0, jsx_runtime_1.jsx)("th", { children: "\u062A\u0645\u0627\u0645\u200C\u0634\u062F\u0647 / \u06A9\u0641 \u0627\u0645\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0633\u0642\u0641 \u0645\u0639\u06CC\u0627\u0631 (\u062E\u0637\u200C\u062E\u0648\u0631\u062F\u0647)" }), (0, jsx_runtime_1.jsx)("th", { children: "\u06A9\u0641 \u0642\u0637\u0639\u06CC \u0641\u0631\u0648\u0634" }), (0, jsx_runtime_1.jsx)("th", { children: "\u062F\u0631\u0635\u062F \u062A\u062E\u0641\u06CC\u0641" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0633\u06CC\u0633\u062A\u0645 \u062A\u062E\u0641\u06CC\u0641 \u0641\u0639\u0627\u0644" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0622\u062E\u0631\u06CC\u0646 \u0627\u0633\u062A\u0639\u0644\u0627\u0645" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0636\u0639\u06CC\u062A" }), (0, jsx_runtime_1.jsx)("th", {})] }) }), (0, jsx_runtime_1.jsxs)("tbody", { children: [rows.map((p, idx) => ((0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, jsx_runtime_1.jsxs)("span", { className: "badge bg-slate-100 text-slate-700 font-bold", children: ["\u06A9\u0627\u0631\u062A #", idx + 1] }) }), (0, jsx_runtime_1.jsxs)("td", { children: [(0, jsx_runtime_1.jsx)(link_1.default, { href: `/products/${p.id}`, className: "font-medium text-indigo-700 hover:underline", children: p.name }), (0, jsx_runtime_1.jsxs)("div", { className: "text-xs text-slate-400", children: [p.sku, p.category ? ` · ${p.category}` : ""] })] }), (0, jsx_runtime_1.jsx)("td", { children: p.sourceType === "torob" ? "ترب" : p.sourceType }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.toman)(p.costPrice || p.currentHardFloorPrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num line-through decoration-slate-400", children: (0, format_1.toman)(p.currentBasePrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num font-bold text-emerald-700", children: (0, format_1.toman)(p.currentFinalPrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num font-bold text-rose-600", children: (0, format_1.pct)(p.currentDiscountPct, 0) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-col gap-1", children: [(0, jsx_runtime_1.jsx)("span", { className: `badge border ${format_1.campaignColor[p.currentCampaign ?? "none"] ?? "bg-slate-100"}`, children: p.currentCampaignName || format_1.campaignLabel[p.currentCampaign ?? "none"] }), p.currentShowInFeatured && ((0, jsx_runtime_1.jsx)("span", { className: "text-[10px] font-medium text-indigo-700", children: "\u2605 \u062F\u0631 \u0645\u0646\u062A\u062E\u0628\u200C\u0647\u0627\u06CC \u0635\u0641\u062D\u0647 \u0627\u0635\u0644\u06CC" }))] }) }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: (0, format_1.faDate)(p.lastCheckedAt) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[p.status]}`, children: format_1.statusLabel[p.status] }) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)(actions_1.RunButton, { productIds: [p.id], label: "\u0627\u0633\u062A\u0639\u0644\u0627\u0645", className: "btn-secondary" }) })] }, p.id))), !rows.length && ((0, jsx_runtime_1.jsx)("tr", { children: (0, jsx_runtime_1.jsx)("td", { colSpan: 11, className: "py-8 text-center text-slate-400", children: "\u0645\u062D\u0635\u0648\u0644\u06CC \u062B\u0628\u062A \u0646\u0634\u062F\u0647 \u0627\u0633\u062A" }) }))] })] }) })] }));
 }

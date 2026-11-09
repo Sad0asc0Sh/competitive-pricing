@@ -1,7 +1,7 @@
 "use strict";
-
+Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
-var _index = require("./index");
+const index_1 = require("./index");
 /**
  * این سیستم عمداً هیچ داده نمونه/ساختگی (seed) ندارد.
  *
@@ -19,10 +19,10 @@ var _index = require("./index");
  * در ‎ensureDefaults()‎ ساخته می‌شوند و نیازی به seed ندارند.
  */
 async function main() {
-  console.log("seed: هیچ داده نمونه‌ای وارد نشد (سیاست سیستم واقعی). برای ایمپورت محصولات واقعی: node scripts/import-mongo-products.cjs");
-  await _index.pool.end();
+    console.log("seed: هیچ داده نمونه‌ای وارد نشد (سیاست سیستم واقعی). برای ایمپورت محصولات واقعی: node scripts/import-mongo-products.cjs");
+    await index_1.pool.end();
 }
-main().catch(e => {
-  console.error(e);
-  process.exit(1);
+main().catch((e) => {
+    console.error(e);
+    process.exit(1);
 });

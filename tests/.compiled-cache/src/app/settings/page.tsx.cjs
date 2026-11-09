@@ -1,59 +1,22 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.default = SettingsPage;
+Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
-var _db = require("@/db");
-var _schema = require("../../db/schema");
-var _settingsPanels = require("@/components/settings-panels");
-var _config = require("../../lib/ai/config");
-var _bootstrap = require("../../lib/services/bootstrap");
-const dynamic = "force-dynamic";
-exports.dynamic = dynamic;
+exports.default = SettingsPage;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const db_1 = require("@/db");
+const schema_1 = require("../../db/schema");
+const settings_panels_1 = require("@/components/settings-panels");
+const config_1 = require("../../lib/ai/config");
+const bootstrap_1 = require("../../lib/services/bootstrap");
+exports.dynamic = "force-dynamic";
 async function SettingsPage() {
-  await (0, _bootstrap.ensureDefaults)();
-  const [profiles, sch, conns, aiStatus] = await Promise.all([_db.db.select().from(_schema.pricingProfiles).orderBy(_schema.pricingProfiles.id), _db.db.select().from(_schema.schedules).orderBy(_schema.schedules.id), _db.db.select().from(_schema.storeConnectors).orderBy(_schema.storeConnectors.id), (0, _config.getAIStatus)()]);
-  const masked = conns.map(c => ({
-    ...c,
-    config: Object.fromEntries(Object.entries(c.config).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v]))
-  }));
-  return <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold">تنظیمات موتور قیمت‌گذاری</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          همه پارامترهای الگوریتم از این‌جا قابل تنظیم است؛ هر محصول می‌تواند پروفایل خاص خودش را داشته باشد. هوش مصنوعی مکمل:{" "}
-          {aiStatus.ai.configured ? `فعال (${aiStatus.ai.model})` : "غیرفعال — توکن را در همین صفحه وارد و ذخیره کنید"}{" "}
-          · ناظر SubQ SystemOne:{" "}
-          {aiStatus.subq.configured ? `متصل (${aiStatus.subq.model})` : "موتور آنی محلی — برای API زنده، توکن SubQ را در همین صفحه ثبت کنید"}.
-        </p>
-      </div>
-
-      <section>
-        <h2 className="mb-3 text-lg font-bold">هوش مصنوعی و توکن‌های API (ذخیره امن در دیتابیس)</h2>
-        <_settingsPanels.AISettingsPanel initial={aiStatus} />
-      </section>
-
-      <section>
-        <h2 className="mb-3 text-lg font-bold">پروفایل‌های قیمت‌گذاری</h2>
-        <_settingsPanels.ProfileEditor profiles={profiles.map(p => ({
-        ...p,
-        config: (0, _bootstrap.mergeConfig)(p.config)
-      }))} />
-      </section>
-
-      <section className="card">
-        <h2 className="mb-3 text-lg font-bold">زمان‌بندی استعلام خودکار</h2>
-        <_settingsPanels.ScheduleEditor items={sch} />
-      </section>
-
-      <section>
-        <h2 className="mb-3 text-lg font-bold">اتصال به فروشگاه (وب‌سرویس)</h2>
-        <_settingsPanels.ConnectorEditor items={masked} />
-        <p className="mt-2 text-xs text-slate-500">
-          مقادیر می‌توانند از متغیرهای محیطی هم خوانده شوند: <code dir="ltr">WC_BASE_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET</code> یا <code dir="ltr">STORE_WEBHOOK_URL, STORE_WEBHOOK_SECRET</code>.
-        </p>
-      </section>
-    </div>;
+    await (0, bootstrap_1.ensureDefaults)();
+    const [profiles, sch, conns, aiStatus] = await Promise.all([
+        db_1.db.select().from(schema_1.pricingProfiles).orderBy(schema_1.pricingProfiles.id),
+        db_1.db.select().from(schema_1.schedules).orderBy(schema_1.schedules.id),
+        db_1.db.select().from(schema_1.storeConnectors).orderBy(schema_1.storeConnectors.id),
+        (0, config_1.getAIStatus)(),
+    ]);
+    const masked = conns.map((c) => ({ ...c, config: Object.fromEntries(Object.entries(c.config).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v])) }));
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-8", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("h1", { className: "text-2xl font-bold", children: "\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0645\u0648\u062A\u0648\u0631 \u0642\u06CC\u0645\u062A\u200C\u06AF\u0630\u0627\u0631\u06CC" }), (0, jsx_runtime_1.jsxs)("p", { className: "mt-1 text-sm text-slate-500", children: ["\u0647\u0645\u0647 \u067E\u0627\u0631\u0627\u0645\u062A\u0631\u0647\u0627\u06CC \u0627\u0644\u06AF\u0648\u0631\u06CC\u062A\u0645 \u0627\u0632 \u0627\u06CC\u0646\u200C\u062C\u0627 \u0642\u0627\u0628\u0644 \u062A\u0646\u0638\u06CC\u0645 \u0627\u0633\u062A\u061B \u0647\u0631 \u0645\u062D\u0635\u0648\u0644 \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062E\u0627\u0635 \u062E\u0648\u062F\u0634 \u0631\u0627 \u062F\u0627\u0634\u062A\u0647 \u0628\u0627\u0634\u062F. \u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC \u0645\u06A9\u0645\u0644:", " ", aiStatus.ai.configured ? `فعال (${aiStatus.ai.model})` : "غیرفعال — توکن را در همین صفحه وارد و ذخیره کنید", " ", "\u00B7 \u0646\u0627\u0638\u0631 SubQ SystemOne:", " ", aiStatus.subq.configured ? `متصل (${aiStatus.subq.model})` : "موتور آنی محلی — برای API زنده، توکن SubQ را در همین صفحه ثبت کنید", "."] })] }), (0, jsx_runtime_1.jsxs)("section", { children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 text-lg font-bold", children: "\u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC \u0648 \u062A\u0648\u06A9\u0646\u200C\u0647\u0627\u06CC API (\u0630\u062E\u06CC\u0631\u0647 \u0627\u0645\u0646 \u062F\u0631 \u062F\u06CC\u062A\u0627\u0628\u06CC\u0633)" }), (0, jsx_runtime_1.jsx)(settings_panels_1.AISettingsPanel, { initial: aiStatus })] }), (0, jsx_runtime_1.jsxs)("section", { children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 text-lg font-bold", children: "\u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u0642\u06CC\u0645\u062A\u200C\u06AF\u0630\u0627\u0631\u06CC" }), (0, jsx_runtime_1.jsx)(settings_panels_1.ProfileEditor, { profiles: profiles.map((p) => ({ ...p, config: (0, bootstrap_1.mergeConfig)(p.config) })) })] }), (0, jsx_runtime_1.jsxs)("section", { className: "card", children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 text-lg font-bold", children: "\u0632\u0645\u0627\u0646\u200C\u0628\u0646\u062F\u06CC \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062E\u0648\u062F\u06A9\u0627\u0631" }), (0, jsx_runtime_1.jsx)(settings_panels_1.ScheduleEditor, { items: sch })] }), (0, jsx_runtime_1.jsxs)("section", { children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 text-lg font-bold", children: "\u0627\u062A\u0635\u0627\u0644 \u0628\u0647 \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 (\u0648\u0628\u200C\u0633\u0631\u0648\u06CC\u0633)" }), (0, jsx_runtime_1.jsx)(settings_panels_1.ConnectorEditor, { items: masked }), (0, jsx_runtime_1.jsxs)("p", { className: "mt-2 text-xs text-slate-500", children: ["\u0645\u0642\u0627\u062F\u06CC\u0631 \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u0646\u062F \u0627\u0632 \u0645\u062A\u063A\u06CC\u0631\u0647\u0627\u06CC \u0645\u062D\u06CC\u0637\u06CC \u0647\u0645 \u062E\u0648\u0627\u0646\u062F\u0647 \u0634\u0648\u0646\u062F: ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "WC_BASE_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET" }), " \u06CC\u0627 ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "STORE_WEBHOOK_URL, STORE_WEBHOOK_SECRET" }), "."] })] })] }));
 }

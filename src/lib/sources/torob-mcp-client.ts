@@ -1,5 +1,6 @@
 import { parsePersianRelativeDate } from "@/lib/pricing/filters";
-import { selectBestTorobSearchMatch } from "@/lib/pricing/matcher";
+import { selectBestTorobSearchMatch, type BestMatchOutcome } from "@/lib/pricing/matcher";
+import { parseTitle } from "@/lib/pricing/match/parse";
 import { parsePriceToToman } from "@/lib/pricing/sourcing";
 import type { MarketPriceTrend, RawOffer, SourceResult } from "@/lib/pricing/types";
 
@@ -62,11 +63,24 @@ export interface TorobMcpProductDetails {
   name_en: string | null;
   cheapest_price_toman: number | null;
   available: boolean;
+  /** تعداد کل پیشنهادهای ترب (پیش از برش `max_offers`) */
   offer_count: number;
+  /** سرور MCP وقتی پیشنهادها را به `max_offers` ارزان‌ترین برش زده این پرچم را می‌گذارد */
+  offers_truncated?: boolean;
+  offers_returned?: number;
   in_person_count?: number;
   offers: TorobMcpOffer[];
   in_person_sellers?: TorobMcpInPersonSeller[];
   url?: string;
+  /** کمترین و بیشترین قیمت خودِ ترب برای این محصول (پیش از برش) */
+  price_range_toman?: { min: number | null; max: number | null };
+  /** چگونگی پیدا شدن شناسه: exact-id | name-search | details-url | remembered | id-only | provided-row */
+  resolved_by?: string;
+  specs?: { group: string | null; key: string; value: string }[];
+  category_path?: { id: string; title: string }[];
+  variants?: { title: string; count: number }[];
+  is_authentic?: boolean;
+  availability_note?: string;
 }
 
 export interface TorobMcpSearchCard {
@@ -107,7 +121,7 @@ export function extractSellerCountFromMcpCard(card: TorobMcpSearchCard): number 
 export function convertMcpDetailsToOffers(
   details: TorobMcpProductDetails,
   now: Date = new Date(),
-): { offers: RawOffer[]; totalSellerCount: number; inPersonSellerCount: number } {
+): { offers: RawOffer[]; totalSellerCount: number; inPersonSellerCount: number; offersTruncated: boolean; onlineOfferCount: number } {
   const offers: RawOffer[] = [];
 
   for (const o of details.offers ?? []) {
@@ -159,12 +173,51 @@ export function convertMcpDetailsToOffers(
 
   const onlineCount = Math.max(toSafeInt(details.offer_count), (details.offers ?? []).length);
   const inPersonCount = Math.max(toSafeInt(details.in_person_count), (details.in_person_sellers ?? []).length);
+  // خروجی ترب «ارزان‌ترین‌های موجود اول» برش خورده است؟ (پرچم صریح یا تعداد کل > تعداد دریافتی)
+  const offersTruncated = details.offers_truncated === true || onlineCount > (details.offers ?? []).length;
 
   return {
     offers,
     totalSellerCount: onlineCount + inPersonCount,
     inPersonSellerCount: inPersonCount,
+    offersTruncated,
+    onlineOfferCount: onlineCount,
   };
+}
+
+/**
+ * پرس‌وجوهای جستجوی ترب برای یک محصول، به ترتیب اولویت:
+ *  ۱) نام کامل محصول؛ ۲) فقط کد مدل (دقیق‌ترین کلید جستجو برای کالاهای کددار)؛ ۳) برند + کد مدل.
+ * کدهایی که داخل بند «مناسب برای …» (لوازم جانبی) آمده‌اند هویت خود کالا نیستند و استفاده نمی‌شوند.
+ */
+export function buildSearchQueries(productName: string, sku?: string | null): string[] {
+  const out: string[] = [];
+  const push = (q: string | null | undefined) => {
+    const t = String(q ?? "").replace(/\s+/g, " ").trim();
+    if (t.length >= 3 && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
+  };
+  push(productName);
+  try {
+    const parsed = parseTitle(productName, { sku });
+    const codes = parsed.codes
+      .filter((c) => !c.inCompat && c.canon.length >= 5)
+      .sort((a, b) => b.canon.length - a.canon.length);
+    const best = codes[0];
+    if (best) {
+      // کد با همان املای عنوانِ ورودی (حروف بزرگ/کوچک و خط‌تیره) پرس‌وجو می‌شود؛ parseTitle متن را کوچک می‌کند
+      const needle = best.canon.toLowerCase();
+      const original =
+        String(productName)
+          .split(/[\s،,;()\[\]]+/)
+          .find((w) => w.replace(/[^0-9a-z]/gi, "").toLowerCase() === needle) ?? best.raw;
+      push(original);
+      const brand = parsed.brands[0] ?? best.brandHint ?? null;
+      if (brand && !original.toLowerCase().startsWith(String(brand).toLowerCase())) push(`${brand} ${original}`);
+    }
+  } catch {
+    // تجزیهٔ عنوان نباید جستجو را بشکند
+  }
+  return out.slice(0, 3);
 }
 
 /** تحلیل سری‌های نمودار قیمت ترب (`price_history` در `torob-mcp`) برای استخراج جهت بازار */
@@ -289,7 +342,11 @@ export async function callTorobMcpTool<T = unknown>(
 }
 
 /**
- * واکشی کامل پیشنهادهای یک محصول از طریق سرور `torob-mcp` با فیلتر ۷ لایه تطبیق هویت محصول:
+ * واکشی کامل پیشنهادهای یک محصول از طریق سرور `torob-mcp` با فیلتر ۷ لایه تطبیق هویت محصول.
+ *
+ * مسیر جستجو (وقتی prk شناخته‌شده نیست) چندمرحله‌ای است: نام کامل ← فقط کد مدل ← برند+کد. نتایج مراحل روی هم
+ * انباشته و دوباره با تطبیق‌دهنده رتبه‌بندی می‌شوند؛ به محض اینکه یک کارت «تایید خودکار» شد جستجو متوقف می‌شود.
+ * اطلاعات بریدگی خروجی (offers_truncated / offer_count / price_range_toman) و عنوان انگلیسی کارت به موتور داده می‌شود.
  */
 export async function fetchViaTorobMcpServer(opts: {
   mcpUrl: string;
@@ -305,37 +362,37 @@ export async function fetchViaTorobMcpServer(opts: {
   let detailsUrl = opts.detailsUrl?.trim() || null;
   let matchExplanation: string | null = null;
   let matchScore: number | null = null;
+  const searchLog: { query: string; cards: number; error?: string }[] = [];
+  const challengedResult = (where: string, errorText?: string): SourceResult => ({
+    source: "torob",
+    prk,
+    offers: [],
+    totalSellerCount: 0,
+    fetchedAt: now,
+    ok: false,
+    error:
+      "فایروال ترب روی آی‌پی دیتاسنتر سرور چالش امنیتی (HTTP 490 / arCAPTCHA) فعال کرده است. برای استعلام بدون محدودیت از سرور خارج از ایران، آدرس Relay/Worker ایرانی را در متغیر TOROB_API_BASE تنظیم کنید یا از دکمه «ریست قفل ترب» استفاده نمایید.",
+    meta: { challenged: true, mcpError: errorText, stage: where },
+  });
 
-  // اگر prk نداریم، تا ۲۴ نتیجه اول را از torob-mcp گرفته و با موتور ۷ لایه تطبیق هویت پایش می‌کنیم
+  // اگر prk نداریم، نتایج جستجو را (تا ۳ پرس‌وجو) با موتور ۷ لایه تطبیق هویت پایش می‌کنیم
   if (!prk && opts.productName) {
-    const searchOut = await callTorobMcpToolWithDiag<{ products?: TorobMcpSearchCard[] }>(
-      opts.mcpUrl,
-      "search_products",
-      { query: opts.productName, limit: 24, sort: "popularity" },
-    );
-
-    if (searchOut.challenged) {
-      return {
-        source: "torob",
-        offers: [],
-        totalSellerCount: 0,
-        fetchedAt: now,
-        ok: false,
-        error:
-          "فایروال ترب روی آی‌پی دیتاسنتر سرور چالش امنیتی (HTTP 490 / arCAPTCHA) فعال کرده است. برای استعلام بدون محدودیت از سرور خارج از ایران، آدرس Relay/Worker ایرانی را در متغیر TOROB_API_BASE تنظیم کنید یا از دکمه «ریست قفل ترب» استفاده نمایید.",
-        meta: { challenged: true, mcpError: searchOut.errorText },
-      };
-    }
-
-    const cards = (searchOut.data?.products ?? []).filter((p) => p.prk);
-    if (cards.length > 0) {
-      const matchOutcome = selectBestTorobSearchMatch(
-        {
-          productName: opts.productName,
-          sku: opts.sku,
-          anchorPriceToman: opts.anchorPriceToman,
-        },
-        cards.map((c) => ({
+    const cardsByPrk = new Map<string, TorobMcpSearchCard>();
+    let outcome: BestMatchOutcome | null = null;
+    for (const query of buildSearchQueries(opts.productName, opts.sku)) {
+      const searchOut = await callTorobMcpToolWithDiag<{ products?: TorobMcpSearchCard[] }>(
+        opts.mcpUrl,
+        "search_products",
+        { query, limit: 24, sort: "popularity" },
+      );
+      if (searchOut.challenged) return challengedResult("search", searchOut.errorText);
+      const found = (searchOut.data?.products ?? []).filter((p) => p.prk);
+      searchLog.push({ query, cards: found.length, ...(searchOut.errorText ? { error: searchOut.errorText } : {}) });
+      for (const c of found) if (!cardsByPrk.has(c.prk)) cardsByPrk.set(c.prk, c);
+      if (!cardsByPrk.size) continue;
+      outcome = selectBestTorobSearchMatch(
+        { productName: opts.productName, sku: opts.sku, anchorPriceToman: opts.anchorPriceToman },
+        [...cardsByPrk.values()].map((c) => ({
           prk: c.prk,
           titleFa: c.name_fa ?? "",
           titleEn: c.name_en ?? null,
@@ -346,11 +403,15 @@ export async function fetchViaTorobMcpServer(opts: {
           shopName: c.shop_name,
         })),
       );
-      if (matchOutcome.best) {
-        prk = matchOutcome.best.candidate.prk;
-        detailsUrl = matchOutcome.best.candidate.detailsUrl ?? detailsUrl;
-        matchExplanation = matchOutcome.explanation;
-        matchScore = matchOutcome.best.score;
+      if (outcome.confident) break;
+    }
+
+    if (outcome) {
+      if (outcome.best) {
+        prk = outcome.best.candidate.prk;
+        detailsUrl = outcome.best.candidate.detailsUrl ?? detailsUrl;
+        matchExplanation = outcome.explanation;
+        matchScore = outcome.best.score;
       } else {
         return {
           source: "torob",
@@ -358,8 +419,8 @@ export async function fetchViaTorobMcpServer(opts: {
           totalSellerCount: 0,
           fetchedAt: now,
           ok: false,
-          error: matchOutcome.explanation,
-          meta: { rejectedInSearch: true },
+          error: outcome.explanation,
+          meta: { rejectedInSearch: true, searchQueries: searchLog },
         };
       }
     }
@@ -378,19 +439,7 @@ export async function fetchViaTorobMcpServer(opts: {
     },
   );
 
-  if (detailsOut.challenged) {
-    return {
-      source: "torob",
-      prk,
-      offers: [],
-      totalSellerCount: 0,
-      fetchedAt: now,
-      ok: false,
-      error:
-        "فایروال ترب روی آی‌پی دیتاسنتر سرور چالش امنیتی (HTTP 490 / arCAPTCHA) فعال کرده است. برای رفع آن متغیر TOROB_API_BASE را تنظیم کنید.",
-      meta: { challenged: true, mcpError: detailsOut.errorText },
-    };
-  }
+  if (detailsOut.challenged) return challengedResult("details", detailsOut.errorText);
 
   const details = detailsOut.data;
   if (!details || (!details.offers?.length && !details.in_person_sellers?.length)) {
@@ -408,6 +457,7 @@ export async function fetchViaTorobMcpServer(opts: {
   return {
     source: "torob",
     productTitle: details.name_fa ?? undefined,
+    productTitleEn: details.name_en ?? null,
     prk: details.prk ?? prk,
     detailsUrl,
     offers: converted.offers,
@@ -421,6 +471,16 @@ export async function fetchViaTorobMcpServer(opts: {
       mcpUrl: opts.mcpUrl,
       matchScore,
       matchExplanation,
+      // اطلاعات کفایت داده: خروجی ترب «۳۰ ارزان‌ترینِ موجود» است؛ موتور باید بداند چیزی دیده نشده یا نه
+      offersTruncated: converted.offersTruncated,
+      onlineOfferCount: converted.onlineOfferCount,
+      offersReturned: (details.offers ?? []).length,
+      priceRangeToman: details.price_range_toman ?? null,
+      resolvedBy: details.resolved_by ?? null,
+      categoryPath: (details.category_path ?? []).map((c) => c.title),
+      isAuthentic: details.is_authentic === true,
+      availabilityNote: details.availability_note ?? null,
+      searchQueries: searchLog,
     },
   };
 }

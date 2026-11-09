@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "seeds": [
+      9001,
+      9002,
+      9003
+    ],
+    "nPerSeed": 300
+  },
+  "wronglisting": {
+    "baseline": {
+      "n": 900,
+      "priced": 900,
+      "autoApplied": 127,
+      "autoRate": 0.1411111111111111,
+      "autoRateCI95": [
+        0.11988879000038373,
+        0.16538420473674717
+      ],
+      "sentToReviewOrRejected": 773
+    },
+    "v2": {
+      "n": 900,
+      "priced": 900,
+      "autoApplied": 0,
+      "autoRate": 0,
+      "autoRateCI95": [
+        4.318375942142756e-19,
+        0.0042503022653526895
+      ],
+      "sentToReviewOrRejected": 900
+    }
+  },
+  "wrongself": {
+    "baseline": {
+      "n": 900,
+      "priced": 900,
+      "autoApplied": 368,
+      "autoRate": 0.4088888888888889,
+      "autoRateCI95": [
+        0.37722239046709516,
+        0.4413298868345913
+      ],
+      "sentToReviewOrRejected": 532
+    },
+    "v2": {
+      "n": 900,
+      "priced": 900,
+      "autoApplied": 0,
+      "autoRate": 0,
+      "autoRateCI95": [
+        4.318375942142756e-19,
+        0.0042503022653526895
+      ],
+      "sentToReviewOrRejected": 900
+    }
+  }
+}

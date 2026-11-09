@@ -562,20 +562,31 @@ async function priceOneProduct(
   }
 
   if (config.ai.enabled && result.finalPrice && result.confidence < config.ai.reviewBelowConfidence) {
-    const review = await reviewDecisionWithAI({
-      productName: product.name,
-      costPrice: result.supply.effectiveCostPrice,
-      offers: result.offers.map((o) => ({
-        shopName: o.shopName,
-        price: o.price,
-        included: o.included,
-        excludeReason: o.excludeReason,
-      })),
-      referencePrice: result.referencePrice,
-      finalPrice: result.finalPrice,
-      basePrice: result.basePrice,
-      reviewReasons: result.reviewReasons,
-    });
+    // محرمانگی (۴.۲.۰): قیمت خرید/تمام‌شده/کف سود هرگز به LLM بیرونی فرستاده نمی‌شود؛ آن‌ها فقط برای
+    // پاک‌سازی عددهای محرمانه از متن‌ها به کار می‌روند (نگاه کنید به src/lib/ai/review-payload.ts).
+    const review = await reviewDecisionWithAI(
+      {
+        productName: product.name,
+        offers: result.offers.map((o) => ({
+          shopName: o.shopName,
+          price: o.price,
+          included: o.included,
+          excludeReason: o.excludeReason,
+        })),
+        referencePrice: result.referencePrice,
+        finalPrice: result.finalPrice,
+        basePrice: result.basePrice,
+        reviewReasons: result.reviewReasons,
+        alternative: result.decisionScenarios?.alternative ?? null,
+        confidence: result.confidence,
+      },
+      [
+        result.supply.effectiveCostPrice,
+        result.supply.hardFloorPrice,
+        result.supply.baseBuyPrice,
+        product.costPrice,
+      ],
+    );
     if (review) {
       result.steps.push({
         step: "ai_review",

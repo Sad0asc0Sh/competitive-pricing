@@ -1,29 +1,16 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.default = CampaignsPage;
+Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
-var _db = require("@/db");
-var _schema = require("../../db/schema");
-var _campaignEditor = require("@/components/campaign-editor");
-var _bootstrap = require("../../lib/services/bootstrap");
-var _drizzleOrm = require("drizzle-orm");
-const dynamic = "force-dynamic";
-exports.dynamic = dynamic;
+exports.default = CampaignsPage;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const db_1 = require("@/db");
+const schema_1 = require("../../db/schema");
+const campaign_editor_1 = require("@/components/campaign-editor");
+const bootstrap_1 = require("../../lib/services/bootstrap");
+const drizzle_orm_1 = require("drizzle-orm");
+exports.dynamic = "force-dynamic";
 async function CampaignsPage() {
-  await (0, _bootstrap.ensureDefaults)();
-  const rows = await _db.db.select().from(_schema.discountCampaigns).orderBy((0, _drizzleOrm.desc)(_schema.discountCampaigns.priority));
-  return <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">
-          استودیو مدیریت ۳ سیستم تخفیف sgeooole (لحظه‌ای · شگفت‌انگیز · فرصت‌های زمان‌دار مالی و منتخب‌ها)
-        </h1>
-        <p className="mt-1 text-sm leading-6 text-slate-600">
-          موتور ابتدا قیمت‌های پرت و آپدیت‌نشده ترب را حذف کرده و <b>«سقف واقعی بازار تحت رصد»</b> را به عنوان قیمت معیار (خط‌خورده) و <b>«کف رقابتی هدف»</b> را به عنوان قیمت فروش قطعی کشف می‌کند. سپس درصد تخفیف را دقیقاً روی سقف اعمال می‌کند تا خروجی روی کف بنشیند و بر اساس قوانین زیر، هر رنج از کارت‌ها را در یکی از ۳ سیستم تخفیف فروشگاه قرار می‌دهد.
-        </p>
-      </div>
-      <_campaignEditor.CampaignEditor campaigns={rows} />
-    </div>;
+    await (0, bootstrap_1.ensureDefaults)();
+    const rows = await db_1.db.select().from(schema_1.discountCampaigns).orderBy((0, drizzle_orm_1.desc)(schema_1.discountCampaigns.priority));
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-6", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("h1", { className: "text-2xl font-bold", children: "\u0627\u0633\u062A\u0648\u062F\u06CC\u0648 \u0645\u062F\u06CC\u0631\u06CC\u062A \u06F3 \u0633\u06CC\u0633\u062A\u0645 \u062A\u062E\u0641\u06CC\u0641 sgeooole (\u0644\u062D\u0638\u0647\u200C\u0627\u06CC \u00B7 \u0634\u06AF\u0641\u062A\u200C\u0627\u0646\u06AF\u06CC\u0632 \u00B7 \u0641\u0631\u0635\u062A\u200C\u0647\u0627\u06CC \u0632\u0645\u0627\u0646\u200C\u062F\u0627\u0631 \u0645\u0627\u0644\u06CC \u0648 \u0645\u0646\u062A\u062E\u0628\u200C\u0647\u0627)" }), (0, jsx_runtime_1.jsxs)("p", { className: "mt-1 text-sm leading-6 text-slate-600", children: ["\u0645\u0648\u062A\u0648\u0631 \u0627\u0628\u062A\u062F\u0627 \u0642\u06CC\u0645\u062A\u200C\u0647\u0627\u06CC \u067E\u0631\u062A \u0648 \u0622\u067E\u062F\u06CC\u062A\u200C\u0646\u0634\u062F\u0647 \u062A\u0631\u0628 \u0631\u0627 \u062D\u0630\u0641 \u06A9\u0631\u062F\u0647 \u0648 ", (0, jsx_runtime_1.jsx)("b", { children: "\u00AB\u0633\u0642\u0641 \u0648\u0627\u0642\u0639\u06CC \u0628\u0627\u0632\u0627\u0631 \u062A\u062D\u062A \u0631\u0635\u062F\u00BB" }), " \u0631\u0627 \u0628\u0647 \u0639\u0646\u0648\u0627\u0646 \u0642\u06CC\u0645\u062A \u0645\u0639\u06CC\u0627\u0631 (\u062E\u0637\u200C\u062E\u0648\u0631\u062F\u0647) \u0648 ", (0, jsx_runtime_1.jsx)("b", { children: "\u00AB\u06A9\u0641 \u0631\u0642\u0627\u0628\u062A\u06CC \u0647\u062F\u0641\u00BB" }), " \u0631\u0627 \u0628\u0647 \u0639\u0646\u0648\u0627\u0646 \u0642\u06CC\u0645\u062A \u0641\u0631\u0648\u0634 \u0642\u0637\u0639\u06CC \u06A9\u0634\u0641 \u0645\u06CC\u200C\u06A9\u0646\u062F. \u0633\u067E\u0633 \u062F\u0631\u0635\u062F \u062A\u062E\u0641\u06CC\u0641 \u0631\u0627 \u062F\u0642\u06CC\u0642\u0627\u064B \u0631\u0648\u06CC \u0633\u0642\u0641 \u0627\u0639\u0645\u0627\u0644 \u0645\u06CC\u200C\u06A9\u0646\u062F \u062A\u0627 \u062E\u0631\u0648\u062C\u06CC \u0631\u0648\u06CC \u06A9\u0641 \u0628\u0646\u0634\u06CC\u0646\u062F \u0648 \u0628\u0631 \u0627\u0633\u0627\u0633 \u0642\u0648\u0627\u0646\u06CC\u0646 \u0632\u06CC\u0631\u060C \u0647\u0631 \u0631\u0646\u062C \u0627\u0632 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u0631\u0627 \u062F\u0631 \u06CC\u06A9\u06CC \u0627\u0632 \u06F3 \u0633\u06CC\u0633\u062A\u0645 \u062A\u062E\u0641\u06CC\u0641 \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u0642\u0631\u0627\u0631 \u0645\u06CC\u200C\u062F\u0647\u062F."] })] }), (0, jsx_runtime_1.jsx)(campaign_editor_1.CampaignEditor, { campaigns: rows })] }));
 }

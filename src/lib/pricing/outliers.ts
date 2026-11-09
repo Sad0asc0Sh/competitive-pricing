@@ -18,6 +18,11 @@ export interface ClassificationOptions {
   isCostlessMode?: boolean;
   now?: Date;
   highTrustScoreThreshold?: number;
+  /**
+   * تخمین‌گر v2: طبقه‌بندی سمت پایین (R0/R1) را مدل احتمالی اعتبار (validity.ts) انجام داده است؛
+   * اینجا فقط «گران‌فروش پرتِ» سمت بالا حذف می‌شود.
+   */
+  highSideOnly?: boolean;
 }
 
 function isTrusted(o: OfferEvaluation, highTrustScoreThreshold: number): boolean {
@@ -164,7 +169,7 @@ export function removeOutliers(
         o.cls = "confirmed_low";
         continue;
       }
-      if (o.price < bandLo) {
+      if (o.price < bandLo && !opts?.highSideOnly) {
         // R1: زیر باند بدگمانی
         if (!o.fresh) {
           markSuspect(

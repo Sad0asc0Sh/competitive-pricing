@@ -1,0 +1,225 @@
+{
+  "n": 1068,
+  "expected": {
+    "approve": 792,
+    "review": 161,
+    "reject": 115
+  },
+  "wrongAuto": 0,
+  "ambigAuto": 0.0009363295880149813,
+  "unsafeAuto": 0.0009363295880149813,
+  "autoCorrect": 0.7771535580524345,
+  "coverage": 0.8839190628328009,
+  "coverageExpApprove": 0.9772727272727273,
+  "reviewRate": 0.14794007490636704,
+  "missed": 0.0009363295880149813,
+  "correctReject": 0.07303370786516854,
+  "top1": 0.9488817891373802,
+  "auc": 0.9979841772584043,
+  "pairSame": {
+    "approve": 887,
+    "review": 113,
+    "reject": 4,
+    "n": 1004
+  },
+  "pairNeg": {
+    "sibling_model": {
+      "approve": 0,
+      "review": 428,
+      "reject": 1889,
+      "n": 2317
+    },
+    "different_brand": {
+      "approve": 0,
+      "review": 5,
+      "reject": 1410,
+      "n": 1415
+    },
+    "spec_variant": {
+      "approve": 0,
+      "review": 1,
+      "reject": 1829,
+      "n": 1830
+    },
+    "bundle_pack": {
+      "approve": 0,
+      "review": 0,
+      "reject": 1595,
+      "n": 1595
+    },
+    "cross_category": {
+      "approve": 0,
+      "review": 0,
+      "reject": 1627,
+      "n": 1627
+    },
+    "unrelated": {
+      "approve": 0,
+      "review": 0,
+      "reject": 1618,
+      "n": 1618
+    },
+    "accessory": {
+      "approve": 0,
+      "review": 0,
+      "reject": 3212,
+      "n": 3212
+    },
+    "used_refurb": {
+      "approve": 0,
+      "review": 0,
+      "reject": 390,
+      "n": 390
+    }
+  },
+  "cls": {
+    "auto_correct": 830,
+    "review_other": 97,
+    "reject_absent": 78,
+    "review_same": 61,
+    "reject_present": 1,
+    "auto_ambig": 1
+  },
+  "byFamily": {
+    "camera": {
+      "n": 288,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 223,
+      "expApprove": 188
+    },
+    "recorder": {
+      "n": 96,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 76,
+      "expApprove": 63
+    },
+    "storage": {
+      "n": 180,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 145,
+      "expApprove": 145
+    },
+    "network": {
+      "n": 240,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 193,
+      "expApprove": 195
+    },
+    "sdcard": {
+      "n": 72,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 55,
+      "expApprove": 53
+    },
+    "accessory": {
+      "n": 48,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 36,
+      "expApprove": 35
+    },
+    "power": {
+      "n": 36,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 29,
+      "expApprove": 29
+    },
+    "cable": {
+      "n": 108,
+      "auto_wrong": 0,
+      "auto_ambig": 1,
+      "auto_correct": 73,
+      "expApprove": 84
+    }
+  },
+  "byCoded": {
+    "coded+stated": {
+      "n": 832,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 728,
+      "expApprove": 677,
+      "hasSame": 733,
+      "review": 46
+    },
+    "coded-notstated": {
+      "n": 92,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 0,
+      "expApprove": 2,
+      "hasSame": 82,
+      "review": 91
+    },
+    "codeless": {
+      "n": 144,
+      "auto_wrong": 0,
+      "auto_ambig": 1,
+      "auto_correct": 102,
+      "expApprove": 113,
+      "hasSame": 124,
+      "review": 21
+    }
+  },
+  "leaks": [],
+  "ambigEx": [
+    {
+      "id": "S-1628",
+      "target": "کابل شبکه کت 6 UTP 305 متری",
+      "sku": null,
+      "picked": "كابل شبكه Cat 6 UTP 305 متري",
+      "score": 100,
+      "neg": "different_brand",
+      "role": "brand"
+    }
+  ],
+  "missedEx": [],
+  "pairFAR": {
+    "sibling_model": {
+      "approve": 0,
+      "atLeastReview": 0.18472162278808804,
+      "n": 2317
+    },
+    "different_brand": {
+      "approve": 0,
+      "atLeastReview": 0.0035335689045936395,
+      "n": 1415
+    },
+    "spec_variant": {
+      "approve": 0,
+      "atLeastReview": 0.000546448087431694,
+      "n": 1830
+    },
+    "bundle_pack": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 1595
+    },
+    "cross_category": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 1627
+    },
+    "unrelated": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 1618
+    },
+    "accessory": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 3212
+    },
+    "used_refurb": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 390
+    }
+  }
+}

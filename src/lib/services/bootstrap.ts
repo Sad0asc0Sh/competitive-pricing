@@ -210,6 +210,13 @@ export function mergeConfig(partial: Partial<PricingProfileConfig> | null | unde
     // نسخه‌ی موتور از کد جاری می‌آید، نه از پروفایل قدیمی؛ وگرنه تصمیم‌های ۴.۱.۱
     // با برچسب پروفایل ذخیره‌شده (مثلاً 4.1.0) ثبت می‌شوند.
     engine: { ...d.engine, ...(p.engine ?? {}), version: d.engine.version },
+    estimator: {
+      ...d.estimator,
+      ...(p.estimator ?? {}),
+      validity: { ...d.estimator.validity, ...(p.estimator?.validity ?? {}) },
+      scenario: { ...d.estimator.scenario, ...(p.estimator?.scenario ?? {}) },
+      confidenceModel: { ...d.estimator.confidenceModel, ...(p.estimator?.confidenceModel ?? {}) },
+    },
   };
 }
 

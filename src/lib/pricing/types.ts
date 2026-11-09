@@ -1,3 +1,5 @@
+import type { ValidityParams } from "./validity"
+import type { ConfidenceModel, ScenarioAnalysis, ScenarioOptions } from "./robustness";
 /**
  * تایپ‌های مشترک موتور قیمت‌گذاری هوشمند (نسخه ۳.۶ — مجهز به ناظر بالاسر SubQ SystemOne،
  * کشف کف و سقف واقعی بازار، کالیبراسیون دقیق سقف به کف، مدیریت ۳ سیستم تخفیف sgeooole و اعمال روی رنج کارت‌ها)
@@ -91,6 +93,8 @@ export interface MarketPriceTrend {
 export interface SourceResult {
   source: string;
   productTitle?: string;
+  /** عنوان انگلیسی/دوم کارت (name_en ترب) — برای استخراج کد مدل و برند در تطبیق هویت */
+  productTitleEn?: string | null;
   prk?: string | null;
   detailsUrl?: string | null;
   offers: RawOffer[];
@@ -116,6 +120,10 @@ export interface OfferEvaluation extends RawOffer {
   highTrust?: boolean;
   /** برچسب طبقه‌بندی R0/R1: ok | confirmed_low | suspect_low | stale_low | high_outlier */
   cls?: OfferClass;
+  /** (تخمین‌گر v2) احتمال قابل‌خرید بودن پیشنهاد با همان قیمت */
+  pValid?: number;
+  /** (تخمین‌گر v2) سن آخرین تغییر قیمت (روز)؛ null = نامعلوم */
+  ageDays?: number | null;
 }
 
 export type OfferClass = "ok" | "confirmed_low" | "suspect_low" | "stale_low" | "high_outlier";
@@ -192,6 +200,11 @@ export interface SystemOneSupervisorConfig {
   approveAbovePct: number;
   /** اگر true باشد، رد شدن هر یک از گیت‌های حیاتی کل تصمیم را متوقف می‌کند */
   strictGateVeto: boolean;
+  /**
+   * محرمانگی (۴.۲.۰): اگر true باشد، قیمت تمام‌شده و کف سود در درخواست API بیرونیِ SubQ ارسال می‌شود (رفتار ۴.۱.۲).
+   * پیش‌فرض false: فقط نتیجهٔ «گارد سود» (PASSED/FAILED که محلی و قطعی محاسبه شده) ارسال می‌شود، نه خودِ اعداد.
+   */
+  shareCostWithApi?: boolean;
   gates: {
     identity_match: SystemOneGateThresholdConfig;
     market_data_integrity: SystemOneGateThresholdConfig;
@@ -382,6 +395,46 @@ export interface PricingProfileConfig {
   engine: {
     version: string;
   };
+  /**
+   * ---------- ۱۳) تخمین‌گر نسخه ۲ ----------
+   * هر زیرقابلیت پرچم جدا دارد تا اثرش در ablation سنجیده شود و در صورت لزوم جدا خاموش شود.
+   * mode="legacy" همهٔ آن‌ها را نادیده می‌گیرد و رفتار ۴.۱.۲ را برمی‌گرداند.
+   */
+  estimator: {
+    mode: "legacy" | "v2";
+    /** اعتبار احتمالی هر پیشنهاد (سن × رانش بازار × عمق × شهرت × تأییدیه) به‌جای حذف سخت سنی و قاعدهٔ R1 */
+    validityModel: boolean;
+    /** حذف سخت «بیش از maxOfferAgeDays» برداشته می‌شود و سن به‌صورت نرم در مدل اعتبار وارد می‌شود */
+    softStaleness: boolean;
+    /** سقف مطلق سن (روز) حتی در حالت نرم؛ قیمت‌های قدیمی‌تر از آن رها شده‌اند */
+    hardMaxOfferAgeDays: number;
+    /** رفع باگ: guarantee="disabled" هم truthy بود و فروشنده را «اعتماد بالا» می‌کرد */
+    guaranteeFix: boolean;
+    /** هزینهٔ نسبیِ «غیررقابتی ماندن» به «بخشیدن سود» (۱ = قرینه؛ >۱ = رقابت مهم‌تر) */
+    competitivenessCostRatio: number;
+    /** پارامترهای مدل اعتبار (override جزئی) */
+    validity: Partial<ValidityParams>;
+    /** پیشنهاد زیر قیمت ما فقط وقتی «تعارض بازار/ریویو» می‌شود که احتمال اعتبارش معنادار باشد */
+    marketConflictByProbability: boolean;
+    /** حداقل احتمال اعتبار برای ثبت «تعارض بازار» (با marketConflictByProbability) */
+    conflictMinProb: number;
+    /** ملاحظهٔ برش خروجی ترب (offers_truncated) در قواعد محلی/اعتماد */
+    truncationAware: boolean;
+    /** اگر لنگر با احتمال بالا تأیید شده، قاعدهٔ حداکثر فاصلهٔ مرجع (maxGapPct) آن را کنار نزند */
+    chaseConfirmedLow: boolean;
+    /** اعتماد کالیبره‌شده = P(|خطا| ≤ ۲٪) به‌جای ترکیب ساده */
+    calibratedConfidence: boolean;
+    /** تحلیل سناریوهای تصمیم (پایداری قیمت نهایی نسبت به عدم‌قطعیتِ اعتبار پیشنهادها) */
+    scenario: Partial<ScenarioOptions>;
+    /** ضرایب مدل اعتمادِ کالیبره (برآوردشده با eval/market/fit-confidence.cjs) */
+    confidenceModel: Partial<ConfidenceModel>;
+    /** حداقل اعتمادِ کالیبره برای اعمال خودکار؛ کمتر از آن به بازبینی می‌رود */
+    minCalibratedConfidence: number;
+    /** «تعارض بازار» (پیشنهاد مشکوکِ زیر قیمت ما) حتی با اعتمادِ کالیبره هم ثبت شود؟ (پیش‌فرض: خیر؛ سناریوها آن را پوشش می‌دهند) */
+    conflictGateWhenCalibrated: boolean;
+    /** گیت «اعتبار داده بازار» ناظر SystemOne با احتمالِ کالیبرهٔ درستیِ قیمت جایگزین امتیاز ساده شود */
+    supervisorMarketCalibrated: boolean;
+  };
 }
 
 export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
@@ -500,6 +553,7 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     rejectBelowPct: 45,
     approveAbovePct: 80,
     strictGateVeto: true,
+    shareCostWithApi: false,
     gates: {
       identity_match: { rejectBelowPct: 45, approveAbovePct: 80, weight: 0.3 },
       market_data_integrity: { rejectBelowPct: 45, approveAbovePct: 80, weight: 0.25 },
@@ -517,7 +571,26 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     autoApply: false,
   },
   engine: {
-    version: "4.1.1",
+    version: "4.2.0",
+  },
+  estimator: {
+    mode: "v2",
+    validityModel: true,
+    softStaleness: true,
+    hardMaxOfferAgeDays: 90,
+    guaranteeFix: true,
+    competitivenessCostRatio: 0.75,
+    validity: {},
+    marketConflictByProbability: true,
+    conflictMinProb: 0.1,
+    truncationAware: true,
+    chaseConfirmedLow: true,
+    calibratedConfidence: true,
+    scenario: {},
+    confidenceModel: {},
+    minCalibratedConfidence: 0.9,
+    conflictGateWhenCalibrated: false,
+    supervisorMarketCalibrated: true,
   },
 };
 
@@ -632,4 +705,8 @@ export interface PricingResult {
   rejectedBySupervisor?: boolean;
   reviewReasons: string[];
   steps: DecisionStepLog[];
+  /** تحلیل پایداری تصمیم نسبت به عدم‌قطعیتِ اعتبار پیشنهادها (فقط در تخمین‌گر v2) */
+  decisionScenarios?: ScenarioAnalysis;
+  /** اجزای اعتماد (برای شفافیت و واکاوی) */
+  confidenceBreakdown?: Record<string, number>;
 }

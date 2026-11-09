@@ -1,137 +1,159 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
+Object.defineProperty(exports, "__esModule", { value: true });
 exports.DEFAULT_PROFILE_CONFIG = void 0;
-/**
- * تایپ‌های مشترک موتور قیمت‌گذاری هوشمند (نسخه ۳.۶ — مجهز به ناظر بالاسر SubQ SystemOne،
- * کشف کف و سقف واقعی بازار، کالیبراسیون دقیق سقف به کف، مدیریت ۳ سیستم تخفیف sgeooole و اعمال روی رنج کارت‌ها)
- */
-
-/**
- * تایپ‌های ناظر و تصمیم‌گیرنده بالاسر (`SubQ SystemOne Supervisor`)
- * منطبق با مستندات `POST https://api.subq.ai/v1/systemone` (`model: "subq-snap-preview"`, `type: "noul"`)
- */
-
-const DEFAULT_PROFILE_CONFIG = {
-  sourcing: {
-    enabled: true,
-    selectionMode: "priority_then_lowest",
-    maxQuoteAgeDays: 5,
-    preferLocalCitySuppliers: true,
-    priorityTolerancePct: 1.5,
-    defaultOverheadPct: 0.5,
-    defaultNonLocalShippingToman: 0,
-    staleSafetyBufferPct: 2.5,
-    neverBelowManualCost: true,
-    allowAutoApplyWithoutCost: true,
-    costlessSafePercentile: 55,
-    costlessSafetyMarginPct: 1.0,
-    impliedCostBackoffPct: 6.0
-  },
-  filters: {
-    minSellerCount: 4,
-    maxOfferAgeDays: 7,
-    excludeAds: true,
-    excludeOutOfStock: true,
-    excludeUnreliablePrices: true,
-    includeInPersonSellers: true,
-    minShopScore: 0,
-    shopBlacklist: [],
-    ownShopNames: ["sgeooole", "ekgkala", "ای کا جی کالا", "ای‌کا‌جی کالا"]
-  },
-  outliers: {
-    method: "iqr",
-    iqrK: 1.5,
-    madK: 2.5,
-    hardBandPct: 25,
-    lowerStaleBandPct: 16,
-    minSamples: 4
-  },
-  aggregation: {
-    method: "modal_consensus",
-    trimPct: 15,
-    recencyHalfLifeDays: 3,
-    modalClusterRadiusPct: 3.0
-  },
-  rank1: {
-    enabled: true,
-    defaultCity: "مشهد",
-    localCityAliases: ["مشهد", "mashhad", "مشهدمقدس", "خراسان رضوی - مشهد", "مشهد مقدس"],
-    volumeMode: true,
-    competeInDefaultCity: true,
-    competeInReachableCluster: true,
-    maxGapPct: 4,
-    clusterMaxGapPct: 5,
-    highTrustScoreThreshold: 4.5,
-    undercutAmount: 1000,
-    undercutPct: 0.2,
-    localMonopolyDiscountFromRefPct: 1.0,
-    fallbackToReference: true
-  },
-  margin: {
-    minPct: 3,
-    targetPct: 12,
-    minProfitAmountToman: 10000,
-    fixedCostToman: 0,
-    strictAboveCost: true
-  },
-  guards: {
-    maxChangePctPerRun: 20,
-    minConfidenceAutoApply: 0.65,
-    minValidOffers: 2,
-    hysteresisPct: 0.15
-  },
-  discount: {
-    mode: "market_percentile_ceiling",
-    basePriceMode: "market_ceiling",
-    marketUpperPercentile: 85,
-    maxCeilingAboveMedianPct: 18,
-    markupPct: 12,
-    minDiscountPct: 5,
-    maxDiscountPct: 35,
-    calibrateCeilingForExactFloor: true
-  },
-  rounding: {
-    finalStep: 1000,
-    baseStep: 1000,
-    psychological: "x000"
-  },
-  supervisor: {
-    enabled: true,
-    mode: "hybrid_subq_and_local",
-    baseUrl: "https://api.subq.ai/v1",
-    model: "subq-snap-preview",
-    rejectBelowPct: 45,
-    approveAbovePct: 80,
-    strictGateVeto: true,
-    gates: {
-      identity_match: {
+exports.DEFAULT_PROFILE_CONFIG = {
+    sourcing: {
+        enabled: true,
+        selectionMode: "priority_then_lowest",
+        maxQuoteAgeDays: 5,
+        preferLocalCitySuppliers: true,
+        priorityTolerancePct: 1.5,
+        defaultOverheadPct: 0.5,
+        defaultNonLocalShippingToman: 0,
+        staleSafetyBufferPct: 2.5,
+        // M2: neverBelowManualCost فقط نام قدیمی «کف از هزینه‌ی انبار» است؛ منبع حقیقت
+        // costPolicy است. پیش‌فرض ۴.۱.۲ محافظه‌کارانه است تا این دو فیلد متناقض نباشند:
+        // max_inventory_replacement یعنی هیچ‌گاه زیر max(هزینه انبار، ریپلیس) فروش نکن.
+        // اگر می‌خواهید برای رقابت، ریپلیس ارزان‌تر ملاک باشد، costPolicy را در تنظیمات
+        // به replacement_floor تغییر دهید (و neverBelowManualCost را false کنید).
+        neverBelowManualCost: true,
+        costPolicy: "max_inventory_replacement",
+        allowAutoApplyWithoutCost: false,
+        costlessSafePercentile: 55,
+        costlessSafetyMarginPct: 1.0,
+        impliedCostBackoffPct: 6.0,
+    },
+    filters: {
+        minSellerCount: 4,
+        maxOfferAgeDays: 7,
+        excludeAds: true,
+        excludeOutOfStock: true,
+        excludeUnreliablePrices: true,
+        includeInPersonSellers: true,
+        minShopScore: 0,
+        shopBlacklist: [],
+        ownShopNames: ["sgeooole", "ekgkala", "ای کا جی کالا", "ای‌کا‌جی کالا"],
+    },
+    outliers: {
+        method: "iqr",
+        iqrK: 1.5,
+        madK: 2.5,
+        hardBandPct: 25,
+        lowerStaleBandPct: 16,
+        minSamples: 4,
+        classifyClusterPct: 3,
+        suspectLowBandPct: 12,
+        freshCutoffDays: 5,
+        minClusterMembers: 2,
+    },
+    aggregation: {
+        method: "modal_consensus",
+        trimPct: 15,
+        recencyHalfLifeDays: 3,
+        modalClusterRadiusPct: 3.0,
+    },
+    rank1: {
+        enabled: true,
+        defaultCity: "مشهد",
+        localCityAliases: ["مشهد", "mashhad", "مشهدمقدس", "خراسان رضوی - مشهد", "مشهد مقدس"],
+        volumeMode: true,
+        competeInDefaultCity: true,
+        competeInReachableCluster: true,
+        maxGapPct: 4,
+        clusterMaxGapPct: 5,
+        highTrustScoreThreshold: 4.5,
+        undercutAmount: 1000,
+        undercutPct: 0,
+        undercutTiers: [
+            { upTo: 2_000_000, amount: 1_000 },
+            { upTo: 10_000_000, amount: 2_000 },
+            { upTo: 30_000_000, amount: 5_000 },
+            { upTo: null, amount: 10_000 },
+        ],
+        leaderGapPct: 4,
+        leaderMinMarginPct: 5,
+        leaderPremiumMode: false,
+        localMonopolyDiscountFromRefPct: 1.0,
+        fallbackToReference: true,
+    },
+    margin: {
+        minPct: 3,
+        targetPct: 12,
+        minProfitAmountToman: 10000,
+        fixedCostToman: 0,
+        strictAboveCost: true,
+    },
+    guards: {
+        maxChangePctPerRun: 20,
+        minConfidenceAutoApply: 0.65,
+        minValidOffers: 2,
+        hysteresisPct: 0.15,
+        minFreshRatio: 0.3,
+        // ۰ = سازگاری کامل با ۴.۱.۱؛ برای محافظه‌کاری بیشتر مثلاً ۵ بگذارید.
+        profitApproveMarginPct: 0,
+    },
+    discount: {
+        mode: "market_percentile_ceiling",
+        basePriceMode: "market_ceiling",
+        marketUpperPercentile: 85,
+        maxCeilingAboveMedianPct: 18,
+        markupPct: 12,
+        minDiscountPct: 5,
+        maxDiscountPct: 35,
+        calibrateCeilingForExactFloor: true,
+        ownPriceWindowDays: 7,
+        ownPriceMinHoldHours: 48,
+    },
+    rounding: {
+        finalStep: 1000,
+        baseStep: 1000,
+        psychological: "x000",
+    },
+    supervisor: {
+        enabled: true,
+        mode: "hybrid_subq_and_local",
+        baseUrl: "https://api.subq.ai/v1",
+        model: "subq-snap-preview",
         rejectBelowPct: 45,
         approveAbovePct: 80,
-        weight: 0.3
-      },
-      market_data_integrity: {
-        rejectBelowPct: 45,
-        approveAbovePct: 80,
-        weight: 0.25
-      },
-      profit_and_rank_safety: {
-        rejectBelowPct: 45,
-        approveAbovePct: 80,
-        weight: 0.3
-      },
-      ceiling_discount_validity: {
-        rejectBelowPct: 45,
-        approveAbovePct: 80,
-        weight: 0.15
-      }
-    }
-  },
-  ai: {
-    enabled: true,
-    reviewBelowConfidence: 0.72
-  }
+        strictGateVeto: true,
+        shareCostWithApi: false,
+        gates: {
+            identity_match: { rejectBelowPct: 45, approveAbovePct: 80, weight: 0.3 },
+            market_data_integrity: { rejectBelowPct: 45, approveAbovePct: 80, weight: 0.25 },
+            profit_and_rank_safety: { rejectBelowPct: 45, approveAbovePct: 80, weight: 0.3 },
+            ceiling_discount_validity: { rejectBelowPct: 45, approveAbovePct: 80, weight: 0.15 },
+        },
+    },
+    ai: {
+        enabled: true,
+        reviewBelowConfidence: 0.72,
+    },
+    costless: {
+        provisionalPercentile: 30,
+        minCredibleFresh: 3,
+        autoApply: false,
+    },
+    engine: {
+        version: "4.2.0",
+    },
+    estimator: {
+        mode: "v2",
+        validityModel: true,
+        softStaleness: true,
+        hardMaxOfferAgeDays: 90,
+        guaranteeFix: true,
+        competitivenessCostRatio: 0.75,
+        validity: {},
+        marketConflictByProbability: true,
+        conflictMinProb: 0.1,
+        truncationAware: true,
+        chaseConfirmedLow: true,
+        calibratedConfidence: true,
+        scenario: {},
+        confidenceModel: {},
+        minCalibratedConfidence: 0.9,
+        conflictGateWhenCalibrated: false,
+        supervisorMarketCalibrated: true,
+    },
 };
-exports.DEFAULT_PROFILE_CONFIG = DEFAULT_PROFILE_CONFIG;

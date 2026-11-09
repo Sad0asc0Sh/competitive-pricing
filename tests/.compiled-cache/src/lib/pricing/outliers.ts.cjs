@@ -1,127 +1,215 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
+Object.defineProperty(exports, "__esModule", { value: true });
 exports.removeOutliers = removeOutliers;
-var _stats = require("./stats");
+const stats_1 = require("./stats");
+function isTrusted(o, highTrustScoreThreshold) {
+    if (o.shopScore == null) {
+        // بدون امتیاز همیشه «نه معتبر قطعی» است (مگر فاصله معقول از مرجع در R1 عبور کند)
+        return false;
+    }
+    return o.shopScore >= highTrustScoreThreshold;
+}
 /**
- * مرحله ۲: حذف هوشمند داده‌های پرت و فروشندگان غیربه‌روز (سه‌مرحله‌ای)
+ * مرحله ۲ (نسخه ۴.۱): حذف/طبقه‌بندی داده‌های پرت با معیار «تازگی و اعتبار»
  *
- * چرا سه مرحله؟
- *  1) لنگر فروشندگان تازه (Fresh Sellers Median Anchor):
- *     در ترب، فروشندگانی که قیمتشان خیلی پایین‌تر از بقیه است، اغلب قیمتشان از ماه‌ها/هفته‌های قبل مانده و بروز نیست.
- *     بنابراین ابتدا میانه را روی «فروشندگانی که تازه آپدیت شده‌اند» (یا اگر تاریخ نداشتند، نیمه میانی بازار) محاسبه می‌کنیم.
- *  2) باند نامتقارن سخت (Asymmetric Hard Band):
- *     - در سمت پایین: از `lowerStaleBandPct` (مثلاً ۱۶٪ زیر میانه فروشندگان تازه) استفاده می‌کنیم تا فروشندگان جا مانده از بازار حذف شوند.
- *     - در سمت بالا: از `hardBandPct` (مثلاً ۲۵٪ بالای میانه) استفاده می‌کنیم تا قیمت‌های کاذب بالا حذف شوند.
- *  3) فیلتر آماری ترکیبی (IQR + Modified Z-Score مبتنی بر MAD):
- *     حتی اگر چند فروشنده با هم قیمت پرت داده باشند، ترکیب IQR و MAD آن‌ها را به‌دقت شناسایی و حذف می‌کند.
+ * چرا دیگر فقط حذف نمی‌کنیم؟ چون طبقه‌بندی سه‌پله‌ای در ۴.۱ شامل:
+ *  R0) «خوشه تاییدشده» (confirmed_low):
+ *      یک گروه فروشندگان به‌روز + معتبر (touq قیمتی نزدیک به هم) با حداقل ۲ عضو — این یک «هسته واقعی قیمت پایین» است و هیچ‌گاه به خاطر نبود مویانه حذف نمی‌شود.
+ *  R1) «باند بدگمانی» (suspect_low):
+ *      فروشنده‌ای که بیش از `suspectLowBandPct` زیر مرجع است ولی خوشه تایید ندارد:
+ *      - قیمتش قدیمی است => stale_low (حذف)
+ *      - فروشنده غیرمعتبر است => suspect_low (حذف، ولی برای شفافیت در گزارش می‌ماند)
+ *      - فروشنده معتبر و تازه است ولی تنهاست => suspect_low (حذف؛ به عنوان سیگنال مغزدار)
+ *  R2) قیمت‌های فوق‌العاده پایین و منزوی (همان suspect_low نه‌ریویو شده) از داده خوب حذف می‌شوند.
+ *  سمت بالا: باند سخت (hardBandPct) و IQR/MAD حذف‌شان می‌کند (هیچ «گران‌فروشی پرتِ» رو به بالا نمی‌ماند).
  */
 function removeOutliers(offers, cfg, opts) {
-  const included = offers.filter(o => o.included);
-  let removed = 0;
-  let staleLowRemoved = 0;
-  let highOutlierRemoved = 0;
-  if (included.length < 2) {
-    return {
-      method: cfg.method,
-      lowerBound: null,
-      upperBound: null,
-      removed: 0,
-      staleLowRemoved: 0,
-      highOutlierRemoved: 0
+    const included = offers.filter((o) => o.included);
+    let removed = 0;
+    let staleLowRemoved = 0;
+    let highOutlierRemoved = 0;
+    const now = opts?.now ?? new Date();
+    const highTrustScoreThreshold = opts?.highTrustScoreThreshold ?? 4.5;
+    const suspectLows = [];
+    const markSuspect = (o, cls, reason) => {
+        o.included = false;
+        o.weight = 0;
+        o.cls = cls;
+        o.excludeReason = reason;
+        removed++;
+        if (cls === "stale_low")
+            staleLowRemoved++;
+        suspectLows.push({ price: o.price, shopName: o.shopName, cls });
     };
-  }
-  const now = opts?.now ?? new Date();
-  // ۱) محاسبه لنگر میانه با اولویت فروشندگانی که در ۳ روز اخیر آپدیت شده‌اند
-  const recentOffers = included.filter(o => {
-    if (!o.lastChangedAt) return false;
-    const ageDays = (now.getTime() - o.lastChangedAt.getTime()) / 86_400_000;
-    return ageDays <= 3;
-  });
-  const anchorPrices = recentOffers.length >= 3 ? recentOffers.map(o => o.price) : included.map(o => o.price);
-  const med = (0, _stats.median)(anchorPrices);
-
-  // در حالت بدون قیمت خرید (isCostlessMode)، باند پایین را کمی سخت‌گیرانه‌تر می‌گیریم تا هیچ قیمت قدیمیِ ارزانی وارد میانگین نشود
-  const rawLowerPct = cfg.lowerStaleBandPct ?? cfg.hardBandPct;
-  const effectiveLowerPct = opts?.isCostlessMode ? Math.min(rawLowerPct, 14) : rawLowerPct;
-  const bandLo = med * (1 - effectiveLowerPct / 100);
-  const bandHi = med * (1 + cfg.hardBandPct / 100);
-  for (const o of included) {
-    if (o.price < bandLo) {
-      o.included = false;
-      o.weight = 0;
-      const pct = ((o.price - med) / med * 100).toFixed(1);
-      o.excludeReason = `اختلاف شدید رو به پایین با میانه بازار (${pct}%) — احتمال عدم بروزرسانی قیمت`;
-      removed++;
-      staleLowRemoved++;
-    } else if (o.price > bandHi) {
-      o.included = false;
-      o.weight = 0;
-      const pct = ((o.price - med) / med * 100).toFixed(1);
-      o.excludeReason = `اختلاف زیاد رو به بالا با میانه بازار (+${pct}%) — گران‌فروشی پرت`;
-      removed++;
-      highOutlierRemoved++;
-    }
-  }
-  const rest = offers.filter(o => o.included);
-  if (rest.length < cfg.minSamples) {
-    return {
-      method: `asymmetric_band(-${effectiveLowerPct}%/+${cfg.hardBandPct}%)`,
-      lowerBound: bandLo,
-      upperBound: bandHi,
-      removed,
-      staleLowRemoved,
-      highOutlierRemoved
+    const markHigh = (o, reason) => {
+        o.included = false;
+        o.weight = 0;
+        o.cls = "high_outlier";
+        o.excludeReason = reason;
+        removed++;
+        highOutlierRemoved++;
     };
-  }
-  let lo = bandLo;
-  let hi = bandHi;
-  const prices = rest.map(o => o.price);
-
-  // ترکیب هوشمند IQR و MAD برای دقت حداکثری در کشف پرت‌ها
-  const q1 = (0, _stats.percentile)(prices, 25);
-  const q3 = (0, _stats.percentile)(prices, 75);
-  const iqr = q3 - q1;
-  const m = (0, _stats.median)(prices);
-  const normMad = (0, _stats.mad)(prices) * 1.4826;
-  if (cfg.method === "iqr") {
-    const iqrLo = q1 - cfg.iqrK * iqr;
-    const iqrHi = q3 + cfg.iqrK * iqr;
-    lo = Math.max(lo, iqrLo);
-    hi = Math.min(hi, iqrHi);
-    // اگر در حالت بدون لیست خرید هستیم و MAD هم انحراف معنی‌دار نشان می‌دهد، مرز پایین را با MAD هم تقویت کن
-    if (opts?.isCostlessMode && normMad > 0) {
-      lo = Math.max(lo, m - (cfg.madK ?? 2.5) * normMad);
+    if (included.length < 2) {
+        // با ۰ یا ۱ فروشنده، هیچ نخاعی دست‌خورده نمی‌شود — چون طبقه‌بندی از حداقل داده بی‌معناست
+        for (const o of included) {
+            o.cls = "ok";
+            o.fresh = Boolean(o.lastChangedAt);
+            o.credible = isTrusted(o, highTrustScoreThreshold);
+        }
+        return {
+            method: cfg.method,
+            lowerBound: null,
+            upperBound: null,
+            removed: 0,
+            staleLowRemoved: 0,
+            highOutlierRemoved: 0,
+            suspectLows: [],
+            stableRefPrice: included[0]?.price ?? null,
+        };
     }
-  } else if (cfg.method === "mad") {
-    if (normMad > 0) {
-      lo = Math.max(lo, m - cfg.madK * normMad);
-      hi = Math.min(hi, m + cfg.madK * normMad);
+    // ۱) فلگ‌گذاری تازگی و اعتبار برای کل پول
+    for (const o of included) {
+        const ageDays = o.lastChangedAt
+            ? (now.getTime() - o.lastChangedAt.getTime()) / 86_400_000
+            : null;
+        o.fresh = ageDays != null && ageDays <= Math.max(0, cfg.freshCutoffDays);
+        o.credible = isTrusted(o, highTrustScoreThreshold);
+        o.highTrust = o.credible;
     }
-  }
-  for (const o of rest) {
-    if (o.price < lo) {
-      o.included = false;
-      o.weight = 0;
-      o.excludeReason = `قیمت پرت پایین آماری (${cfg.method.toUpperCase()}) — مشکوک به عدم آپدیت`;
-      removed++;
-      staleLowRemoved++;
-    } else if (o.price > hi) {
-      o.included = false;
-      o.weight = 0;
-      o.excludeReason = `داده پرت بالای آماری (${cfg.method.toUpperCase()})`;
-      removed++;
-      highOutlierRemoved++;
+    // ۲) مرجع = میانه وزنی فقط از «به‌روز + معتبر»؛ اما تنها وقتی این زیرمجموعه «نماینده» است:
+    //    حداقل max(۳، ۴۰٪ کل پیشنهادهای موجود). وگرنه مرجع از کل پول ساخته می‌شود تا
+    //    یک یا دو ارزان‌فروش تازه، مرجع را پایین نکشند و بدنه‌ی سالم بازار «گران‌فروش پرت» نشود.
+    const stablePool = included.filter((o) => o.fresh && o.credible);
+    const minStablePool = Math.max(3, Math.ceil(included.length * 0.4));
+    const refPool = stablePool.length >= minStablePool ? stablePool : included;
+    const stableRef = weightedMedianInt(refPool);
+    if (stableRef == null) {
+        return {
+            method: cfg.method,
+            lowerBound: null,
+            upperBound: null,
+            removed: 0,
+            staleLowRemoved: 0,
+            highOutlierRemoved: 0,
+            suspectLows: [],
+            stableRefPrice: null,
+        };
     }
-  }
-  return {
-    method: cfg.method === "band" ? `asymmetric_band` : `asymmetric_band+${cfg.method}`,
-    lowerBound: Math.round(lo),
-    upperBound: Math.round(hi),
-    removed,
-    staleLowRemoved,
-    highOutlierRemoved
-  };
+    // ۳) سقف پایین بدگمانی (R1) و سقف بالای سخت.
+    //    سمت بالا هرگز تنگ‌تر از ۱۰٪ بالای مرجع نیست؛ در نمونه‌های کوچک IQR/MAD ناپایدار است
+    //    و حذف «گران‌فروش پرت» نباید به قیمت حذف بدنه‌ی عادی تمام شود.
+    const bandLo = stableRef * (1 - Math.max(0, cfg.suspectLowBandPct) / 100);
+    const highBandPct = Math.max(10, Math.max(0, cfg.hardBandPct));
+    const bandHi = stableRef * (1 + highBandPct / 100);
+    // ۴) ساخت خوشه‌ها بر اساس فاصله قیمتی (٪) بین همسایه‌ها
+    const sorted = [...included].sort((a, b) => a.price - b.price);
+    const clusterPct = Math.max(0.5, cfg.classifyClusterPct) / 100;
+    const clusters = [];
+    let current = [];
+    for (const o of sorted) {
+        if (!current.length) {
+            current = [o];
+            continue;
+        }
+        const prev = current[current.length - 1];
+        const stepGap = (o.price - prev.price) / Math.max(1, prev.price);
+        const leaderGap = (o.price - current[0].price) / Math.max(1, current[0].price);
+        if (stepGap > clusterPct * 0.65 || leaderGap > clusterPct) {
+            clusters.push(current);
+            current = [o];
+        }
+        else {
+            current.push(o);
+        }
+    }
+    if (current.length)
+        clusters.push(current);
+    for (const cluster of clusters) {
+        const freshCredibleCount = cluster.filter((o) => o.fresh && o.credible).length;
+        const isConfirmedCluster = cluster[0].price <= stableRef &&
+            freshCredibleCount >= Math.max(2, cfg.minClusterMembers);
+        for (const o of cluster) {
+            if (o.price <= stableRef && isConfirmedCluster) {
+                // R0: هسته تاییدشده ارزان — هیچ‌گاه به‌عنوان پرت حذف نمی‌شود
+                o.cls = "confirmed_low";
+                continue;
+            }
+            if (o.price < bandLo && !opts?.highSideOnly) {
+                // R1: زیر باند بدگمانی
+                if (!o.fresh) {
+                    markSuspect(o, "stale_low", `قیمت کهنه و بیش از ${cfg.suspectLowBandPct}% زیر مرجع بازار (فروشنده به‌روز نشده)`);
+                    continue;
+                }
+                if (!o.credible || cluster.length < 2) {
+                    markSuspect(o, "suspect_low", `فروش منفرد بیش از ${cfg.suspectLowBandPct}% زیر مرجع بازار و فاقد خوشه همقیمت معتبر`);
+                    continue;
+                }
+                // فروشنده معتبر و تازه با همراه — از داده خوب می‌ماند (پیشنهاد متقاضی معتبر)
+                o.cls = "ok";
+            }
+            else if (o.price > bandHi) {
+                markHigh(o, `اختلاف زیاد رو به بالا با مرجع بازار (+${(((o.price - stableRef) / stableRef) * 100).toFixed(1)}%) — گران‌فروشی نقش‌آفرین`);
+            }
+            else if (!o.cls) {
+                o.cls = "ok";
+            }
+        }
+    }
+    const rest = offers.filter((o) => o.included);
+    // ۵) تجهیز انتخاب statistical فقط برای «سمت بالا» (IQR و MAD) — سمت پایین با R0/R1 انجام شد
+    if (rest.length >= cfg.minSamples && cfg.method !== "band") {
+        const prices = rest.map((o) => o.price);
+        const q1 = (0, stats_1.percentile)(prices, 25);
+        const q3 = (0, stats_1.percentile)(prices, 75);
+        const iqr = q3 - q1;
+        const m = (0, stats_1.median)(prices);
+        const normMad = (0, stats_1.mad)(prices) * 1.4826;
+        let hi = bandHi;
+        if (cfg.method === "iqr") {
+            hi = Math.min(bandHi, q3 + cfg.iqrK * iqr);
+            // در حالت بی‌هزینه، MAD حلقه نهایی تقویت بالا
+            if (opts?.isCostlessMode && normMad > 0) {
+                hi = Math.min(hi, m + cfg.madK * normMad);
+            }
+        }
+        else if (cfg.method === "mad" && normMad > 0) {
+            hi = Math.min(bandHi, m + cfg.madK * normMad);
+        }
+        // سمت بالا: پیشنهاد تنها وقتی «پرت» است که دست‌کم ۱۰٪ بالای میانه باشد
+        hi = Math.max(hi, m * 1.1);
+        for (const o of rest) {
+            if (o.price > hi) {
+                markHigh(o, `داده پرت بالای آماری (${cfg.method.toUpperCase()})`);
+            }
+        }
+    }
+    return {
+        method: cfg.method === "band" ? "asymmetric_band" : `classification+${cfg.method}`,
+        lowerBound: Math.round(bandLo),
+        upperBound: Math.round(bandHi),
+        removed,
+        staleLowRemoved,
+        highOutlierRemoved,
+        suspectLows,
+        stableRefPrice: Math.round(stableRef),
+    };
+}
+function weightedMedianInt(pool) {
+    if (!pool.length)
+        return null;
+    const xs = pool.map((o) => o.price);
+    const ws = pool.map((o) => Math.max(0.05, o.weight));
+    const pairs = xs
+        .map((x, i) => ({ x, w: ws[i] }))
+        .sort((a, b) => a.x - b.x);
+    const total = pairs.reduce((s, p) => s + p.w, 0);
+    if (total <= 0)
+        return Math.round((0, stats_1.median)(xs));
+    let acc = 0;
+    for (const p of pairs) {
+        acc += p.w;
+        if (acc >= total / 2)
+            return Math.round(p.x);
+    }
+    return Math.round(pairs[pairs.length - 1].x);
 }

@@ -1,62 +1,42 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.DELETE = DELETE;
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.dynamic = void 0;
 exports.GET = GET;
 exports.POST = POST;
-exports.dynamic = void 0;
-var _db = require("@/db");
-var _schema = require("../../../db/schema");
-var _bootstrap = require("../../../lib/services/bootstrap");
-var _drizzleOrm = require("drizzle-orm");
-var _server = require("next/server");
-const dynamic = "force-dynamic";
-exports.dynamic = dynamic;
+exports.DELETE = DELETE;
+const db_1 = require("@/db");
+const schema_1 = require("../../../db/schema");
+const bootstrap_1 = require("../../../lib/services/bootstrap");
+const drizzle_orm_1 = require("drizzle-orm");
+const server_1 = require("next/server");
+exports.dynamic = "force-dynamic";
 async function GET() {
-  await (0, _bootstrap.ensureDefaults)();
-  return _server.NextResponse.json(await _db.db.select().from(_schema.schedules).orderBy(_schema.schedules.id));
+    await (0, bootstrap_1.ensureDefaults)();
+    return server_1.NextResponse.json(await db_1.db.select().from(schema_1.schedules).orderBy(schema_1.schedules.id));
 }
 async function POST(req) {
-  const b = await req.json().catch(() => null);
-  if (!b) return _server.NextResponse.json({
-    error: "بدنه نامعتبر"
-  }, {
-    status: 400
-  });
-  const interval = Math.max(5, Number(b.intervalMinutes ?? 360) || 360);
-  const values = {
-    name: String(b.name ?? "زمان‌بندی"),
-    intervalMinutes: interval,
-    active: b.active !== false,
-    filter: {
-      ...(b.category ? {
-        category: String(b.category)
-      } : {})
-    },
-    nextRunAt: new Date(Date.now() + interval * 60000)
-  };
-  if (b.id) {
-    const [row] = await _db.db.update(_schema.schedules).set(values).where((0, _drizzleOrm.eq)(_schema.schedules.id, Number(b.id))).returning();
-    return _server.NextResponse.json(row);
-  }
-  const [row] = await _db.db.insert(_schema.schedules).values(values).returning();
-  return _server.NextResponse.json(row, {
-    status: 201
-  });
+    const b = (await req.json().catch(() => null));
+    if (!b)
+        return server_1.NextResponse.json({ error: "بدنه نامعتبر" }, { status: 400 });
+    const interval = Math.max(5, Number(b.intervalMinutes ?? 360) || 360);
+    const values = {
+        name: String(b.name ?? "زمان‌بندی"),
+        intervalMinutes: interval,
+        active: b.active !== false,
+        filter: { ...(b.category ? { category: String(b.category) } : {}) },
+        nextRunAt: new Date(Date.now() + interval * 60000),
+    };
+    if (b.id) {
+        const [row] = await db_1.db.update(schema_1.schedules).set(values).where((0, drizzle_orm_1.eq)(schema_1.schedules.id, Number(b.id))).returning();
+        return server_1.NextResponse.json(row);
+    }
+    const [row] = await db_1.db.insert(schema_1.schedules).values(values).returning();
+    return server_1.NextResponse.json(row, { status: 201 });
 }
 async function DELETE(req) {
-  const {
-    id
-  } = await req.json().catch(() => ({}));
-  if (!id) return _server.NextResponse.json({
-    error: "id لازم است"
-  }, {
-    status: 400
-  });
-  await _db.db.delete(_schema.schedules).where((0, _drizzleOrm.eq)(_schema.schedules.id, Number(id)));
-  return _server.NextResponse.json({
-    ok: true
-  });
+    const { id } = (await req.json().catch(() => ({})));
+    if (!id)
+        return server_1.NextResponse.json({ error: "id لازم است" }, { status: 400 });
+    await db_1.db.delete(schema_1.schedules).where((0, drizzle_orm_1.eq)(schema_1.schedules.id, Number(id)));
+    return server_1.NextResponse.json({ ok: true });
 }

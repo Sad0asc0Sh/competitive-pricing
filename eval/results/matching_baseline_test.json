@@ -1,0 +1,591 @@
+{
+  "n": 672,
+  "expected": {
+    "approve": 509,
+    "review": 106,
+    "reject": 57
+  },
+  "wrongAuto": 0.23065476190476192,
+  "ambigAuto": 0.013392857142857142,
+  "unsafeAuto": 0.24404761904761904,
+  "autoCorrect": 0.37351190476190477,
+  "coverage": 0.4155629139072848,
+  "coverageExpApprove": 0.444007858546169,
+  "reviewRate": 0.3392857142857143,
+  "missed": 0.02976190476190476,
+  "correctReject": 0.013392857142857142,
+  "top1": 0.6158940397350994,
+  "auc": 0.9279443375947506,
+  "pairSame": {
+    "approve": 333,
+    "review": 267,
+    "reject": 40,
+    "n": 640
+  },
+  "pairNeg": {
+    "different_brand": {
+      "approve": 10,
+      "review": 78,
+      "reject": 652,
+      "n": 740
+    },
+    "cross_category": {
+      "approve": 0,
+      "review": 2,
+      "reject": 1003,
+      "n": 1005
+    },
+    "sibling_model": {
+      "approve": 236,
+      "review": 426,
+      "reject": 845,
+      "n": 1507
+    },
+    "unrelated": {
+      "approve": 0,
+      "review": 1,
+      "reject": 993,
+      "n": 994
+    },
+    "spec_variant": {
+      "approve": 32,
+      "review": 99,
+      "reject": 1130,
+      "n": 1261
+    },
+    "bundle_pack": {
+      "approve": 42,
+      "review": 177,
+      "reject": 788,
+      "n": 1007
+    },
+    "accessory": {
+      "approve": 5,
+      "review": 27,
+      "reject": 2006,
+      "n": 2038
+    },
+    "used_refurb": {
+      "approve": 31,
+      "review": 212,
+      "reject": 44,
+      "n": 287
+    }
+  },
+  "cls": {
+    "review_same": 121,
+    "review_other": 107,
+    "auto_wrong": 155,
+    "auto_ambig": 9,
+    "reject_present": 20,
+    "auto_correct": 251,
+    "reject_absent": 9
+  },
+  "byFamily": {
+    "camera": {
+      "n": 240,
+      "auto_wrong": 44,
+      "auto_ambig": 4,
+      "auto_correct": 81,
+      "expApprove": 165
+    },
+    "recorder": {
+      "n": 132,
+      "auto_wrong": 32,
+      "auto_ambig": 0,
+      "auto_correct": 61,
+      "expApprove": 99
+    },
+    "storage": {
+      "n": 36,
+      "auto_wrong": 10,
+      "auto_ambig": 0,
+      "auto_correct": 20,
+      "expApprove": 32
+    },
+    "network": {
+      "n": 132,
+      "auto_wrong": 35,
+      "auto_ambig": 1,
+      "auto_correct": 49,
+      "expApprove": 107
+    },
+    "sdcard": {
+      "n": 24,
+      "auto_wrong": 6,
+      "auto_ambig": 0,
+      "auto_correct": 13,
+      "expApprove": 19
+    },
+    "accessory": {
+      "n": 24,
+      "auto_wrong": 8,
+      "auto_ambig": 0,
+      "auto_correct": 5,
+      "expApprove": 16
+    },
+    "power": {
+      "n": 24,
+      "auto_wrong": 5,
+      "auto_ambig": 0,
+      "auto_correct": 8,
+      "expApprove": 23
+    },
+    "cable": {
+      "n": 60,
+      "auto_wrong": 15,
+      "auto_ambig": 4,
+      "auto_correct": 14,
+      "expApprove": 48
+    }
+  },
+  "byCoded": {
+    "coded+stated": {
+      "n": 539,
+      "auto_wrong": 135,
+      "auto_ambig": 3,
+      "auto_correct": 229,
+      "expApprove": 436,
+      "hasSame": 487,
+      "review": 162
+    },
+    "coded-notstated": {
+      "n": 49,
+      "auto_wrong": 0,
+      "auto_ambig": 2,
+      "auto_correct": 0,
+      "expApprove": 2,
+      "hasSame": 42,
+      "review": 40
+    },
+    "codeless": {
+      "n": 84,
+      "auto_wrong": 20,
+      "auto_ambig": 4,
+      "auto_correct": 22,
+      "expApprove": 71,
+      "hasSame": 75,
+      "review": 26
+    }
+  },
+  "leaks": [
+    {
+      "id": "S-0027",
+      "target": "دوربین مداربسته دام IP 2CD1123G0E-I رزولوشن 2 مگاپیکسل",
+      "sku": "KY-0995759",
+      "picked": "دوربین مداربسته دام IP هایک ویژن مدل 2CD1123G0E-I-D رزولوشن 2 مگاپیکسل",
+      "score": 100,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0031",
+      "target": "دوربین دام تحت شبکه هایک ویژن کد مدل 2CD1123G0E-I رزولوشن ۲ مگاپیکسل",
+      "sku": "DS-2CD1123G0E-I",
+      "picked": "کیت 2 عددی دوربین دام تحت شبکه هایک‌ویژن مدل DS-2CD1123G0E-I 2 مگاپیکسل",
+      "score": 86,
+      "neg": "bundle_pack"
+    },
+    {
+      "id": "S-0033",
+      "target": "دوربین دام تحت شبکه هایک‌ویژن 2 مگ لنز 2.8",
+      "sku": "DS-2CD1123G0E-I",
+      "picked": "کیت 8 تایی دوربین مداربسته دام IP هایک‌ویژن مدل DS-2CD1123G0E-I 2 مگاپیکسل",
+      "score": 81,
+      "neg": "bundle_pack"
+    },
+    {
+      "id": "S-0044",
+      "target": "دوربین مداربسته تحت شبکه دام مدل DS-2CD1143G0-I 4 مگاپیکسل",
+      "sku": "KY-2780129",
+      "picked": "دوربین دام تحت شبکه هایک ویژن HIKVISION 4 مگاپیکسل مدل DS-2CD1143G0-I-W",
+      "score": 86,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0051",
+      "target": "دوربین مداربسته بولت IP هایک‌ویژن HIKVISION 4 مگاپیکسل مدل 2CD2043G2-I",
+      "sku": "DS-2CD2043G2-I",
+      "picked": "دوربین مداربسته تحت شبکه بولت هایک ویژن HIKVISION مدل 2CD2043G2-I-L 4 مگاپیکسل جدید",
+      "score": 100,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0053",
+      "target": "دوربین بولت تحت شبکه DS-2CD2043G2-I 4 مگاپیکسل",
+      "sku": null,
+      "picked": "دوربین مداربسته بولت IP هایک‌ویژن مدل DS2CD2043G2IUF 4مگاپیکسل 2.8mm",
+      "score": 96,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0056",
+      "target": "دوربین مداربسته بولت IP هایک ویژن DS-2CD2043G2-I 4MP",
+      "sku": null,
+      "picked": "دوربین مداربسته بولت IP هایکویژن مدل ds-2cd2043g2-i-l ۴MP",
+      "score": 100,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0059",
+      "target": "دوربین مداربسته تحت شبکه بولت هایک‌ویژن DS-2CD2043G2-I ۴ مگاپیکسل",
+      "sku": "KY-3678120",
+      "picked": "بسته 2 عددی دوربین مداربسته تحت شبکه بولت هایک ویژن مدل DS-2CD2043G2-I 4 MP",
+      "score": 90,
+      "neg": "bundle_pack"
+    },
+    {
+      "id": "S-0082",
+      "target": "دوربین مداربسته تحت شبکه دام هایک ویژن Hikvision کد DS-2CD2347G2-LU ۴ مگاپیکسل",
+      "sku": "DS-2CD2347G2-LU",
+      "picked": "دوربین مداربسته تحت شبکه دام هایکویژن HIKVISION کد DS-2CD2347G2-LU-B 4 مگاپیکسل 3.6mm",
+      "score": 100,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0087",
+      "target": "هایک‌ویژن دوربین مداربسته تحت شبکه بولت DS-2CD2T87G2-L 8 مگاپیکسلی",
+      "sku": "DS-2CD2T87G2-L",
+      "picked": "دو عددی دوربین مداربسته هایک‌ویژن DS-2CD2T87G2-L",
+      "score": 81,
+      "neg": "bundle_pack"
+    },
+    {
+      "id": "S-0092",
+      "target": "دوربین مداربسته بولت IP DS2CD2T87G2L 8 MP",
+      "sku": "KY-8886304",
+      "picked": "دوربین مداربسته بولت IP هایک ویژن DS2CD2T87G2LIUF 8MP اصلی",
+      "score": 100,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0096",
+      "target": "دوربین مداربسته تحت شبکه بولت مدل 2CD2T87G2-L 8 MP اورجینال",
+      "sku": "KY-6193375",
+      "picked": "دوربين تحت شبكه بولت هايك ويژن DS2CD2T87G2LL 8MP",
+      "score": 100,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0097",
+      "target": "هايك ويژن دوربين بولت تحت شبكه 2CD1027G0-L 2 مگاپيكسل",
+      "sku": null,
+      "picked": "پک 10 عددی دوربین بولت تحت شبکه هایک ویژن مدل DS-2CD1027G0-L رزولوشن 2 مگاپیکسل",
+      "score": 100,
+      "neg": "bundle_pack"
+    },
+    {
+      "id": "S-0212",
+      "target": "دوربین مداربسته آنالوگ دام HIKVISION 5 مگاپیکسل",
+      "sku": "DS-2CE56H0T-ITPF",
+      "picked": "پکیج 2 تایی دوربین مداربسته دام HIKVISION مدل DS-2CE56H0T-ITPF 5 مگاپیکسلی",
+      "score": 89,
+      "neg": "bundle_pack"
+    },
+    {
+      "id": "S-0214",
+      "target": "دوربین دام آنالوگ ۵ مگاپیکسلی",
+      "sku": "DS-2CE56H0T-ITPF",
+      "picked": "هایک ویژن HIKVISION دوربین مداربسته آنالوگ دام مدل DS-2CE56H0T-ITPF-A ۵ مگاپیکسلی لنز 2.8",
+      "score": 90,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0241",
+      "target": "DH-IPC-HFW1230S1-S5 دوربین بولت تحت شبکه ۲ مگاپیکسل",
+      "sku": "KY-2204655",
+      "picked": "داهوا دوربین مداربسته بولت IP مدل DH-IPC-HFW1230S1-S5-Z 2 مگاپیکسل",
+      "score": 96,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0247",
+      "target": "دوربین تحت شبکه بولت داهوا مدل IPC-HFW1230S1-S5 ۲MP",
+      "sku": null,
+      "picked": "دوربین بولت تحت شبکه داهوا 2 مگاپیکسلی مدل IPC-HFW1230S1-S5-B جدید",
+      "score": 100,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0248",
+      "target": "دوربین مداربسته بولت IP مدل dh-ipc-hfw1230s1-s5 ۲ مگاپیکسل",
+      "sku": "DH-IPC-HFW1230S1-S5",
+      "picked": "بسته 4 عددی دوربین مداربسته بولت IP داهوا مدل DH-IPC-HFW1230S1-S5 2 مگاپیکسل",
+      "score": 90,
+      "neg": "bundle_pack"
+    },
+    {
+      "id": "S-0251",
+      "target": "دوربین مداربسته بولت IP داهوا DH-IPC-HFW1230S1-S5 ۲ مگاپیکسلی گارانتی ۱۸ ماهه",
+      "sku": "DH-IPC-HFW1230S1-S5",
+      "picked": "دوربين مداربسته تحت شبكه بولت دهوا Dahua DH-IPC-HFW1230S1-S5-L 2 مگاپيكسلي",
+      "score": 80,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0279",
+      "target": "دوربین مداربسته بولت IP رزولوشن 4 مگاپیکسل اورجینال",
+      "sku": "DH-IPC-HFW1431S-S4",
+      "picked": "دوربین مدار بسته بولت IP دهوا مدل IPC-HFW1431S-S4-A 4 مگاپیکسلی",
+      "score": 90,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0280",
+      "target": "دوربین مداربسته بولت IP دهوا ۴ MP مدل IPC-HFW1431S-S4",
+      "sku": "DH-IPC-HFW1431S-S4",
+      "picked": "دوربین مداربسته تحت شبکه بولت دهوا مدل DH-IPC-HFW1431S-S4-L ۴ مگاپیکسل",
+      "score": 89,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0306",
+      "target": "دوربین تحت شبکه دام داهوا 4 مگاپیکسل لنز 2.8 مدل DH-IPC-HDW1431T1-S4 ضمانت اصالت",
+      "sku": "DH-IPC-HDW1431T1-S4",
+      "picked": "دوربین دام تحت شبکه داهوا dh-ipc-hdw1431t1-s4-u 4مگاپیکسل",
+      "score": 81,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0310",
+      "target": "دوربین مداربسته دام IP DAHUA DH-IPC-HDW1431T1-S4 4 مگاپیکسل",
+      "sku": "KY-1377799",
+      "picked": "دوربين مداربسته تحت شبكه دام داهوا كد DH-IPC-HDW1431T1-S4-U 4 مگاپيكسل نسخه جديد",
+      "score": 89,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0326",
+      "target": "دوربین مداربسته تحت شبکه بولت Dahua کد مدل DH-IPC-HFW1239S-A-LED 2 مگاپیکسل اورجینال",
+      "sku": "DH-IPC-HFW1239S-A-LED",
+      "picked": "دوربین مداربسته تحت شبکه بولت DAHUA مدل dh-ipc-hfw1239s-a-led-f 2 مگاپیکسل اورجینال",
+      "score": 90,
+      "neg": "sibling_model"
+    },
+    {
+      "id": "S-0330",
+      "target": "IPC-HFW1239S-A-LED دوربین مداربسته بولت IP DAHUA 2MP اصلی",
+      "sku": "DH-IPC-HFW1239S-A-LED",
+      "picked": "دوربین مداربسته تحت شبکه بولت Dahua کد مدل DH-IPC-HFW1239S-A-LED-AS 2 مگاپیکسلی",
+      "score": 100,
+      "neg": "sibling_model"
+    }
+  ],
+  "ambigEx": [
+    {
+      "id": "S-0032",
+      "target": "دوربین دام تحت شبکه هایکویژن Hikvision 2 مگاپیکسل 2.8 میلی متر 2CD1123G0E-I",
+      "sku": "DS-2CD1123G0E-I",
+      "picked": "دوربین دام تحت شبکه مدل 2CD1123G0E رزولوشن دو مگاپیکسل 2.8 میلی متر",
+      "score": 94,
+      "neg": "sibling_model",
+      "role": "mut:dropSuffix"
+    },
+    {
+      "id": "S-0055",
+      "target": "HIKVISION دوربین مداربسته بولت IP DS-2CD2043G2-I 4MP اورجینال",
+      "sku": null,
+      "picked": "دوربین مداربسته تحت شبکه بولت HIKVISION مدل DS-2CD2043G2 4 مگاپیکسل",
+      "score": 100,
+      "neg": "sibling_model",
+      "role": "mut:dropSuffix"
+    },
+    {
+      "id": "S-0132",
+      "target": "دوربین مداربسته تحت شبکه بولت 2 مگاپیکسل مدل 2CD1023G0E-IF",
+      "sku": null,
+      "picked": "دوربین مداربسته تحت شبکه بولت هایک‌ویژن مدل ds-2cd1023g0e رزولوشن ۲ مگاپیکسل",
+      "score": 85,
+      "neg": "sibling_model",
+      "role": "mut:dropSuffix"
+    },
+    {
+      "id": "S-0506",
+      "target": "دوربین دام تحت شبکه ایمو ۲ مگاپیکسل 2.8mm گارانتی ۱۸ ماهه",
+      "sku": null,
+      "picked": "دوربین مداربسته تحت شبکه دام ایمو IPC-K22APE 2 مگاپیکسل 2.8mm",
+      "score": 92,
+      "neg": "sibling_model",
+      "role": "mut:revSuffix"
+    },
+    {
+      "id": "S-0980",
+      "target": "تی پی لینک TPLINK سوییچ شبکه ۸ port 10/100/1000",
+      "sku": "KY-5005631",
+      "picked": "تی پی لینک سوییچ شبکه مدل tl-fg108 8 پورت 10/100/1000 اورجینال",
+      "score": 93,
+      "neg": "sibling_model",
+      "role": "mut:seriesLetter"
+    },
+    {
+      "id": "S-1610",
+      "target": "کابل شبکه Cat 6 UTP 305 متری",
+      "sku": null,
+      "picked": "کابل شبکه نگزنس Cat 6 UTP 305 متری",
+      "score": 100,
+      "neg": "different_brand",
+      "role": "near"
+    },
+    {
+      "id": "S-1613",
+      "target": "کابل شبکه CAT6 UTP ۳۰۵ متری",
+      "sku": null,
+      "picked": "کابل شبکه Cat 6 UTP 305 متری دی نت",
+      "score": 100,
+      "neg": "different_brand",
+      "role": "brand"
+    },
+    {
+      "id": "S-1619",
+      "target": "کابل شبکه Cat6 UTP 305 متری",
+      "sku": "KY-4870958",
+      "picked": "کابل شبکه CAT6 UTP 305 متری نگزنس اورجینال",
+      "score": 100,
+      "neg": "different_brand",
+      "role": "near"
+    },
+    {
+      "id": "S-1620",
+      "target": "کابل شبکه Cat6 UTP 305 متری",
+      "sku": "KY-3332447",
+      "picked": "کابل شبکه CAT6 UTP 305 متری",
+      "score": 100,
+      "neg": "different_brand",
+      "role": "brand"
+    }
+  ],
+  "missedEx": [
+    {
+      "id": "S-0043",
+      "target": "دوربین دام تحت شبکه HIKVISION ۴ MP DS2CD1143G0I",
+      "true": "دوربین تحت شبکه دام هایک ویژن مدل 2CD1143G0-I 4 مگاپیکسلی جدید",
+      "score": 20,
+      "reason": "عدم تطابق کد مدل فنی: کد مدل محصول سایت (ds2cd1143g0i) در کارت ترب (2cd1143g0-i, 2cd1143g0) وجود ندارد"
+    },
+    {
+      "id": "S-1506",
+      "target": "پایه نصب دوربین داهوا",
+      "true": "PFA152-E براکت نصب دوربین Dahua",
+      "score": 5,
+      "reason": "لوازم جانبی/قطعه فرعی تشخیص داده شد («براکت» در عنوان ترب هست ولی در محصول سایت نیست)"
+    },
+    {
+      "id": "S-1507",
+      "target": "پایه نصب دوربین داهوا با ضمانت",
+      "true": "DAHUA براکت نصب دوربین PFA152-E",
+      "score": 5,
+      "reason": "لوازم جانبی/قطعه فرعی تشخیص داده شد («براکت» در عنوان ترب هست ولی در محصول سایت نیست)"
+    },
+    {
+      "id": "S-1508",
+      "target": "پایه نصب دوربین داهوا مدل PFA152E",
+      "true": "براکت نصب دوربین DAHUA مدل PFA152-E",
+      "score": 5,
+      "reason": "لوازم جانبی/قطعه فرعی تشخیص داده شد («براکت» در عنوان ترب هست ولی در محصول سایت نیست)"
+    },
+    {
+      "id": "S-1527",
+      "target": "منبع تغذیه دوربین مداربسته ۱۲V ۲A ارسال فوری",
+      "true": "منبع تغذیه 12 ولت 2 آمپر اکبند",
+      "score": 35,
+      "reason": "امتیاز تطابق (35% / noul=0.35) زیر خط قرمز رد ناظر (45%) است"
+    },
+    {
+      "id": "S-1537",
+      "target": "آداپتور 12V 5A ارسال فوری",
+      "true": "منبع تغذیه دوربین مداربسته 12 ولت 5 آمپر جدید",
+      "score": 5,
+      "reason": "لوازم جانبی/قطعه فرعی تشخیص داده شد («منبع تغذیه» در عنوان ترب هست ولی در محصول سایت نیست)"
+    },
+    {
+      "id": "S-1538",
+      "target": "آداپتور 12V 5A",
+      "true": "منبع تغذيه دوربين مداربسته 12 ولت 5 آمپر اورجينال",
+      "score": 5,
+      "reason": "لوازم جانبی/قطعه فرعی تشخیص داده شد («منبع تغذیه» در عنوان ترب هست ولی در محصول سایت نیست)"
+    },
+    {
+      "id": "S-1542",
+      "target": "آداپتور 12 ولت 5 آمپر ارسال فوری",
+      "true": "منبع تغذیه دوربین مداربسته 12V 5A",
+      "score": 5,
+      "reason": "لوازم جانبی/قطعه فرعی تشخیص داده شد («منبع تغذیه» در عنوان ترب هست ولی در محصول سایت نیست)"
+    },
+    {
+      "id": "S-1546",
+      "target": "آداپتور 12 ولت 5 آمپر گارانتی ۱۸ ماهه",
+      "true": "آداپتور 12V 5A",
+      "score": 43,
+      "reason": "امتیاز تطابق (43% / noul=0.43) زیر خط قرمز رد ناظر (45%) است"
+    },
+    {
+      "id": "S-1611",
+      "target": "كابل شبكه Cat 6 UTP 305m لگراند",
+      "true": "لگراند Legrand کابل شبکه CAT6 UTP طول 305 متر اصلی",
+      "score": 20,
+      "reason": "عدم تطابق کد مدل فنی: کد مدل محصول سایت (305m) در کارت ترب (cat6) وجود ندارد"
+    },
+    {
+      "id": "S-1697",
+      "target": "کابل اچ دی ام آی 3 متر با ضمانت",
+      "true": "کابل HDMI 3 متر",
+      "score": 39,
+      "reason": "امتیاز تطابق (39% / noul=0.39) زیر خط قرمز رد ناظر (45%) است"
+    },
+    {
+      "id": "S-1734",
+      "target": "کابل اچ دی ام آی 15 متر ضمانت اصالت",
+      "true": "کابل HDMI 15 متری",
+      "score": 43,
+      "reason": "امتیاز تطابق (43% / noul=0.43) زیر خط قرمز رد ناظر (45%) است"
+    },
+    {
+      "id": "S-1737",
+      "target": "کابل اچ دی ام آی 15 متری ضمانت اصالت",
+      "true": "کابل HDMI 15 متری",
+      "score": 43,
+      "reason": "امتیاز تطابق (43% / noul=0.43) زیر خط قرمز رد ناظر (45%) است"
+    }
+  ],
+  "pairFAR": {
+    "different_brand": {
+      "approve": 0.013513513513513514,
+      "atLeastReview": 0.11891891891891893,
+      "n": 740
+    },
+    "cross_category": {
+      "approve": 0,
+      "atLeastReview": 0.001990049751243781,
+      "n": 1005
+    },
+    "sibling_model": {
+      "approve": 0.15660252156602522,
+      "atLeastReview": 0.43928334439283345,
+      "n": 1507
+    },
+    "unrelated": {
+      "approve": 0,
+      "atLeastReview": 0.001006036217303823,
+      "n": 994
+    },
+    "spec_variant": {
+      "approve": 0.025376685170499604,
+      "atLeastReview": 0.10388580491673276,
+      "n": 1261
+    },
+    "bundle_pack": {
+      "approve": 0.041708043694141016,
+      "atLeastReview": 0.21747765640516387,
+      "n": 1007
+    },
+    "accessory": {
+      "approve": 0.0024533856722276743,
+      "atLeastReview": 0.015701668302257114,
+      "n": 2038
+    },
+    "used_refurb": {
+      "approve": 0.10801393728222997,
+      "atLeastReview": 0.8466898954703833,
+      "n": 287
+    }
+  }
+}

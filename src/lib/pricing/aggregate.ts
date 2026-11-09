@@ -86,6 +86,23 @@ export interface MarketSummary {
 }
 
 /**
+ * آیا پیشنهاد «ضمانت ترب» دارد؟ ترب مقدار guarantee را به‌صورت وضعیت "enabled" | "disabled" می‌فرستد؛
+ * `Boolean("disabled")` درست است و باعث می‌شد تقریباً هر فروشنده‌ای «اعتماد بالا» شمرده شود (باگ ۴.۱.۲).
+ * در حالت strict فقط "enabled" (یا هر مقدار غیرِ-"disabled"/"false"/"0"/خالی که شبیه وضعیت نیست) پذیرفته می‌شود.
+ */
+export function hasGuarantee(g: unknown, strict: boolean): boolean {
+  if (!strict) return Boolean(g);
+  if (g == null || g === false) return false;
+  if (g === true) return true;
+  const t = String(g).trim().toLowerCase();
+  if (!t) return false;
+  if (["enabled", "enable", "true", "yes", "1", "فعال"].includes(t)) return true;
+  if (["disabled", "disable", "false", "no", "0", "none", "null", "undefined", "غیرفعال", "ندارد"].includes(t)) return false;
+  // متن آزاد گارانتی (مثلاً «گارانتی ۱۸ ماهه») ⇒ دارد
+  return !/(ندارد|بدون|غیرفعال)/.test(t);
+}
+
+/**
  * کشف «هسته چگال / مد وزنی بازار» (Kernel Modal Consensus):
  * برای هر پیشنهاد معتبر، یک پنجره به شعاع `radiusPct` (مثلاً ±۳٪) در نظر می‌گیرد و مجموع وزن
  * (تازگی × امتیاز فروشگاه) پیشنهادهای داخل آن پنجره را حساب می‌کند.
@@ -223,8 +240,11 @@ export function summarizeMarket(
     suspectLows?: { price: number; shopName: string; cls: string }[];
     maxCeilingAboveMedianPct?: number;
     ceilingPercentile?: number;
+    /** رفع باگ guarantee (تخمین‌گر v2) */
+    guaranteeStrict?: boolean;
   },
 ): MarketSummary {
+  const guaranteeStrict = opts?.guaranteeStrict ?? false;
   const defaultCity = opts?.defaultCity ?? "مشهد";
   const hardFloorPrice = opts?.hardFloorPrice ?? 0;
   const undercutAmount = opts?.undercutAmount ?? 1000;
@@ -317,7 +337,7 @@ export function summarizeMarket(
     used.find(
       (o) =>
         o.price >= hardFloorPrice &&
-        ((o.shopScore != null && o.shopScore >= highTrustScore) || Boolean(o.guarantee)),
+        ((o.shopScore != null && o.shopScore >= highTrustScore) || hasGuarantee(o.guarantee, guaranteeStrict)),
     ) ?? null;
 
   // سقف واقعی بازار (نسخه ۴.۱): کمینه از صدک credible، میانه×(۱+حداکثر فاصله مجاز) و بالاترین credible
@@ -341,7 +361,7 @@ export function summarizeMarket(
 
   const highTrustLowest =
     used.find(
-      (o) => (o.shopScore != null && o.shopScore >= highTrustScore) || Boolean(o.guarantee),
+      (o) => (o.shopScore != null && o.shopScore >= highTrustScore) || hasGuarantee(o.guarantee, guaranteeStrict),
     )?.price ?? null;
 
   return {

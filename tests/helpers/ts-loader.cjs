@@ -22,6 +22,7 @@ function tryRequire(candidates) {
 const tsCompiler = tryRequire([
   'typescript',
   path.join(pricingRoot, 'node_modules/typescript'),
+  path.resolve(pricingRoot, '../sgeooole/frontend/node_modules/typescript'),
   '/usr/share/nodejs/typescript',
   '/usr/local/lib/node_modules/typescript',
 ])
@@ -41,6 +42,28 @@ const babelPluginCjs = tryRequire([
   path.join(pricingRoot, 'node_modules/@babel/plugin-transform-modules-commonjs'),
   '/usr/share/nodejs/@babel/plugin-transform-modules-commonjs',
 ])
+
+/**
+ * کش کامپایل فقط وقتی معتبر است که با «همین» فایل منبع ساخته شده باشد؛ وگرنه تست‌ها بی‌صدا روی کد کهنه اجرا می‌شوند
+ * (و نتیجهٔ سبز بی‌ارزش می‌شود). هش منبع با tests/.compiled-cache/manifest.json مقایسه می‌شود (ساخت: scripts/build-test-cache.cjs).
+ */
+function assertCacheFresh(relPath, fullPath) {
+  const manifestFile = path.join(pricingRoot, 'tests', '.compiled-cache', 'manifest.json')
+  const key = relPath.split(path.sep).join('/')
+  let want
+  try {
+    want = JSON.parse(fs.readFileSync(manifestFile, 'utf8')).files[key]
+  } catch {
+    want = undefined
+  }
+  const have = require('node:crypto').createHash('sha256').update(fs.readFileSync(fullPath, 'utf8'), 'utf8').digest('hex')
+  if (want !== have) {
+    throw new Error(
+      `کش کامپایل تست برای ${key} با منبع فعلی هم‌خوان نیست (کهنه یا بدون manifest). ` +
+        'یا `npm install` کنید (تا از کامپایلر استفاده شود) یا `node scripts/build-test-cache.cjs` را اجرا کنید.',
+    )
+  }
+}
 
 function transpileTsToCjs(code, fullPath) {
   if (!process.env.FORCE_PRECOMPILED_CACHE) {
@@ -68,6 +91,7 @@ function transpileTsToCjs(code, fullPath) {
   const relPath = path.relative(pricingRoot, fullPath)
   const cachedFile = path.join(pricingRoot, 'tests', '.compiled-cache', relPath + '.cjs')
   if (fs.existsSync(cachedFile)) {
+    assertCacheFresh(relPath, fullPath)
     return fs.readFileSync(cachedFile, 'utf8')
   }
   throw new Error(

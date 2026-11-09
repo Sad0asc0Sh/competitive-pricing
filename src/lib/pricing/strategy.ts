@@ -67,10 +67,21 @@ export function computeUndercutDelta(
  *     - سطح ۳: رتبه اول خوشه فروشندگان قابل رقابت بالای کف خرید (`national_cluster_rank1` / `high_trust_cluster_rank1`)
  *     - سطح ۴: تک‌فروشنده برتر مشهد یا کف حجم فروش (`local_monopoly_leader` / `volume_floor_min_margin`)
  */
+export interface StrategyOptions {
+  /**
+   * تخمین‌گر v2: وقتی مدل احتمالیِ اعتبار پیشنهادها فعال است، پایین‌ترین پیشنهادِ باقی‌مانده «معتبر» فرض می‌شود
+   * و قاعدهٔ حداکثر فاصله از مرجع (maxGapPct) که جایگزین دستیِ همین تشخیص بود، دوباره‌شماری نمی‌کند.
+   */
+  skipGapRule?: boolean;
+  /** خروجی ترب بریده شده (offers_truncated): نبودِ فروشنده در شهر پیش‌فرض دلیل بر نبودنش نیست */
+  truncated?: boolean;
+}
+
 export function decideTargetPrice(
   market: MarketSummary,
   cfg: PricingProfileConfig["rank1"],
   supply?: SupplyCostResolution,
+  opts?: StrategyOptions,
 ): StrategyOutcome {
   if (market.reference == null || market.lowest == null) {
     return {
@@ -212,7 +223,7 @@ export function decideTargetPrice(
   // =========================================================================
   // سطح ۱: رقابت برای صدر اول کل ترب (و همزمان صدر اول مشهد)
   // =========================================================================
-  if ((canBeatNationalLowest || canMatchOrBeatNationalAtFloor) && gapPct <= effectiveMaxGapPct) {
+  if ((canBeatNationalLowest || canMatchOrBeatNationalAtFloor) && (opts?.skipGapRule || gapPct <= effectiveMaxGapPct)) {
     const target = hardFloor > 0 ? Math.max(hardFloor, nationalRank1Candidate) : nationalRank1Candidate;
     return {
       strategy: "national_rank1_undercut",
@@ -325,6 +336,7 @@ export function decideTargetPrice(
   if (
     cfg.competeInDefaultCity &&
     market.localCity.count === 0 &&
+    !opts?.truncated &&
     ref > hardFloor
   ) {
     const discPct = Math.max(0, cfg.localMonopolyDiscountFromRefPct ?? 1);

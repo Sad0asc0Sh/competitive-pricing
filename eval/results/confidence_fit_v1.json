@@ -1,0 +1,18 @@
+{
+  "model": {
+    "intercept": -0.1229,
+    "wLogitRight": 1.1431,
+    "wHeuristic": 0.028,
+    "wNoneValid": 0,
+    "wFloorBound": 0
+  },
+  "trainSeeds": [
+    101,
+    102
+  ],
+  "testSeeds": [
+    103
+  ],
+  "n": 300,
+  "label": "oS"
+}

@@ -1,22 +1,18 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.pool = exports.db = void 0;
-var _nodePostgres = require("drizzle-orm/node-postgres");
-var _pg = require("pg");
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.db = exports.pool = void 0;
+const node_postgres_1 = require("drizzle-orm/node-postgres");
+const pg_1 = require("pg");
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
-  throw new Error("DATABASE_URL is required");
+    throw new Error("DATABASE_URL is required");
 }
 const globalForDb = globalThis;
-const pool = globalForDb.__arenaNextJsPostgresqlPool ?? new _pg.Pool({
-  connectionString: databaseUrl
-});
-exports.pool = pool;
+exports.pool = globalForDb.__arenaNextJsPostgresqlPool ??
+    new pg_1.Pool({
+        connectionString: databaseUrl,
+    });
 if (process.env.NODE_ENV !== "production") {
-  globalForDb.__arenaNextJsPostgresqlPool = pool;
+    globalForDb.__arenaNextJsPostgresqlPool = exports.pool;
 }
-const db = (0, _nodePostgres.drizzle)(pool);
-exports.db = db;
+exports.db = (0, node_postgres_1.drizzle)(exports.pool);

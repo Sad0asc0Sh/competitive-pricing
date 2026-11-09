@@ -1,238 +1,67 @@
 "use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.default = ProductDetailPage;
+Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
-var _db = require("@/db");
-var _schema = require("../../../db/schema");
-var _actions = require("@/components/actions");
-var _productForm = require("@/components/product-form");
-var _format = require("../../../lib/format");
-var _drizzleOrm = require("drizzle-orm");
-var _navigation = require("next/navigation");
-const dynamic = "force-dynamic";
-
+exports.default = ProductDetailPage;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const db_1 = require("@/db");
+const schema_1 = require("../../../db/schema");
+const actions_1 = require("@/components/actions");
+const product_form_1 = require("@/components/product-form");
+const format_1 = require("../../../lib/format");
+const drizzle_orm_1 = require("drizzle-orm");
+const navigation_1 = require("next/navigation");
+exports.dynamic = "force-dynamic";
 /** فاصله روز از آخرین تغییر قیمت — خارج از رندر کامپوننت تا خروجی پایدار بماند */
-exports.dynamic = dynamic;
 function daysAgo(date) {
-  return Math.round((Date.now() - new Date(date).getTime()) / 86400000);
+    return Math.round((Date.now() - new Date(date).getTime()) / 86400000);
 }
-async function ProductDetailPage({
-  params
-}) {
-  const {
-    id
-  } = await params;
-  const [p] = await _db.db.select().from(_schema.products).where((0, _drizzleOrm.eq)(_schema.products.id, Number(id))).limit(1);
-  if (!p) (0, _navigation.notFound)();
-  const decisions = await _db.db.select().from(_schema.priceDecisions).where((0, _drizzleOrm.eq)(_schema.priceDecisions.productId, p.id)).orderBy((0, _drizzleOrm.desc)(_schema.priceDecisions.createdAt)).limit(20);
-  const latest = decisions[0];
-  const offers = latest ? await _db.db.select().from(_schema.competitorOffers).where((0, _drizzleOrm.eq)(_schema.competitorOffers.decisionId, latest.id)).orderBy(_schema.competitorOffers.price) : [];
-  return <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">{p.name}</h1>
-          <div className="mt-1 text-sm text-slate-500">
-            {p.sku} · <span className={`badge ${_format.statusColor[p.status]}`}>{_format.statusLabel[p.status]}</span>
-            {p.selectedSupplierName && <>
-                {" "}
-                · <span className="text-indigo-700 font-medium">منبع کف قیمت: {p.selectedSupplierName}</span>
-              </>}
-            {p.currentShowInFeatured && <>
-                {" "}
-                · <span className="badge bg-indigo-100 text-indigo-800">★ نمایش در منتخب‌های صفحه اصلی</span>
-              </>}
-            {p.torobUrl && <>
-                {" "}
-                ·{" "}
-                <a href={p.torobUrl} target="_blank" className="text-indigo-600" rel="noreferrer">
-                  صفحه ترب ↗
-                </a>
-              </>}
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <_actions.RunButton productIds={[p.id]} label="استعلام سقف و کف و قیمت‌گذاری اکنون" />
-          <_actions.ProductStatusToggle id={p.id} status={p.status} />
-          <_actions.DeleteProductButton id={p.id} />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-6">
-        <Box title="قیمت تمام‌شده همکار" value={(0, _format.toman)(p.costPrice)} sub={p.selectedSupplierName ?? "تامین پایه"} />
-        <Box title="خط قرمز فروش (کف سود)" value={(0, _format.toman)(p.currentHardFloorPrice ?? latest?.hardFloorPrice)} sub="هرگز زیر این قیمت" />
-        <Box title="سقف معیار تخفیف (خط‌خورده)" value={(0, _format.toman)(p.currentBasePrice)} sub="سقف واقعی بازار بدون پرت" />
-        <Box title="کف قطعی فروش" value={(0, _format.toman)(p.currentFinalPrice)} strong sub="پس از اعمال درصد تخفیف روی سقف" />
-        <Box title="تخفیف / سیستم فعال" value={(0, _format.pct)(p.currentDiscountPct, 0)} sub={`${p.currentCampaignName || _format.campaignLabel[p.currentCampaign ?? "none"]} (${_format.badgeThemeLabel[p.currentBadgeTheme ?? "green-orange"] ?? ""})`} />
-        <Box title="سود خالص فعلی" value={p.currentFinalPrice && p.costPrice ? `${(0, _format.toman)(p.currentFinalPrice - p.costPrice)} (${(0, _format.pct)((p.currentFinalPrice - p.costPrice) / p.costPrice * 100)})` : "—"} />
-      </div>
-
-      {latest && <div className="card">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-bold">
-              آخرین تصمیم #{latest.id} · {(0, _format.faDate)(latest.createdAt)} ·{" "}
-              <span className={`badge ${_format.statusColor[latest.status]}`}>{_format.statusLabel[latest.status]}</span>
-            </h2>
-            {latest.status === "pending_review" && <_actions.DecisionActions decisionId={latest.id} />}
-          </div>
-          <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5 lg:grid-cols-11">
-            <Mini k="پیشنهاد معتبر/کل" v={`${(0, _format.faNum)(latest.offersUsed)}/${(0, _format.faNum)(latest.offersTotal)}`} />
-            <Mini k="تمام‌شده همکار" v={(0, _format.toman)(latest.effectiveCostPrice)} />
-            <Mini k="خط قرمز فروش" v={(0, _format.toman)(latest.hardFloorPrice)} />
-            <Mini k="کف معتبر مشهد" v={(0, _format.toman)(latest.localLowestValid)} />
-            <Mini k="کف معتبر کل ترب" v={(0, _format.toman)(latest.lowestValid)} />
-            <Mini k="میانه بازار" v={(0, _format.toman)(latest.marketMedian)} />
-            <Mini k="سقف رصدشده بازار" v={(0, _format.toman)(latest.monitoredMarketCeiling ?? latest.basePrice)} />
-            <Mini k="رتبه در مشهد" v={latest.projectedLocalRank ? `#${(0, _format.faNum)(latest.projectedLocalRank)}` : "—"} />
-            <Mini k="رتبه در کل ترب" v={latest.projectedNationalRank ? `#${(0, _format.faNum)(latest.projectedNationalRank)}` : "—"} />
-            <Mini k="استراتژی" v={_format.strategyLabel[latest.strategy ?? ""] ?? latest.strategy ?? "—"} />
-            <Mini k="اعتماد" v={(0, _format.pct)(latest.confidence * 100, 0)} />
-          </div>
-
-          <h3 className="mt-5 mb-2 text-sm font-bold">مراحل تصمیم‌گیری (کشف کف، سقف واقعی و سیستم تخفیف)</h3>
-          <ol className="space-y-2">
-            {latest.steps.map((s, i) => <li key={i} className={`rounded-lg border px-3 py-2 text-sm ${s.level === "error" ? "border-rose-200 bg-rose-50" : s.level === "warn" ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
-                <span className="ml-2 text-xs text-slate-400">{i + 1}</span>
-                <b>{s.title}:</b> <span className="text-slate-700">{s.message}</span>
-              </li>)}
-          </ol>
-          {latest.pushStatus && <p className="mt-3 text-xs text-slate-500">
-              ارسال به فروشگاه:{" "}
-              {latest.pushStatus === "pushed" ? "موفق" : latest.pushStatus === "skipped" ? "کانکتور غیرفعال" : `ناموفق — ${latest.pushError}`}
-            </p>}
-        </div>}
-
-      {offers.length > 0 && <div className="card table-wrap">
-          <h2 className="mb-3 font-bold">پیشنهادهای رقبا در ترب ({(0, _format.faNum)(offers.length)})</h2>
-          <table className="data">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>فروشگاه</th>
-                <th>شهر</th>
-                <th>امتیاز</th>
-                <th>قیمت</th>
-                <th>آخرین تغییر</th>
-                <th>وزن</th>
-                <th>وضعیت در رادار بازار</th>
-              </tr>
-            </thead>
-            <tbody>
-              {offers.map((o, i) => <tr key={o.id} className={o.included ? "" : "text-slate-400"}>
-                  <td className="num">{(0, _format.faNum)(i + 1)}</td>
-                  <td>
-                    {o.shopName}
-                    {o.sellerType === "in_person" && <span className="badge mr-2 bg-sky-100 text-sky-700">حضوری</span>}
-                    {o.isAd && <span className="badge mr-2 bg-purple-100 text-purple-700">آگهی</span>}
-                    {!o.inStock && <span className="badge mr-2 bg-slate-200 text-slate-600">ناموجود</span>}
-                    {o.priceUnreliable && <span className="badge mr-2 bg-rose-100 text-rose-700">غیرقابل اعتماد ترب</span>}
-                  </td>
-                  <td>
-                    {o.shopCity ? <span className={o.isLocalCity ? "badge bg-indigo-100 text-indigo-800 font-bold" : "text-xs"}>
-                        {o.shopCity}
-                      </span> : "—"}
-                  </td>
-                  <td className="num text-xs">{o.shopScore ? (0, _format.faNum)(o.shopScore, 1) : "—"}</td>
-                  <td className={`num ${o.included ? "font-medium" : "line-through"}`}>{(0, _format.toman)(o.price)}</td>
-                  <td className="text-xs">
-                    {o.lastChangedAt ? `${(0, _format.faNum)(daysAgo(o.lastChangedAt))} روز پیش` : "—"}
-                  </td>
-                  <td className="num text-xs">{o.included ? (0, _format.faNum)(o.weight, 2) : "—"}</td>
-                  <td>
-                    {o.included ? <span className="badge bg-emerald-100 text-emerald-700">بازار معتبر تحت رصد</span> : <span className="badge bg-rose-100 text-rose-700">حذف‌شده ({o.excludeReason})</span>}
-                  </td>
-                </tr>)}
-            </tbody>
-          </table>
-        </div>}
-
-      <div className="card table-wrap">
-        <h2 className="mb-3 font-bold">تاریخچه تصمیم‌ها</h2>
-        <table className="data">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>زمان</th>
-              <th>کف همکار</th>
-              <th>سقف معیار</th>
-              <th>کف نهایی</th>
-              <th>تخفیف / کمپین</th>
-              <th>رتبه مشهد</th>
-              <th>رتبه ترب</th>
-              <th>سود خالص</th>
-              <th>وضعیت</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {decisions.map(d => <tr key={d.id}>
-                <td className="num">{d.id}</td>
-                <td className="text-xs">{(0, _format.faDate)(d.createdAt)}</td>
-                <td className="num">{(0, _format.toman)(d.hardFloorPrice ?? d.effectiveCostPrice)}</td>
-                <td className="num line-through text-slate-400">{(0, _format.toman)(d.basePrice)}</td>
-                <td className="num font-medium text-emerald-700">{(0, _format.toman)(d.finalPrice)}</td>
-                <td className="text-xs">
-                  <span className="font-bold text-rose-600">{(0, _format.pct)(d.discountPct, 0)}</span> ·{" "}
-                  {d.campaignName || _format.campaignLabel[d.campaignType ?? "none"]}
-                </td>
-                <td className="num font-bold text-indigo-700">
-                  {d.projectedLocalRank ? `#${(0, _format.faNum)(d.projectedLocalRank)}` : "—"}
-                </td>
-                <td className="num">{d.projectedNationalRank ? `#${(0, _format.faNum)(d.projectedNationalRank)}` : "—"}</td>
-                <td className="num">{(0, _format.toman)(d.netProfitToman)}</td>
-                <td>
-                  <span className={`badge ${_format.statusColor[d.status]}`}>{_format.statusLabel[d.status]}</span>
-                </td>
-                <td>{d.status === "pending_review" && <_actions.DecisionActions decisionId={d.id} />}</td>
-              </tr>)}
-            {!decisions.length && <tr>
-                <td colSpan={11} className="py-6 text-center text-slate-400">
-                  هنوز استعلامی انجام نشده
-                </td>
-              </tr>}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="card">
-        <h2 className="mb-3 font-bold">ویرایش محصول، لیست قیمت همکاران و سیستم تخفیف ترجیحی</h2>
-        <_productForm.ProductForm initial={{
-        id: p.id,
-        sku: p.sku,
-        name: p.name,
-        category: p.category ?? "",
-        storeExternalId: p.storeExternalId ?? "",
-        sourceType: p.sourceType,
-        torobUrl: p.torobUrl ?? "",
-        costPrice: p.costPrice,
-        minMarginPct: p.minMarginPct ?? "",
-        minProfitAmount: p.minProfitAmount ?? "",
-        preferredCampaignType: p.preferredCampaignType ?? "auto",
-        autoApply: p.autoApply
-      }} initialQuotes={p.supplierQuotes} />
-      </div>
-    </div>;
+async function ProductDetailPage({ params }) {
+    const { id } = await params;
+    const [p] = await db_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).limit(1);
+    if (!p)
+        (0, navigation_1.notFound)();
+    const decisions = await db_1.db
+        .select()
+        .from(schema_1.priceDecisions)
+        .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.productId, p.id))
+        .orderBy((0, drizzle_orm_1.desc)(schema_1.priceDecisions.createdAt))
+        .limit(20);
+    const latest = decisions[0];
+    const offers = latest
+        ? await db_1.db
+            .select()
+            .from(schema_1.competitorOffers)
+            .where((0, drizzle_orm_1.eq)(schema_1.competitorOffers.decisionId, latest.id))
+            .orderBy(schema_1.competitorOffers.price)
+        : [];
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-6", children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-start justify-between gap-3", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("h1", { className: "text-2xl font-bold", children: p.name }), (0, jsx_runtime_1.jsxs)("div", { className: "mt-1 text-sm text-slate-500", children: [p.sku, " \u00B7 ", (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[p.status]}`, children: format_1.statusLabel[p.status] }), p.selectedSupplierName && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" ", "\u00B7 ", (0, jsx_runtime_1.jsxs)("span", { className: "text-indigo-700 font-medium", children: ["\u0645\u0646\u0628\u0639 \u06A9\u0641 \u0642\u06CC\u0645\u062A: ", p.selectedSupplierName] })] })), p.currentShowInFeatured && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" ", "\u00B7 ", (0, jsx_runtime_1.jsx)("span", { className: "badge bg-indigo-100 text-indigo-800", children: "\u2605 \u0646\u0645\u0627\u06CC\u0634 \u062F\u0631 \u0645\u0646\u062A\u062E\u0628\u200C\u0647\u0627\u06CC \u0635\u0641\u062D\u0647 \u0627\u0635\u0644\u06CC" })] })), p.torobUrl && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" ", "\u00B7", " ", (0, jsx_runtime_1.jsx)("a", { href: p.torobUrl, target: "_blank", className: "text-indigo-600", rel: "noreferrer", children: "\u0635\u0641\u062D\u0647 \u062A\u0631\u0628 \u2197" })] }))] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap gap-2", children: [(0, jsx_runtime_1.jsx)(actions_1.RunButton, { productIds: [p.id], label: "\u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0633\u0642\u0641 \u0648 \u06A9\u0641 \u0648 \u0642\u06CC\u0645\u062A\u200C\u06AF\u0630\u0627\u0631\u06CC \u0627\u06A9\u0646\u0648\u0646" }), (0, jsx_runtime_1.jsx)(actions_1.ProductStatusToggle, { id: p.id, status: p.status }), (0, jsx_runtime_1.jsx)(actions_1.DeleteProductButton, { id: p.id })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "grid grid-cols-2 gap-4 md:grid-cols-6", children: [(0, jsx_runtime_1.jsx)(Box, { title: "\u0642\u06CC\u0645\u062A \u062A\u0645\u0627\u0645\u200C\u0634\u062F\u0647 \u0647\u0645\u06A9\u0627\u0631", value: (0, format_1.toman)(p.costPrice), sub: p.selectedSupplierName ?? "تامین پایه" }), (0, jsx_runtime_1.jsx)(Box, { title: "\u062E\u0637 \u0642\u0631\u0645\u0632 \u0641\u0631\u0648\u0634 (\u06A9\u0641 \u0633\u0648\u062F)", value: (0, format_1.toman)(p.currentHardFloorPrice ?? latest?.hardFloorPrice), sub: "\u0647\u0631\u06AF\u0632 \u0632\u06CC\u0631 \u0627\u06CC\u0646 \u0642\u06CC\u0645\u062A" }), (0, jsx_runtime_1.jsx)(Box, { title: "\u0633\u0642\u0641 \u0645\u0639\u06CC\u0627\u0631 \u062A\u062E\u0641\u06CC\u0641 (\u062E\u0637\u200C\u062E\u0648\u0631\u062F\u0647)", value: (0, format_1.toman)(p.currentBasePrice), sub: "\u0633\u0642\u0641 \u0648\u0627\u0642\u0639\u06CC \u0628\u0627\u0632\u0627\u0631 \u0628\u062F\u0648\u0646 \u067E\u0631\u062A" }), (0, jsx_runtime_1.jsx)(Box, { title: "\u06A9\u0641 \u0642\u0637\u0639\u06CC \u0641\u0631\u0648\u0634", value: (0, format_1.toman)(p.currentFinalPrice), strong: true, sub: "\u067E\u0633 \u0627\u0632 \u0627\u0639\u0645\u0627\u0644 \u062F\u0631\u0635\u062F \u062A\u062E\u0641\u06CC\u0641 \u0631\u0648\u06CC \u0633\u0642\u0641" }), (0, jsx_runtime_1.jsx)(Box, { title: "\u062A\u062E\u0641\u06CC\u0641 / \u0633\u06CC\u0633\u062A\u0645 \u0641\u0639\u0627\u0644", value: (0, format_1.pct)(p.currentDiscountPct, 0), sub: `${p.currentCampaignName || format_1.campaignLabel[p.currentCampaign ?? "none"]} (${format_1.badgeThemeLabel[p.currentBadgeTheme ?? "green-orange"] ?? ""})` }), (0, jsx_runtime_1.jsx)(Box, { title: "\u0633\u0648\u062F \u062E\u0627\u0644\u0635 \u0641\u0639\u0644\u06CC", value: p.currentFinalPrice && p.costPrice
+                            ? `${(0, format_1.toman)(p.currentFinalPrice - p.costPrice)} (${(0, format_1.pct)(((p.currentFinalPrice - p.costPrice) / p.costPrice) * 100)})`
+                            : "—" })] }), latest && ((0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsxs)("div", { className: "mb-3 flex flex-wrap items-center justify-between gap-2", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "font-bold", children: ["\u0622\u062E\u0631\u06CC\u0646 \u062A\u0635\u0645\u06CC\u0645 #", latest.id, " \u00B7 ", (0, format_1.faDate)(latest.createdAt), " \u00B7", " ", (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[latest.status]}`, children: format_1.statusLabel[latest.status] })] }), latest.status === "pending_review" && (0, jsx_runtime_1.jsx)(actions_1.DecisionActions, { decisionId: latest.id })] }), (0, jsx_runtime_1.jsxs)("div", { className: "grid grid-cols-2 gap-3 text-sm md:grid-cols-5 lg:grid-cols-11", children: [(0, jsx_runtime_1.jsx)(Mini, { k: "\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u0645\u0639\u062A\u0628\u0631/\u06A9\u0644", v: `${(0, format_1.faNum)(latest.offersUsed)}/${(0, format_1.faNum)(latest.offersTotal)}` }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u062A\u0645\u0627\u0645\u200C\u0634\u062F\u0647 \u0647\u0645\u06A9\u0627\u0631", v: (0, format_1.toman)(latest.effectiveCostPrice) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u062E\u0637 \u0642\u0631\u0645\u0632 \u0641\u0631\u0648\u0634", v: (0, format_1.toman)(latest.hardFloorPrice) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u06A9\u0641 \u0645\u0639\u062A\u0628\u0631 \u0645\u0634\u0647\u062F", v: (0, format_1.toman)(latest.localLowestValid) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u06A9\u0641 \u0645\u0639\u062A\u0628\u0631 \u06A9\u0644 \u062A\u0631\u0628", v: (0, format_1.toman)(latest.lowestValid) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0645\u06CC\u0627\u0646\u0647 \u0628\u0627\u0632\u0627\u0631", v: (0, format_1.toman)(latest.marketMedian) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0633\u0642\u0641 \u0631\u0635\u062F\u0634\u062F\u0647 \u0628\u0627\u0632\u0627\u0631", v: (0, format_1.toman)(latest.monitoredMarketCeiling ?? latest.basePrice) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0631\u062A\u0628\u0647 \u062F\u0631 \u0645\u0634\u0647\u062F", v: latest.projectedLocalRank ? `#${(0, format_1.faNum)(latest.projectedLocalRank)}` : "—" }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0631\u062A\u0628\u0647 \u062F\u0631 \u06A9\u0644 \u062A\u0631\u0628", v: latest.projectedNationalRank ? `#${(0, format_1.faNum)(latest.projectedNationalRank)}` : "—" }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0627\u0633\u062A\u0631\u0627\u062A\u0698\u06CC", v: format_1.strategyLabel[latest.strategy ?? ""] ?? latest.strategy ?? "—" }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0627\u0639\u062A\u0645\u0627\u062F", v: (0, format_1.pct)(latest.confidence * 100, 0) })] }), (0, jsx_runtime_1.jsx)("h3", { className: "mt-5 mb-2 text-sm font-bold", children: "\u0645\u0631\u0627\u062D\u0644 \u062A\u0635\u0645\u06CC\u0645\u200C\u06AF\u06CC\u0631\u06CC (\u06A9\u0634\u0641 \u06A9\u0641\u060C \u0633\u0642\u0641 \u0648\u0627\u0642\u0639\u06CC \u0648 \u0633\u06CC\u0633\u062A\u0645 \u062A\u062E\u0641\u06CC\u0641)" }), (0, jsx_runtime_1.jsx)("ol", { className: "space-y-2", children: latest.steps.map((s, i) => ((0, jsx_runtime_1.jsxs)("li", { className: `rounded-lg border px-3 py-2 text-sm ${s.level === "error"
+                                ? "border-rose-200 bg-rose-50"
+                                : s.level === "warn"
+                                    ? "border-amber-200 bg-amber-50"
+                                    : "border-slate-200 bg-slate-50"}`, children: [(0, jsx_runtime_1.jsx)("span", { className: "ml-2 text-xs text-slate-400", children: i + 1 }), (0, jsx_runtime_1.jsxs)("b", { children: [s.title, ":"] }), " ", (0, jsx_runtime_1.jsx)("span", { className: "text-slate-700", children: s.message })] }, i))) }), latest.pushStatus && ((0, jsx_runtime_1.jsxs)("p", { className: "mt-3 text-xs text-slate-500", children: ["\u0627\u0631\u0633\u0627\u0644 \u0628\u0647 \u0641\u0631\u0648\u0634\u06AF\u0627\u0647:", " ", latest.pushStatus === "pushed"
+                                ? "موفق"
+                                : latest.pushStatus === "skipped"
+                                    ? "کانکتور غیرفعال"
+                                    : `ناموفق — ${latest.pushError}`] }))] })), offers.length > 0 && ((0, jsx_runtime_1.jsxs)("div", { className: "card table-wrap", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "mb-3 font-bold", children: ["\u067E\u06CC\u0634\u0646\u0647\u0627\u062F\u0647\u0627\u06CC \u0631\u0642\u0628\u0627 \u062F\u0631 \u062A\u0631\u0628 (", (0, format_1.faNum)(offers.length), ")"] }), (0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "#" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0641\u0631\u0648\u0634\u06AF\u0627\u0647" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0634\u0647\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0627\u0645\u062A\u06CC\u0627\u0632" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0642\u06CC\u0645\u062A" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0622\u062E\u0631\u06CC\u0646 \u062A\u063A\u06CC\u06CC\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0632\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0636\u0639\u06CC\u062A \u062F\u0631 \u0631\u0627\u062F\u0627\u0631 \u0628\u0627\u0632\u0627\u0631" })] }) }), (0, jsx_runtime_1.jsx)("tbody", { children: offers.map((o, i) => ((0, jsx_runtime_1.jsxs)("tr", { className: o.included ? "" : "text-slate-400", children: [(0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.faNum)(i + 1) }), (0, jsx_runtime_1.jsxs)("td", { children: [o.shopName, o.sellerType === "in_person" && ((0, jsx_runtime_1.jsx)("span", { className: "badge mr-2 bg-sky-100 text-sky-700", children: "\u062D\u0636\u0648\u0631\u06CC" })), o.isAd && (0, jsx_runtime_1.jsx)("span", { className: "badge mr-2 bg-purple-100 text-purple-700", children: "\u0622\u06AF\u0647\u06CC" }), !o.inStock && (0, jsx_runtime_1.jsx)("span", { className: "badge mr-2 bg-slate-200 text-slate-600", children: "\u0646\u0627\u0645\u0648\u062C\u0648\u062F" }), o.priceUnreliable && ((0, jsx_runtime_1.jsx)("span", { className: "badge mr-2 bg-rose-100 text-rose-700", children: "\u063A\u06CC\u0631\u0642\u0627\u0628\u0644 \u0627\u0639\u062A\u0645\u0627\u062F \u062A\u0631\u0628" }))] }), (0, jsx_runtime_1.jsx)("td", { children: o.shopCity ? ((0, jsx_runtime_1.jsx)("span", { className: o.isLocalCity ? "badge bg-indigo-100 text-indigo-800 font-bold" : "text-xs", children: o.shopCity })) : ("—") }), (0, jsx_runtime_1.jsx)("td", { className: "num text-xs", children: o.shopScore ? (0, format_1.faNum)(o.shopScore, 1) : "—" }), (0, jsx_runtime_1.jsx)("td", { className: `num ${o.included ? "font-medium" : "line-through"}`, children: (0, format_1.toman)(o.price) }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: o.lastChangedAt ? `${(0, format_1.faNum)(daysAgo(o.lastChangedAt))} روز پیش` : "—" }), (0, jsx_runtime_1.jsx)("td", { className: "num text-xs", children: o.included ? (0, format_1.faNum)(o.weight, 2) : "—" }), (0, jsx_runtime_1.jsx)("td", { children: o.included ? ((0, jsx_runtime_1.jsx)("span", { className: "badge bg-emerald-100 text-emerald-700", children: "\u0628\u0627\u0632\u0627\u0631 \u0645\u0639\u062A\u0628\u0631 \u062A\u062D\u062A \u0631\u0635\u062F" })) : ((0, jsx_runtime_1.jsxs)("span", { className: "badge bg-rose-100 text-rose-700", children: ["\u062D\u0630\u0641\u200C\u0634\u062F\u0647 (", o.excludeReason, ")"] })) })] }, o.id))) })] })] })), (0, jsx_runtime_1.jsxs)("div", { className: "card table-wrap", children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 font-bold", children: "\u062A\u0627\u0631\u06CC\u062E\u0686\u0647 \u062A\u0635\u0645\u06CC\u0645\u200C\u0647\u0627" }), (0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "#" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0632\u0645\u0627\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u06A9\u0641 \u0647\u0645\u06A9\u0627\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0633\u0642\u0641 \u0645\u0639\u06CC\u0627\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u06A9\u0641 \u0646\u0647\u0627\u06CC\u06CC" }), (0, jsx_runtime_1.jsx)("th", { children: "\u062A\u062E\u0641\u06CC\u0641 / \u06A9\u0645\u067E\u06CC\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0631\u062A\u0628\u0647 \u0645\u0634\u0647\u062F" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0631\u062A\u0628\u0647 \u062A\u0631\u0628" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0633\u0648\u062F \u062E\u0627\u0644\u0635" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0636\u0639\u06CC\u062A" }), (0, jsx_runtime_1.jsx)("th", {})] }) }), (0, jsx_runtime_1.jsxs)("tbody", { children: [decisions.map((d) => ((0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("td", { className: "num", children: d.id }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: (0, format_1.faDate)(d.createdAt) }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.toman)(d.hardFloorPrice ?? d.effectiveCostPrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num line-through text-slate-400", children: (0, format_1.toman)(d.basePrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num font-medium text-emerald-700", children: (0, format_1.toman)(d.finalPrice) }), (0, jsx_runtime_1.jsxs)("td", { className: "text-xs", children: [(0, jsx_runtime_1.jsx)("span", { className: "font-bold text-rose-600", children: (0, format_1.pct)(d.discountPct, 0) }), " \u00B7", " ", d.campaignName || format_1.campaignLabel[d.campaignType ?? "none"]] }), (0, jsx_runtime_1.jsx)("td", { className: "num font-bold text-indigo-700", children: d.projectedLocalRank ? `#${(0, format_1.faNum)(d.projectedLocalRank)}` : "—" }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: d.projectedNationalRank ? `#${(0, format_1.faNum)(d.projectedNationalRank)}` : "—" }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.toman)(d.netProfitToman) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[d.status]}`, children: format_1.statusLabel[d.status] }) }), (0, jsx_runtime_1.jsx)("td", { children: d.status === "pending_review" && (0, jsx_runtime_1.jsx)(actions_1.DecisionActions, { decisionId: d.id }) })] }, d.id))), !decisions.length && ((0, jsx_runtime_1.jsx)("tr", { children: (0, jsx_runtime_1.jsx)("td", { colSpan: 11, className: "py-6 text-center text-slate-400", children: "\u0647\u0646\u0648\u0632 \u0627\u0633\u062A\u0639\u0644\u0627\u0645\u06CC \u0627\u0646\u062C\u0627\u0645 \u0646\u0634\u062F\u0647" }) }))] })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 font-bold", children: "\u0648\u06CC\u0631\u0627\u06CC\u0634 \u0645\u062D\u0635\u0648\u0644\u060C \u0644\u06CC\u0633\u062A \u0642\u06CC\u0645\u062A \u0647\u0645\u06A9\u0627\u0631\u0627\u0646 \u0648 \u0633\u06CC\u0633\u062A\u0645 \u062A\u062E\u0641\u06CC\u0641 \u062A\u0631\u062C\u06CC\u062D\u06CC" }), (0, jsx_runtime_1.jsx)(product_form_1.ProductForm, { initial: {
+                            id: p.id,
+                            sku: p.sku,
+                            name: p.name,
+                            category: p.category ?? "",
+                            storeExternalId: p.storeExternalId ?? "",
+                            sourceType: p.sourceType,
+                            torobUrl: p.torobUrl ?? "",
+                            costPrice: p.costPrice,
+                            minMarginPct: p.minMarginPct ?? "",
+                            minProfitAmount: p.minProfitAmount ?? "",
+                            preferredCampaignType: p.preferredCampaignType ?? "auto",
+                            autoApply: p.autoApply,
+                        }, initialQuotes: p.supplierQuotes })] })] }));
 }
-function Box({
-  title,
-  value,
-  sub,
-  strong
-}) {
-  return <div className="card">
-      <div className="text-xs text-slate-500">{title}</div>
-      <div className={`mt-1 num ${strong ? "text-xl font-bold text-emerald-700" : "text-lg font-semibold"}`}>{value}</div>
-      {sub && <div className="text-xs text-slate-400">{sub}</div>}
-    </div>;
+function Box({ title, value, sub, strong }) {
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-500", children: title }), (0, jsx_runtime_1.jsx)("div", { className: `mt-1 num ${strong ? "text-xl font-bold text-emerald-700" : "text-lg font-semibold"}`, children: value }), sub && (0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-400", children: sub })] }));
 }
-function Mini({
-  k,
-  v
-}) {
-  return <div className="rounded-lg bg-slate-50 px-3 py-2">
-      <div className="text-xs text-slate-500">{k}</div>
-      <div className="num font-medium">{v}</div>
-    </div>;
+function Mini({ k, v }) {
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "rounded-lg bg-slate-50 px-3 py-2", children: [(0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-500", children: k }), (0, jsx_runtime_1.jsx)("div", { className: "num font-medium", children: v })] }));
 }

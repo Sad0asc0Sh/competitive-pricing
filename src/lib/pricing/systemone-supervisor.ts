@@ -131,18 +131,23 @@ export function evaluateSystemOneSupervisorSync(input: {
   discountPct: number | null;
   dispersion: number;
   config: PricingProfileConfig;
+  /** تخمین‌گر v2: احتمالِ کالیبره‌شدهٔ درستی قیمت (۰..۱۰۰) جایگزین امتیاز ساده‌ی «داده بازار» می‌شود */
+  marketScoreOverridePct?: number | null;
 }): SystemOneSupervisorReport {
   const supCfg: SystemOneSupervisorConfig = input.config.supervisor;
   const globalReject = supCfg.rejectBelowPct ?? 45;
   const globalApprove = supCfg.approveAbovePct ?? 80;
 
+  const idReject = supCfg.gates.identity_match.rejectBelowPct ?? globalReject;
+  const idApprove = supCfg.gates.identity_match.approveAbovePct ?? globalApprove;
+  // حضور فروشگاه خودمان فقط ابهام (ناحیهٔ ریویو) را برطرف می‌کند؛ ردِ هویتی (زیر خط قرمز) را نمی‌پوشاند
   const idScorePct = clamp(
-    input.selfShopInListing ? Math.max(95, input.identityMatchScorePct) : input.identityMatchScorePct,
+    input.selfShopInListing && input.identityMatchScorePct >= idReject
+      ? Math.max(95, input.identityMatchScorePct)
+      : input.identityMatchScorePct,
     0,
     100,
   );
-  const idReject = supCfg.gates.identity_match.rejectBelowPct ?? globalReject;
-  const idApprove = supCfg.gates.identity_match.approveAbovePct ?? globalApprove;
   const idVerdict = classifyThreeZoneScore(idScorePct, idReject, idApprove);
 
   const validCount = input.offers.filter((o) => o.included).length;
@@ -154,18 +159,19 @@ export function evaluateSystemOneSupervisorSync(input: {
   const sellerScore = clamp(totalSellerCount / Math.max(4, input.config.filters.minSellerCount * 2), 0, 1);
   const validCountScore = clamp(validCount / Math.max(3, input.config.guards.minValidOffers * 2), 0, 1);
   const dispersionScore = clamp(1 - input.dispersion / 0.22, 0, 1);
-  const marketScorePct =
-    input.source.ok && validCount > 0
-      ? Math.round(
-          clamp(
-            (sellerScore * 0.3 + validCountScore * 0.35 + dispersionScore * 0.25 + keepRatio * 0.1) * 100,
-            0,
-            100,
-          ),
-        )
-      : 15;
   const mktReject = supCfg.gates.market_data_integrity.rejectBelowPct ?? globalReject;
   const mktApprove = supCfg.gates.market_data_integrity.approveAbovePct ?? globalApprove;
+  const legacyMarketScorePct = Math.round(
+    clamp((sellerScore * 0.3 + validCountScore * 0.35 + dispersionScore * 0.25 + keepRatio * 0.1) * 100, 0, 100),
+  );
+  const useCalibratedMarket = input.marketScoreOverridePct != null && Number.isFinite(input.marketScoreOverridePct);
+  // امتیاز کالیبره هرگز به‌تنهایی «رد قطعی» نمی‌سازد (فقط ریویو)؛ رد فقط برای نبودِ کاملِ داده می‌ماند
+  const marketScorePct =
+    input.source.ok && validCount > 0
+      ? useCalibratedMarket
+        ? Math.round(clamp(Math.max(mktReject, input.marketScoreOverridePct as number), 0, 100))
+        : legacyMarketScorePct
+      : 15;
   const mktVerdict = classifyThreeZoneScore(marketScorePct, mktReject, mktApprove);
 
   let profitScorePct = 0;
@@ -238,8 +244,13 @@ export function evaluateSystemOneSupervisorSync(input: {
       approveAbovePct: mktApprove,
       verdict: mktVerdict,
       weight: supCfg.gates.market_data_integrity.weight ?? 0.25,
-      reason:
-        mktVerdict === "approve"
+      reason: useCalibratedMarket
+        ? mktVerdict === "approve"
+          ? `احتمال کالیبره‌ی درستیِ قیمت ${marketScorePct}% ≥ ${mktApprove}% (${validCount} فروشنده معتبر؛ امتیاز ساده ${legacyMarketScorePct}%)`
+          : mktVerdict === "review"
+            ? `احتمال کالیبره‌ی درستیِ قیمت ${marketScorePct}% در بازه ریویو ${mktReject}%..${mktApprove}% (امتیاز ساده ${legacyMarketScorePct}%)`
+            : `داده بازار ناکافی یا غیرقابل اتکا (${marketScorePct}% < ${mktReject}%)`
+        : mktVerdict === "approve"
           ? `پیشنهادهای معتبر و همگرا (${validCount} فروشنده معتبر، امتیاز ${marketScorePct}%)`
           : mktVerdict === "review"
             ? `پراکندگی یا کمبود فروشنده معتبر (${marketScorePct}% در بازه ریویو ${mktReject}%..${mktApprove}%)`
@@ -295,10 +306,24 @@ export function evaluateSystemOneSupervisorSync(input: {
     overallVerdict = "review";
   }
 
+  // محرمانگی: به‌صورت پیش‌فرض اعداد تمام‌شده/کف به API بیرونی نمی‌رود؛ فقط نتیجهٔ گارد سود که محلی و قطعی حساب شده.
+  const shareCost = supCfg.shareCostWithApi === true;
+  const profitGuard =
+    input.finalPrice == null
+      ? "NO_PRICE"
+      : input.supply.effectiveCostPrice <= 0
+        ? "UNKNOWN_COST"
+        : input.finalPrice > input.supply.effectiveCostPrice && input.finalPrice >= input.supply.hardFloorPrice
+          ? "PASSED"
+          : "FAILED";
+  const costLine = shareCost
+    ? `SupplyCost: ${input.supply.effectiveCostPrice} Toman (HardFloor: ${input.supply.hardFloorPrice} Toman, Source: ${input.supply.costSource})`
+    : `ProfitGuard: ${profitGuard} (verified locally against the store's confidential cost and hard floor; the numbers are intentionally not shared)`;
+
   const statePayload = [
     `Product: ${input.productName}`,
     `TorobListing: ${input.source.productTitle ?? "N/A"} (Sellers: ${input.source.totalSellerCount}, ValidOffers: ${validCount})`,
-    `SupplyCost: ${input.supply.effectiveCostPrice} Toman (HardFloor: ${input.supply.hardFloorPrice} Toman, Source: ${input.supply.costSource})`,
+    costLine,
     `TargetFloorPrice: ${input.finalPrice ?? 0} Toman | CalibratedCeiling: ${input.basePrice ?? 0} Toman | DiscountPct: ${input.discountPct ?? 0}%`,
     `ProjectedRank: Mashhad #${input.position.projectedLocalRank ?? "-"}, National #${input.position.projectedNationalRank ?? "-"}`,
   ].join("\n");
@@ -320,14 +345,24 @@ export function evaluateSystemOneSupervisorSync(input: {
         false: "Stale, out-of-stock, or highly erratic prices",
       },
     },
-    profit_and_rank_safety: {
-      type: "noul",
-      instructions: "Does the final floor price guarantee profit above supplier cost while securing a strong rank?",
-      criteria: {
-        true: "Strictly above effective supply cost and hard floor with top competitive rank",
-        false: "Below or dangerously close to supply cost or uncompetitive",
-      },
-    },
+    profit_and_rank_safety: shareCost
+      ? {
+          type: "noul",
+          instructions: "Does the final floor price guarantee profit above supplier cost while securing a strong rank?",
+          criteria: {
+            true: "Strictly above effective supply cost and hard floor with top competitive rank",
+            false: "Below or dangerously close to supply cost or uncompetitive",
+          },
+        }
+      : {
+          type: "noul",
+          instructions:
+            "Profit safety against the store's cost is already verified locally (see ProfitGuard) — do not assess cost. Judge only whether the target price secures a strong, credible competitive rank against the market.",
+          criteria: {
+            true: "ProfitGuard PASSED, and the price secures a strong competitive rank consistent with the market",
+            false: "ProfitGuard FAILED, or the price is uncompetitive or inconsistent with the market",
+          },
+        },
     ceiling_discount_validity: {
       type: "noul",
       instructions: "Is the market ceiling free of outliers and does the discount percentage land accurately on the floor?",

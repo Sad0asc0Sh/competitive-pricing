@@ -79,8 +79,14 @@ export function applyValidityFilters(
   cfg: PricingProfileConfig["filters"],
   now: Date,
   rankCfg?: Pick<PricingProfileConfig["rank1"], "defaultCity" | "localCityAliases">,
+  /** تخمین‌گر v2: سن نرم — حذف سخت در maxOfferAgeDays برداشته و سقف مطلق hardMaxAgeDays اعمال می‌شود */
+  ageOpts?: { softStaleness?: boolean; hardMaxAgeDays?: number },
 ): OfferEvaluation[] {
-  const maxAgeMs = cfg.maxOfferAgeDays * 24 * 3600 * 1000;
+  const effectiveMaxAgeDays =
+    ageOpts?.softStaleness && ageOpts.hardMaxAgeDays != null && ageOpts.hardMaxAgeDays > 0
+      ? Math.max(cfg.maxOfferAgeDays, ageOpts.hardMaxAgeDays)
+      : cfg.maxOfferAgeDays;
+  const maxAgeMs = effectiveMaxAgeDays * 24 * 3600 * 1000;
   const blacklist = new Set(cfg.shopBlacklist.map((s) => normalizeFaText(s)).filter(Boolean));
   const own = new Set(cfg.ownShopNames.map((s) => normalizeFaText(s)).filter(Boolean));
   const defaultCity = rankCfg?.defaultCity ?? "مشهد";

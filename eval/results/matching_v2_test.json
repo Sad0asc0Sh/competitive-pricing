@@ -1,0 +1,214 @@
+{
+  "n": 672,
+  "expected": {
+    "approve": 509,
+    "review": 106,
+    "reject": 57
+  },
+  "wrongAuto": 0,
+  "ambigAuto": 0,
+  "unsafeAuto": 0,
+  "autoCorrect": 0.8288690476190477,
+  "coverage": 0.9221854304635762,
+  "coverageExpApprove": 0.9941060903732809,
+  "reviewRate": 0.10714285714285714,
+  "missed": 0.001488095238095238,
+  "correctReject": 0.0625,
+  "top1": 0.9652317880794702,
+  "auc": 0.9989073636723611,
+  "pairSame": {
+    "approve": 593,
+    "review": 45,
+    "reject": 2,
+    "n": 640
+  },
+  "pairNeg": {
+    "sibling_model": {
+      "approve": 0,
+      "review": 225,
+      "reject": 1282,
+      "n": 1507
+    },
+    "different_brand": {
+      "approve": 0,
+      "review": 6,
+      "reject": 734,
+      "n": 740
+    },
+    "spec_variant": {
+      "approve": 0,
+      "review": 3,
+      "reject": 1258,
+      "n": 1261
+    },
+    "bundle_pack": {
+      "approve": 0,
+      "review": 0,
+      "reject": 1007,
+      "n": 1007
+    },
+    "cross_category": {
+      "approve": 0,
+      "review": 0,
+      "reject": 1005,
+      "n": 1005
+    },
+    "unrelated": {
+      "approve": 0,
+      "review": 0,
+      "reject": 994,
+      "n": 994
+    },
+    "accessory": {
+      "approve": 0,
+      "review": 0,
+      "reject": 2038,
+      "n": 2038
+    },
+    "used_refurb": {
+      "approve": 0,
+      "review": 0,
+      "reject": 287,
+      "n": 287
+    }
+  },
+  "cls": {
+    "auto_correct": 557,
+    "review_other": 46,
+    "reject_absent": 42,
+    "review_same": 26,
+    "reject_present": 1
+  },
+  "byFamily": {
+    "camera": {
+      "n": 240,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 196,
+      "expApprove": 165
+    },
+    "recorder": {
+      "n": 132,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 114,
+      "expApprove": 99
+    },
+    "storage": {
+      "n": 36,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 32,
+      "expApprove": 32
+    },
+    "network": {
+      "n": 132,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 107,
+      "expApprove": 107
+    },
+    "sdcard": {
+      "n": 24,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 21,
+      "expApprove": 19
+    },
+    "accessory": {
+      "n": 24,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 16,
+      "expApprove": 16
+    },
+    "power": {
+      "n": 24,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 23,
+      "expApprove": 23
+    },
+    "cable": {
+      "n": 60,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 48,
+      "expApprove": 48
+    }
+  },
+  "byCoded": {
+    "coded+stated": {
+      "n": 539,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 486,
+      "expApprove": 436,
+      "hasSame": 487,
+      "review": 20
+    },
+    "coded-notstated": {
+      "n": 49,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 0,
+      "expApprove": 2,
+      "hasSame": 42,
+      "review": 48
+    },
+    "codeless": {
+      "n": 84,
+      "auto_wrong": 0,
+      "auto_ambig": 0,
+      "auto_correct": 71,
+      "expApprove": 71,
+      "hasSame": 75,
+      "review": 4
+    }
+  },
+  "leaks": [],
+  "ambigEx": [],
+  "missedEx": [],
+  "pairFAR": {
+    "sibling_model": {
+      "approve": 0,
+      "atLeastReview": 0.1493032514930325,
+      "n": 1507
+    },
+    "different_brand": {
+      "approve": 0,
+      "atLeastReview": 0.008108108108108109,
+      "n": 740
+    },
+    "spec_variant": {
+      "approve": 0,
+      "atLeastReview": 0.0023790642347343376,
+      "n": 1261
+    },
+    "bundle_pack": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 1007
+    },
+    "cross_category": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 1005
+    },
+    "unrelated": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 994
+    },
+    "accessory": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 2038
+    },
+    "used_refurb": {
+      "approve": 0,
+      "atLeastReview": 0,
+      "n": 287
+    }
+  }
+}

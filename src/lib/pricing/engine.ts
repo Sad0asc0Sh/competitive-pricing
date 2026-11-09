@@ -8,16 +8,30 @@ import { removeOutliers } from "./outliers";
 import { resolveSupplyCost } from "./sourcing";
 import { decideTargetPrice, evaluateCompetitivePosition } from "./strategy";
 import { ceilToStep, percentile } from "./stats";
+import { assessValidity, type ValidityReport } from "./validity";
+import { analyzeDecisionScenarios, calibratedConfidence, type ScenarioAnalysis } from "./robustness";
 import { evaluateSystemOneSupervisorSync } from "./systemone-supervisor";
 import type {
   CompetitivePositionReport,
   DecisionStepLog,
+  OfferEvaluation,
   PricingContext,
   PricingResult,
   SourceResult,
 } from "./types";
 
 const fa = (n: number | null | undefined) => (n == null ? "-" : Math.round(n).toLocaleString("fa-IR"));
+
+/** استراتژی‌هایی که قیمت را «زیر یک رقیب» می‌گذارند؛ گرد کردنشان همیشه به پایین است (هرگز بالای رقیب نشویم) */
+const UNDERCUT_ANCHOR_STRATEGIES = new Set([
+  "national_rank1_undercut",
+  "rank1_undercut",
+  "local_city_rank1_undercut",
+  "local_cluster_rank1",
+  "national_cluster_rank1",
+  "high_trust_cluster_rank1",
+  "match_lowest",
+]);
 
 export function runPricingPipeline(source: SourceResult, ctx: PricingContext): PricingResult {
   const cfg = ctx.config;
@@ -26,6 +40,13 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   const reviewReasons: string[] = [];
 
   const log = (s: DecisionStepLog) => steps.push(s);
+
+  // تخمین‌گر نسخه ۲ (هر پرچم جداگانه قابل‌خاموش‌کردن است؛ mode="legacy" رفتار ۴.۱.۲ را برمی‌گرداند)
+  const est = cfg.estimator;
+  const v2 = est?.mode === "v2";
+  const useValidity = v2 && est.validityModel;
+  const softStaleness = useValidity && est.softStaleness;
+  const guaranteeStrict = v2 && est.guaranteeFix;
 
   let strategy: string = "";
   let competitionTier: CompetitivePositionReport["competitionTier"] = "no_data";
@@ -87,10 +108,16 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     ownLower.some((own) => own && o.shopName.toLowerCase().includes(own)),
   );
   let identityMatchScorePct = 92;
+  // آیا حضور فروشگاه خودمان به‌عنوان «تأیید متقاطع هویت» پذیرفته می‌شود؟ (پیش‌فرض بله؛ تضاد هویتی آن را باطل می‌کند)
+  let selfConfirmsIdentity = selfShopInListing;
 
   if (source.productTitle && ctx.productName) {
     const idRej = cfg.supervisor?.gates?.identity_match?.rejectBelowPct ?? cfg.supervisor?.rejectBelowPct ?? 45;
     const idApp = cfg.supervisor?.gates?.identity_match?.approveAbovePct ?? cfg.supervisor?.approveAbovePct ?? 80;
+
+    // قیمت نمایندهٔ کارت (میانهٔ قیمت‌های مثبت) برای قید نسبت قیمتی «لوازم جانبی/پک/مدل بالاتر» در تطبیق‌دهنده
+    const cardPrices = source.offers.map((o) => o.price).filter((p) => Number.isFinite(p) && p > 0).sort((a, b) => a - b);
+    const cardRepresentativePrice = cardPrices.length ? cardPrices[Math.floor((cardPrices.length - 1) / 2)] : null;
 
     const identityCheck = evaluateTorobCandidate(
       {
@@ -103,31 +130,49 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       {
         prk: source.prk ?? "manual",
         titleFa: source.productTitle,
+        titleEn: source.productTitleEn ?? null,
+        priceToman: cardRepresentativePrice,
         sellerCount: source.totalSellerCount,
         available: true,
       },
       cfg.filters.minSellerCount,
     );
 
-    identityMatchScorePct = selfShopInListing ? Math.max(95, identityCheck.score) : identityCheck.score;
+    // حضور فروشگاه خودمان در لیستینگ «ابهام» را برطرف می‌کند (review → approve) ولی هرگز «رد قطعیِ هویتی»
+    // (کد مدل متفاوت، لوازم جانبی، پک، دست‌دوم، تضاد مشخصات) را نمی‌پوشاند: در آن حالت یا ترب کارت را اشتباه
+    // ادغام کرده یا عنوان محصول ما نادرست است، و هر دو نیازمند بازبینی انسانی‌اند (اندازه‌گیری: eval/market، سناریوی wrongself).
+    // رابطهٔ «نسخهٔ متفاوت» (پسوند اضافه/کم، هم‌خانواده) یعنی شواهدِ محصول دیگر؛ نه فقط کمبود اطلاعات
+    const variantRelations = new Set(["ext_seg", "ext_chars", "sibling"]);
+    const hardIdentityReject = identityCheck.verdict === "reject";
+    const variantConflict = Boolean(identityCheck.codeRelation && variantRelations.has(identityCheck.codeRelation));
+    const selfConfirms = selfShopInListing && !hardIdentityReject && !variantConflict;
+    selfConfirmsIdentity = selfConfirms;
+    identityMatchScorePct = selfConfirms ? Math.max(95, identityCheck.score) : identityCheck.score;
 
-    if (identityCheck.verdict === "reject" && !selfShopInListing) {
-      reviewReasons.push(`رد در گیت ورودی هویت کالا (${identityCheck.score}% < ${idRej}%): ${identityCheck.rejectReason}`);
+    if (hardIdentityReject) {
+      reviewReasons.push(
+        selfShopInListing
+          ? `رد در گیت ورودی هویت کالا (${identityCheck.score}% < ${idRej}%) با وجود حضور فروشگاه خودمان در لیستینگ — ترب کارت را احتمالاً اشتباه ادغام کرده یا عنوان محصول ما نادرست است: ${identityCheck.rejectReason}`
+          : `رد در گیت ورودی هویت کالا (${identityCheck.score}% < ${idRej}%): ${identityCheck.rejectReason}`,
+      );
       log({
         step: "identity",
         title: "گیت ۱ (ورودی): راستی‌آزمایی هویت کالا با ناظر SystemOne",
-        message: `رد شد (امتیاز ${identityCheck.score}% / noul=${identityCheck.noul.toFixed(2)} < ${idRej}%): «${source.productTitle}» در برابر «${ctx.productName}» — ${identityCheck.rejectReason}`,
+        message: `رد شد (امتیاز ${identityCheck.score}% / noul=${identityCheck.noul.toFixed(2)} < ${idRej}%): «${source.productTitle}» در برابر «${ctx.productName}» — ${identityCheck.rejectReason}${selfShopInListing ? " — حضور فروشگاه خودمان در لیستینگ، رد هویتی را نمی‌پوشاند" : ""}`,
         level: "error",
-        data: { score: identityCheck.score, noul: identityCheck.noul, verdict: identityCheck.verdict },
+        data: { score: identityCheck.score, noul: identityCheck.noul, verdict: identityCheck.verdict, selfShopInListing, codeRelation: identityCheck.codeRelation ?? null },
       });
-    } else if (identityCheck.verdict === "review" && !selfShopInListing) {
-      reviewReasons.push(`امتیاز تطابق هویت کالا در بازه ریویو (${identityCheck.score}% بین ${idRej}% و ${idApp}%)`);
+    } else if (identityCheck.verdict === "review" && !selfConfirms) {
+      reviewReasons.push(
+        `امتیاز تطابق هویت کالا در بازه ریویو (${identityCheck.score}% بین ${idRej}% و ${idApp}%)` +
+          (identityCheck.blockers?.length ? ` — ${identityCheck.blockers[0]}` : ""),
+      );
       log({
         step: "identity",
         title: "گیت ۱ (ورودی): راستی‌آزمایی هویت کالا با ناظر SystemOne",
-        message: `ارسال به بخش ریویو (امتیاز ${identityCheck.score}% / noul=${identityCheck.noul.toFixed(2)} در بازه ${idRej}%..${idApp}%): «${source.productTitle}»`,
+        message: `ارسال به بخش ریویو (امتیاز ${identityCheck.score}% / noul=${identityCheck.noul.toFixed(2)} در بازه ${idRej}%..${idApp}%): «${source.productTitle}»${identityCheck.blockers?.length ? ` — ${identityCheck.blockers.join(" · ")}` : ""}`,
         level: "warn",
-        data: { score: identityCheck.score, noul: identityCheck.noul, verdict: identityCheck.verdict },
+        data: { score: identityCheck.score, noul: identityCheck.noul, verdict: identityCheck.verdict, codeRelation: identityCheck.codeRelation ?? null, blockers: identityCheck.blockers ?? [] },
       });
     } else {
       log({
@@ -135,10 +180,10 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         title: "گیت ۱ (ورودی): راستی‌آزمایی هویت کالا با ناظر SystemOne",
         message:
           `تایید خودکار ورودی با امتیاز ${identityMatchScorePct}% (noul=${(identityMatchScorePct / 100).toFixed(2)} ≥ ${idApp}%)` +
-          (selfShopInListing ? " + تأیید متقاطع ۱۰۰٪ (حضور فروشگاه خودمان در همین لیستینگ ادغام‌شده ترب)" : "") +
+          (selfConfirms ? " + تأیید متقاطع (حضور فروشگاه خودمان در همین لیستینگ ادغام‌شده ترب)" : "") +
           (identityCheck.notes.length ? ` · ${identityCheck.notes.join(" · ")}` : ""),
         level: "info",
-        data: { score: identityMatchScorePct, noul: identityMatchScorePct / 100, verdict: "approve", selfShopInListing },
+        data: { score: identityMatchScorePct, noul: identityMatchScorePct / 100, verdict: "approve", selfShopInListing, codeRelation: identityCheck.codeRelation ?? null },
       });
     }
   }
@@ -179,7 +224,13 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   }
 
   // ---------- 2) فیلترهای اعتبار داده + تفکیک شهر پیش‌فرض (مشهد)
-  const offers = applyValidityFilters(source.offers, cfg.filters, now, cfg.rank1);
+  const offers = applyValidityFilters(
+    source.offers,
+    cfg.filters,
+    now,
+    cfg.rank1,
+    softStaleness ? { softStaleness: true, hardMaxAgeDays: est.hardMaxOfferAgeDays } : undefined,
+  );
   const excludedByFilter = offers.filter((o) => !o.included);
   const localValidBeforeOutlier = offers.filter((o) => o.included && o.isLocalCity).length;
   const reasonCounts: Record<string, number> = {};
@@ -205,15 +256,59 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     .filter((p) => Number.isFinite(p) && p > 0);
   const lowestRaw = positiveRawPrices.length ? Math.min(...positiveRawPrices) : null;
 
-  // ---------- 3) طبقه‌بندی هوشمند داده‌های پرت و فروشندگان غیربه‌روز (نسخه ۴.۱ — R0/R1)
+  // ---------- 3) طبقه‌بندی هوشمند داده‌های پرت و فروشندگان غیربه‌روز
+  //  legacy: R0/R1 (نسخه ۴.۱) | v2: مدل احتمالیِ اعتبار برای سمت پایین + باند/IQR فقط برای سمت بالا
+  let validity: ValidityReport | null = null;
+  if (useValidity) {
+    validity = assessValidity(offers, now, {
+      params: est.validity,
+      freshCutoffDays: cfg.outliers.freshCutoffDays,
+      highTrustScoreThreshold: cfg.rank1.highTrustScoreThreshold,
+      competitivenessCostRatio: est.competitivenessCostRatio,
+    });
+    for (const [o, v] of validity.perOffer) {
+      o.pValid = Math.round(v.p * 1000) / 1000;
+      o.ageDays = v.ageDays != null ? Math.round(v.ageDays * 100) / 100 : null;
+    }
+  }
   const outlierReport = removeOutliers(offers, cfg.outliers, {
     isCostlessMode: isInitiallyCostless,
     now,
     highTrustScoreThreshold: cfg.rank1.highTrustScoreThreshold,
+    highSideOnly: useValidity,
   });
+  // پیشنهادهایی که مدل اعتبار نگه داشت ولی پرتِ سمت بالا شدند؛ در هیچ فرضِ سناریویی وارد بازار نمی‌شوند
+  const validityExcluded = new Set<OfferEvaluation>(validity?.excludedOffers ?? []);
+  const highOutlierSet = new Set<OfferEvaluation>();
+  if (validity) for (const o of validity.perOffer.keys()) if (!o.included && !validityExcluded.has(o)) highOutlierSet.add(o);
+  if (validity) {
+    for (const x of validity.excludedLows) {
+      outlierReport.suspectLows.push({ price: x.price, shopName: x.shopName, cls: x.cls });
+      outlierReport.removed++;
+      if (x.cls === "stale_low") outlierReport.staleLowRemoved++;
+    }
+    log({
+      step: "validity",
+      title: "مدل احتمالیِ اعتبار پیشنهادها (v2)",
+      message:
+        `بدنهٔ بازار ${fa(validity.ref)} | پراکندگی σ=${(validity.sigma * 100).toFixed(1)}% | رانش روزانهٔ تخمینی ${(validity.driftPerDay * 100).toFixed(2)}%±${(validity.driftSe * 100).toFixed(2)} | ` +
+        `لنگر ${fa(validity.anchorPrice)} (احتمال درستی لنگر ${(validity.pAnchorOk * 100).toFixed(0)}%) | ${validity.excludedLows.length} پیشنهاد پایین‌تر از لنگر کنار گذاشته شد`,
+      level: validity.anchorPrice == null ? "warn" : "info",
+      data: {
+        ref: validity.ref,
+        sigma: validity.sigma,
+        driftPerDay: validity.driftPerDay,
+        driftSe: validity.driftSe,
+        anchorPrice: validity.anchorPrice,
+        pAnchorOk: validity.pAnchorOk,
+        pNoneValid: validity.pNoneValid,
+        excludedLows: validity.excludedLows.slice(0, 8),
+      },
+    });
+  }
   log({
     step: "outliers",
-    title: "طبقه‌بندی فروشندگان پرت و غیربه‌روز (R0/R1)",
+    title: useValidity ? "پرت‌های سمت بالا و جمع‌بندی حذف‌ها (v2)" : "طبقه‌بندی فروشندگان پرت و غیربه‌روز (R0/R1)",
     message:
       `${outlierReport.removed} پیشنهاد مشکوک حذف شد (${outlierReport.staleLowRemoved} قیمت کهنه/مشکوک پایین، ` +
       `${outlierReport.highOutlierRemoved} گران‌فروش پرت؛ باند ${fa(outlierReport.lowerBound)} تا ${fa(outlierReport.upperBound)} تومان) ` +
@@ -222,8 +317,16 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   });
 
   // ---------- 4) وزن‌دهی و تجمیع (نسخه ۴.۱: suspectLows + ceiling مستقیماً وارد بازار می‌شوند)
-  applyRecencyWeights(offers, cfg.aggregation.recencyHalfLifeDays, now);
-  let market = summarizeMarket(offers, cfg.aggregation, {
+  const weighOffers = (arr: OfferEvaluation[]) => {
+    applyRecencyWeights(arr, cfg.aggregation.recencyHalfLifeDays, now);
+    if (useValidity) {
+      // وزن هر پیشنهاد در آمار بازار = تازگی × شهرت × احتمال اعتبار
+      for (const o of arr) if (o.included && o.pValid != null) o.weight = Math.max(0.02, Math.round(o.weight * o.pValid * 1000) / 1000);
+    }
+  };
+  weighOffers(offers);
+  const marketOpts = {
+    guaranteeStrict,
     defaultCity: cfg.rank1.defaultCity,
     hardFloorPrice: supply.hardFloorPrice,
     undercutAmount: cfg.rank1.undercutAmount,
@@ -234,7 +337,13 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     suspectLows: outlierReport.suspectLows,
     maxCeilingAboveMedianPct: cfg.discount.maxCeilingAboveMedianPct,
     ceilingPercentile: cfg.discount.marketUpperPercentile,
-  });
+  };
+  let market = summarizeMarket(offers, cfg.aggregation, marketOpts);
+  const offersTruncated = source.meta?.offersTruncated === true;
+  const strategyOpts = {
+    skipGapRule: useValidity && est.chaseConfirmedLow,
+    truncated: v2 && est.truncationAware && offersTruncated,
+  };
 
   let isProvisional = false;
   if (isInitiallyCostless) {
@@ -318,7 +427,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
 
   // ---------- 5) استراتژی چندسطحی هوشمند (نسخه ۴.۱ — ladder یکپارچه)
   if (!isProvisional) {
-    const strat = decideTargetPrice(market, cfg.rank1, supply);
+    const strat = decideTargetPrice(market, cfg.rank1, supply, strategyOpts);
     strategy = strat.strategy;
     competitionTier = strat.competitionTier;
     target = strat.targetPrice;
@@ -380,7 +489,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         position: emptyPosition,
         floorCeiling: emptyFloorCeiling,
         identityMatchScorePct,
-        selfShopInListing,
+        selfShopInListing: selfConfirmsIdentity,
         finalPrice: null,
         basePrice: null,
         discountPct: null,
@@ -417,29 +526,17 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   // ---------- 6) محافظ‌ها (تضمین مطلق خط قرمز قیمت خرید همکاران یا کف امن بازار)
   // جهت گرد کردن (نسخه ۴.۱): انکرهای undercut → همیشه به پایین (هرگز بالای رقیب نشویم)؛
   // بقیه (کف/Provisional) → رفتار قبلی با سقف‌گیری به بالا هنگام زیر-کف.
-  const undercutAnchorStrategies = new Set([
-    "national_rank1_undercut",
-    "rank1_undercut",
-    "local_city_rank1_undercut",
-    "local_cluster_rank1",
-    "national_cluster_rank1",
-    "high_trust_cluster_rank1",
-    "match_lowest",
-  ]);
-  const guarded = applyGuards(
-    target,
-    {
-      costPrice: supply.effectiveCostPrice,
-      minMarginPct: supply.minMarginPctUsed,
-      minProfitAmountToman: supply.minProfitAmountUsed,
-      fixedCostToman: cfg.margin.fixedCostToman,
-      hardFloorPriceOverride: supply.hardFloorPrice,
-      currentPrice: ctx.currentFinalPrice,
-    },
-    cfg.guards,
-    cfg.rounding,
-    { direction: undercutAnchorStrategies.has(strategy) ? "floor" : "nearest" },
-  );
+  const guardCtx = {
+    costPrice: supply.effectiveCostPrice,
+    minMarginPct: supply.minMarginPctUsed,
+    minProfitAmountToman: supply.minProfitAmountUsed,
+    fixedCostToman: cfg.margin.fixedCostToman,
+    hardFloorPriceOverride: supply.hardFloorPrice,
+    currentPrice: ctx.currentFinalPrice,
+  };
+  const guarded = applyGuards(target, guardCtx, cfg.guards, cfg.rounding, {
+    direction: UNDERCUT_ANCHOR_STRATEGIES.has(strategy) ? "floor" : "nearest",
+  });
   reviewReasons.push(...guarded.reviewReasons);
 
   log({
@@ -459,9 +556,58 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
 
   const finalPrice = guarded.price;
 
+  // ---------- 6.۰) تحلیل پایداریِ تصمیم (v2): اگر «ارزان‌ترین پیشنهاد معتبر» چیز دیگری باشد، قیمت چه می‌شد؟
+  let scenarioAnalysis: ScenarioAnalysis | null = null;
+  if (
+    useValidity &&
+    est.calibratedConfidence &&
+    validity &&
+    validity.sortedOffers.length > 0 &&
+    validity.anchorPrice != null &&
+    !isProvisional &&
+    finalPrice > 0
+  ) {
+    const decideWith = (included: Set<OfferEvaluation>): { finalPrice: number | null; strategy: string } => {
+      const clones = offers.map((o): OfferEvaluation => {
+        if (!validity!.perOffer.has(o)) return { ...o };
+        const inc = included.has(o);
+        return { ...o, included: inc, cls: inc ? "ok" : o.cls, weight: 0 };
+      });
+      weighOffers(clones);
+      const m = summarizeMarket(clones, cfg.aggregation, marketOpts);
+      const st = decideTargetPrice(m, cfg.rank1, supply, strategyOpts);
+      if (st.targetPrice == null) return { finalPrice: null, strategy: st.strategy };
+      const g = applyGuards(st.targetPrice, guardCtx, cfg.guards, cfg.rounding, {
+        direction: UNDERCUT_ANCHOR_STRATEGIES.has(st.strategy) ? "floor" : "nearest",
+      });
+      return { finalPrice: g.price, strategy: st.strategy };
+    };
+    scenarioAnalysis = analyzeDecisionScenarios(validity, finalPrice, (o) => !highOutlierSet.has(o), decideWith, {
+      minIncludeProb: est.validity?.minIncludeProb ?? 0.15,
+      ...(est.scenario ?? {}),
+    });
+    log({
+      step: "robustness",
+      title: "پایداری تصمیم نسبت به عدم‌قطعیتِ اعتبار پیشنهادها (v2)",
+      message:
+        `${scenarioAnalysis.scenarios.length} فرضِ محتمل برای «ارزان‌ترین پیشنهاد معتبر» اجرا شد؛ ` +
+        `احتمال اینکه قیمت ${fa(finalPrice)} درست باشد (±${est.scenario?.tolerancePct ?? 2}٪): ${(scenarioAnalysis.pRight * 100).toFixed(0)}٪` +
+        (scenarioAnalysis.alternative
+          ? ` | محتمل‌ترین جایگزین: ${fa(scenarioAnalysis.alternative.finalPrice)} (احتمال ${(scenarioAnalysis.alternative.p * 100).toFixed(0)}٪، اگر ارزان‌ترین معتبر «${scenarioAnalysis.alternative.shopName}» با ${fa(scenarioAnalysis.alternative.lowestPrice)} باشد)`
+          : ""),
+      level: scenarioAnalysis.pRight >= 0.8 ? "info" : "warn",
+      data: { ...scenarioAnalysis },
+    });
+  }
+
   // ---------- 6.۱) Vetoes باینری بازار (نسخه ۴.۱): تعارض ارزان‌فروش مشکوک و فروش عمیق زیر مرجع
-  const conflictOffers = offers.filter((o) => o.cls === "suspect_low" && o.price < finalPrice);
-  const marketConflict = conflictOffers.length > 0;
+  // legacy: فقط suspect_low | v2: هر پیشنهاد پایین‌ِ کنارگذاشته‌شده که احتمال اعتبارش معنادار است (≥ conflictMinProb)؛ آشغالِ قطعی ریویو نمی‌سازد
+  const conflictOffers = offers.filter((o) =>
+    est?.marketConflictByProbability && v2
+      ? (o.cls === "suspect_low" || o.cls === "stale_low") && o.price < finalPrice && (o.pValid ?? 0) >= (est.conflictMinProb ?? 0.1)
+      : o.cls === "suspect_low" && o.price < finalPrice,
+  );
+  const marketConflict = conflictOffers.length > 0 && (!scenarioAnalysis || est.conflictGateWhenCalibrated);
   if (marketConflict) {
     const summaryList = conflictOffers
       .slice(0, 3)
@@ -534,6 +680,50 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     },
   });
 
+  // ---------- 8.۵) امتیاز اعتماد (v2: کالیبره از تحلیل سناریوها | legacy: ترکیب ساده)
+  const conf = computeConfidence(
+    market,
+    { totalSellerCount: source.totalSellerCount, offersTotal: source.offers.length },
+    cfg,
+  );
+  let confidenceScore = conf.score;
+  let confidenceBreakdown: Record<string, number> = { ...conf.breakdown };
+  if (scenarioAnalysis) {
+    // اعتمادِ کالیبره: ترکیب لوجیستیک پایداری سناریوها و کفایت داده؛ جایگزین آستانهٔ قدیمیِ «امتیاز ساده»
+    confidenceScore = calibratedConfidence(est.confidenceModel, {
+      pRight: scenarioAnalysis.pRight,
+      heuristic: conf.score,
+      pNoneValid: scenarioAnalysis.pNoneValid,
+      floorBound: guarded.floorEnforced,
+    });
+    confidenceBreakdown = {
+      ...conf.breakdown,
+      heuristic: conf.score,
+      pRight: Math.round(scenarioAnalysis.pRight * 1000) / 1000,
+      pTooHigh: Math.round(scenarioAnalysis.pTooHigh * 1000) / 1000,
+      pTooLow: Math.round(scenarioAnalysis.pTooLow * 1000) / 1000,
+      calibrated: confidenceScore,
+    };
+    if (confidenceScore < est.minCalibratedConfidence) {
+      const alt = scenarioAnalysis.alternative;
+      reviewReasons.push(
+        `اعتماد کالیبره ${(confidenceScore * 100).toFixed(0)}٪ کمتر از حد اعمال خودکار ${(est.minCalibratedConfidence * 100).toFixed(0)}٪` +
+          (alt
+            ? ` — اگر ارزان‌ترین پیشنهاد معتبر «${alt.shopName}» با ${fa(alt.lowestPrice)} باشد قیمت ${fa(alt.finalPrice)} می‌شود (احتمال ${(alt.p * 100).toFixed(0)}٪)`
+            : ""),
+      );
+    }
+  } else if (conf.score < cfg.guards.minConfidenceAutoApply) {
+    reviewReasons.push(
+      `اعتماد آماری ${conf.score} کمتر از حد اعمال خودکار ${cfg.guards.minConfidenceAutoApply}`,
+    );
+  }
+  if (v2 && est.truncationAware && offersTruncated && market.count < Math.max(3, cfg.guards.minValidOffers)) {
+    reviewReasons.push(
+      `خروجی ترب بریده شده (offers_truncated) و فقط ${market.count} پیشنهاد معتبر دیده شد — ممکن است ارزان‌ترین معتبرها دیده نشده باشند`,
+    );
+  }
+
   // ---------- 9) ناظر بالاسر SubQ SystemOne (تصمیم‌گیری ۴ مقیاسی با قانون ۳ بازه‌ای 0..45..80..100%)
   const supervisor = evaluateSystemOneSupervisorSync({
     productName: ctx.productName,
@@ -543,12 +733,13 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     position,
     floorCeiling: disc.floorCeiling,
     identityMatchScorePct,
-    selfShopInListing,
+    selfShopInListing: selfConfirmsIdentity,
     finalPrice,
     basePrice,
     discountPct: disc.discountPct,
     dispersion: market.dispersion,
     config: cfg,
+    marketScoreOverridePct: v2 && est.supervisorMarketCalibrated && scenarioAnalysis ? Math.round(confidenceScore * 100) : null,
   });
 
   let rejectedBySupervisor = false;
@@ -587,18 +778,6 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     });
   }
 
-  // ---------- 10) امتیاز اعتماد آماری
-  const conf = computeConfidence(
-    market,
-    { totalSellerCount: source.totalSellerCount, offersTotal: source.offers.length },
-    cfg,
-  );
-  if (conf.score < cfg.guards.minConfidenceAutoApply) {
-    reviewReasons.push(
-      `اعتماد آماری ${conf.score} کمتر از حد اعمال خودکار ${cfg.guards.minConfidenceAutoApply}`,
-    );
-  }
-
   const needsReview =
     reviewReasons.length > 0 ||
     !source.ok ||
@@ -617,6 +796,17 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
             isProvisional ? "قیمت Provisional بدون قیمت خرید تاییدنشده است" : `سود خالص: ${fa(position.netProfitToman)} تومان`
           }`,
     level: rejectedBySupervisor ? "error" : needsReview ? "warn" : "info",
+    // ویژگی‌های کالیبراسیون (۴.۲.۰): برای بازتنظیم مدل اعتماد با برچسب واقعی (حالت سایه/ممیزی) در steps ذخیره می‌شوند
+    // (scripts/export-calibration-data.cjs ← eval/market/fit-confidence.cjs --data). همگی عدد/بولی‌اند؛ هیچ قیمت خرید/کفی نیست.
+    data: {
+      needsReview,
+      rejectedBySupervisor,
+      confidence: confidenceScore,
+      confidenceBreakdown,
+      pNoneValid: scenarioAnalysis ? Math.round(scenarioAnalysis.pNoneValid * 1000) / 1000 : null,
+      floorBound: guarded.floorEnforced,
+      engineVersion: cfg.engine?.version ?? null,
+    },
   });
 
   return {
@@ -640,12 +830,14 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     discountReferencePrice: disc.referencePrice,
     floorConfirmed: disc.floorConfirmed,
     strategy,
-    confidence: conf.score,
+    confidence: confidenceScore,
     needsReview,
     marketConflict,
     isProvisional,
     rejectedBySupervisor,
     reviewReasons,
     steps,
+    decisionScenarios: scenarioAnalysis ?? undefined,
+    confidenceBreakdown,
   };
 }

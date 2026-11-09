@@ -1,12 +1,16 @@
 {
   "name": "ai-driven-competitive-pricing-system",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3050",
     "build": "next build",
     "start": "next start -p 3050",
-    "test": "node --test tests/pricing-engine.test.cjs tests/cleanup-script-safety.test.cjs tests/migration-safety.test.cjs",
+    "test": "node --test tests/pricing-engine.test.cjs tests/estimator-v2.test.cjs tests/estimator-config.test.cjs tests/matcher-v2.test.cjs tests/ai-privacy.test.cjs tests/calibration-data.test.cjs tests/torob-mcp-client.test.cjs tests/cleanup-script-safety.test.cjs tests/migration-safety.test.cjs tests/release-hygiene.test.cjs",
+    "test:cache": "node scripts/build-test-cache.cjs",
+    "eval:market": "node eval/market/final.cjs",
+    "eval:tables": "node eval/market/format-final.cjs",
+    "eval:matching": "node eval/matching/run.cjs",
     "db:push": "drizzle-kit push",
     "db:migrate": "node scripts/migrate.cjs",
     "db:migrate:dry": "node scripts/migrate.cjs --dry-run",
@@ -14,10 +18,18 @@
     "audit:cost-policy": "node scripts/fix-cost-policy.cjs",
     "audit:timed-sale": "node scripts/fix-wrong-timed-sale.cjs",
     "mcp:serve": "PORT=3005 npx -y torob-mcp@0.1.2 --http",
+    "mcp:serve:vendor": "PORT=3005 node vendor/torob-mcp/dist/index.js --http",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "verify": "node scripts/verify-release.cjs",
-    "verify:quick": "node scripts/verify-release.cjs --quick"
+    "verify:quick": "node scripts/verify-release.cjs --quick",
+    "eval:wrong": "node eval/market/wrong.cjs",
+    "eval:sensitivity": "node eval/market/sensitivity.cjs",
+    "eval:matching:heldout": "node eval/matching/realistic2.cjs",
+    "calibration:export": "node scripts/export-calibration-data.cjs",
+    "calibration:fit": "node eval/market/fit-confidence.cjs --data",
+    "calibration:threshold": "node eval/market/threshold-from-rows.cjs --data",
+    "estimator:apply": "node scripts/apply-estimator-config.cjs"
   },
   "dependencies": {
     "dotenv": "17.3.1",
