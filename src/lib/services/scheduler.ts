@@ -27,7 +27,15 @@ export async function tickScheduler(): Promise<{ ran: number[] }> {
       // ابتدا nextRunAt را جلو می‌بریم تا اجرای همزمان تکراری نشود
       await db.update(schedules).set({ lastRunAt: now, nextRunAt: next }).where(eq(schedules.id, s.id));
       await logActivity("scheduler", `اجرای زمان‌بندی «${s.name}»`, { scheduleId: s.id });
-      await runPricing({ trigger: "schedule", scheduleId: s.id, category: s.filter?.category, productIds: s.filter?.productIds });
+      await runPricing({
+        trigger: "schedule",
+        scheduleId: s.id,
+        category: s.filter?.category,
+        productIds: s.filter?.productIds,
+        cardRangeFrom: s.filter?.cardRangeFrom,
+        cardRangeTo: s.filter?.cardRangeTo,
+        profileId: s.filter?.profileId,
+      });
       ran.push(s.id);
     }
   } finally {

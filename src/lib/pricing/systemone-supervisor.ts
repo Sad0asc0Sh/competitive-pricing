@@ -1,3 +1,4 @@
+import { isMarketMakerWithoutCostEnabled } from "./sourcing";
 import { clamp } from "./stats";
 import type {
   CompetitivePositionReport,
@@ -174,13 +175,23 @@ export function evaluateSystemOneSupervisorSync(input: {
       : 15;
   const mktVerdict = classifyThreeZoneScore(marketScorePct, mktReject, mktApprove);
 
+  const strictAboveCost = input.config.margin?.strictAboveCost !== false;
   let profitScorePct = 0;
   if (input.finalPrice == null) {
     profitScorePct = 10;
   } else if (input.supply.effectiveCostPrice <= 0) {
-    // cost_unknown → همیشه بازه ریویو (هرگز reject سنتی با حذف rankBonus)
-    profitScorePct = 45;
-  } else if (input.finalPrice <= input.supply.effectiveCostPrice) {
+    if (
+      isMarketMakerWithoutCostEnabled(input.config) &&
+      input.supply.usedMarketConsensusFloor &&
+      input.supply.hardFloorPrice > 0 &&
+      input.finalPrice >= input.supply.hardFloorPrice
+    ) {
+      profitScorePct = 82;
+    } else {
+      // cost_unknown پیش‌فرض → همیشه بازه ریویو (هرگز تایید خودکار بدون قیمت خرید نشود)
+      profitScorePct = 45;
+    }
+  } else if (strictAboveCost ? input.finalPrice <= input.supply.effectiveCostPrice : input.finalPrice < input.supply.effectiveCostPrice) {
     // نقض مطلق کف هزینه → reject (فقط این حالت در گیت سود مردود است)
     profitScorePct = 0;
   } else if (input.finalPrice < input.supply.hardFloorPrice) {

@@ -95,7 +95,25 @@ export function extractModelAndSpecTokens(
 } {
   const p = parseTitle(text, { sku });
   const specs: string[] = [];
-  const unit: Record<string, string> = { mp: "mp", ch: "ch", cap: "gb", ports: "port", volt: "v", amp: "a", len: "m" };
+  const unit: Record<string, string> = {
+    mp: "mp",
+    ch: "ch",
+    cap: "gb",
+    ram: "gb",
+    ports: "port",
+    volt: "v",
+    amp: "a",
+    watt: "w",
+    va: "va",
+    ah: "ah",
+    uf: "uf",
+    kvar: "kvar",
+    ka: "ka",
+    poles: "p",
+    len: "m",
+    cm: "cm",
+    mm2: "mm2",
+  };
   for (const [k, vals] of Object.entries(p.attrs)) {
     if (!unit[k]) continue;
     for (const v of vals) specs.push(k === "cap" && typeof v === "number" && v % 1000 === 0 ? `${v / 1000}tb` : `${v}${unit[k]}`);
@@ -143,6 +161,7 @@ export function evaluateTorobCandidate(
   const c = parseTitle(candText);
   const r = compareParsed(t, c, {
     priceRatio: priceRatio(target, candidate),
+    anchorPriceToman: target.anchorPriceToman,
     rejectBelowPct,
     approveAbovePct,
     flags: MATCHER_FLAGS,
@@ -194,10 +213,29 @@ export function selectBestTorobSearchMatch(
   const reviewCap = Math.max(rejectBelowPct + 5, approveAbovePct - 6);
   let evaluated = candidates.map((c) => evaluateTorobCandidate(target, c, minSellerCount));
 
-  // قاعدهٔ ابهام بین‌کارتی: اگر دو کارت با «هویت متفاوت» هر دو تایید خودکار شدند، هیچ‌کدام خودکار نیست
+  // قاعدهٔ ابهام بین‌کارتی: اگر دو کارت با «هویت متفاوت» یا مشخصات اصلی متضاد هر دو تایید خودکار شدند، هیچ‌کدام خودکار نیست
   const approved = evaluated.filter((x) => x.verdict === "approve");
   const keys = new Set(approved.map((x) => x.identityKey));
-  if (approved.length > 1 && keys.size > 1) {
+  let crossCardConflict = keys.size > 1;
+  if (!crossCardConflict && approved.length > 1) {
+    const parsedCards = approved.map((x) => parseTitle(`${x.candidate.titleFa ?? ""} ${x.candidate.titleEn ?? ""}`.trim()));
+    for (let i = 0; i < parsedCards.length && !crossCardConflict; i++) {
+      for (let j = i + 1; j < parsedCards.length; j++) {
+        const a = parsedCards[i].attrs;
+        const b = parsedCards[j].attrs;
+        for (const k of Object.keys(a)) {
+          if (k === "res" || k === "wifi") continue;
+          const va = a[k];
+          const vb = b[k];
+          if (va?.length && vb?.length && !va.some((x) => vb.some((y) => String(x) === String(y)))) {
+            crossCardConflict = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (approved.length > 1 && crossCardConflict) {
     evaluated = evaluated.map((x) =>
       x.verdict === "approve"
         ? {
@@ -206,6 +244,7 @@ export function selectBestTorobSearchMatch(
             noul: Math.min(x.score, reviewCap) / 100,
             verdict: classifyThreeZoneScore(Math.min(x.score, reviewCap), rejectBelowPct, approveAbovePct),
             needsReview: true,
+            blockers: [...(x.blockers ?? []), "چند کارت با هویت یا مشخصات متفاوت هم‌زمان با محصول سایت منطبق‌اند"],
             notes: [...x.notes, "⚠ چند کارت با هویت متفاوت هم‌زمان با محصول سایت منطبق‌اند؛ انتخاب با بازبین"],
           }
         : x,

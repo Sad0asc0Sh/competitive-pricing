@@ -18,6 +18,7 @@ type Values = {
   preferredCampaignType: string;
   colleagueListText: string;
   autoApply: boolean;
+  showInFeatured?: boolean;
 };
 
 function quotesToText(quotes?: SupplierQuote[]): string {
@@ -43,6 +44,7 @@ const empty: Values = {
   preferredCampaignType: "auto",
   colleagueListText: "",
   autoApply: true,
+  showInFeatured: false,
 };
 
 export function ProductForm({
@@ -151,10 +153,19 @@ export function ProductForm({
           placeholder={"پخش شرق مشهد, 2320000, مشهد, 9, in\nهمکار تهران, 2290000, تهران, 7, in"}
         />
       </div>
-      <div className="flex items-end gap-2 pb-2 md:col-span-3">
-        <input id={`auto-${v.id ?? "new"}`} type="checkbox" checked={v.autoApply} onChange={(e) => set("autoApply", e.target.checked)} />
-        <label htmlFor={`auto-${v.id ?? "new"}`} className="text-sm">
-          اعمال خودکار بدون تأیید انسانی (با تضمین قطعی عدم فروش زیر قیمت خرید همکار)
+      <div className="flex flex-wrap items-center gap-5 pb-2 md:col-span-3">
+        <label htmlFor={`auto-${v.id ?? "new"}`} className="flex items-center gap-2 text-sm">
+          <input id={`auto-${v.id ?? "new"}`} type="checkbox" checked={v.autoApply} onChange={(e) => set("autoApply", e.target.checked)} />
+          <span>اعمال خودکار بدون تأیید انسانی (با تضمین قطعی عدم فروش زیر قیمت خرید همکار)</span>
+        </label>
+        <label htmlFor={`feat-${v.id ?? "new"}`} className="flex items-center gap-2 text-sm font-medium text-indigo-800">
+          <input
+            id={`feat-${v.id ?? "new"}`}
+            type="checkbox"
+            checked={Boolean(v.showInFeatured)}
+            onChange={(e) => set("showInFeatured", e.target.checked)}
+          />
+          <span>★ مجاز برای نمایش در باکس «منتخب‌های صفحه اصلی» در زمان کمپین (`showInFeatured`)</span>
         </label>
       </div>
       <div className="flex items-center gap-3 md:col-span-3">

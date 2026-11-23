@@ -17,16 +17,32 @@ exports.DEFAULT_MATCH_FLAGS = {
     softPrice: true,
 };
 const REL_RANK = { equal: 8, alias: 7, tail: 6, ext_seg: 5, stem: 4, ext_chars: 3, sibling: 2, unrelated: 1 };
-const PRIMARY_ATTRS = new Set(["mp", "ch", "cap", "ports", "volt", "amp", "len", "cat", "ctype", "rg", "speed", "poe", "inch", "cabletype", "lens"]);
-const SOFT_ATTRS = new Set(["wifi", "ingress", "res"]);
+const PRIMARY_ATTRS = new Set([
+    "mp", "ch", "cap", "ram", "ports", "volt", "amp", "watt", "va", "ah", "uf", "kvar", "ka",
+    "poles", "curve", "phase", "ingress", "len", "cm", "mm2", "dim", "cat", "ctype", "rg", "speed", "poe", "inch", "cabletype", "lens", "gen",
+]);
+const SOFT_ATTRS = new Set(["wifi", "res"]);
 const ATTR_LABEL = {
     mp: "رزولوشن (مگاپیکسل)",
     ch: "تعداد کانال",
     cap: "ظرفیت",
+    ram: "حافظه رم",
     ports: "تعداد پورت",
     volt: "ولتاژ",
-    amp: "آمپر",
+    amp: "جریان (آمپر)",
+    watt: "توان (وات)",
+    va: "توان ظاهری (VA)",
+    ah: "ظرفیت باتری (Ah)",
+    uf: "ظرفیت خازنی (uF)",
+    kvar: "توان راکتیو (kVAr)",
+    ka: "قدرت قطع (kA)",
+    poles: "تعداد پل/قطب",
+    curve: "تیپ/منحنی قطع",
+    phase: "تعداد فاز",
     len: "طول",
+    cm: "اندازه (سانتیمتر)",
+    mm2: "سطح مقطع (mm²)",
+    dim: "ابعاد/سایز",
     cat: "رده کابل (Cat)",
     ctype: "نوع کابل (UTP/FTP)",
     rg: "نوع کواکسیال (RG)",
@@ -35,12 +51,26 @@ const ATTR_LABEL = {
     inch: "اینچ",
     cabletype: "نوع کابل",
     lens: "لنز",
+    gen: "نسل/شمارهٔ سری",
     wifi: "کلاس Wi-Fi",
-    ingress: "درجه IP",
+    ingress: "درجه حفاظت IP",
     res: "رزولوشن",
 };
 // ───────────────────────────── ابزارها ─────────────────────────────
 const sigmoid = (x) => 1 / (1 + Math.exp(-x));
+/**
+ * ۴.۲.۱ — مشخصهٔ «نسل/شمارهٔ سری» (gen) فقط از نوشتار لاتین استخراج می‌شود؛ پس اگر یک طرف «Cat6» و طرف دیگر «کت ۶»
+ * بنویسد، gen فقط یک‌طرفه است و نباید کارتِ درست را به ریویو ببرد (اندازه‌گیری روی کورپوس مصنوعی: پوشش کالای بی‌کد
+ * ۲۳٫۶٪ ← ۱۲٫۱٪ بود). gen یک‌طرفه فقط وقتی «ناشناخته» حساب می‌شود که عنوانِ طرف مقابل همان واژهٔ سری را
+ * «بدون عدد» داشته باشد («Galaxy Buds Pro» در برابر «Galaxy Buds2 Pro»)؛ در غیر این صورت خنثی است.
+ */
+function namesSeriesWithoutNumber(p, vals) {
+    const norm = ` ${p.norm} `;
+    return vals.some((v) => {
+        const word = String(v).split(":")[0];
+        return word.length >= 3 && norm.includes(` ${word} `);
+    });
+}
 function levenshtein(a, b) {
     if (a === b)
         return 0;
@@ -109,7 +139,10 @@ function numbersClose(a, b) {
     if (a === b)
         return true;
     const d = Math.abs(a - b);
-    return d <= 0.06 || d / Math.max(Math.abs(a), Math.abs(b), 1e-9) <= 0.04;
+    const maxAbs = Math.max(Math.abs(a), Math.abs(b), 1e-9);
+    if (maxAbs < 1)
+        return d / maxAbs <= 0.04;
+    return d <= 0.06 || d / maxAbs <= 0.04;
 }
 function valuesIntersect(a, b) {
     for (const x of a) {
@@ -182,6 +215,9 @@ function compareParsed(t, c, opt) {
     if (F.headClass) {
         const th = t.head;
         const ch = c.head;
+        if (c.trailingAccessory && !t.trailingAccessory && (!th || !(0, lexicon_1.isAccessoryClass)(th.cls))) {
+            veto(5, `لوازم جانبی/قطعه فرعی در عنوان کارت ترب تشخیص داده شد («${c.trailingAccessory.slice(4)}») ولی محصول سایت کالای اصلی است`);
+        }
         if (th && ch) {
             if (th.cls === ch.cls) {
                 classMatch = "match";
@@ -203,17 +239,16 @@ function compareParsed(t, c, opt) {
         }
         else if (!th && ch) {
             if ((0, lexicon_1.isAccessoryClass)(ch.cls)) {
-                logit -= 2.5;
-                block("کارت ترب لوازم جانبی به نظر می‌رسد و نوع کالای سایت مشخص نیست");
+                veto(5, `کارت ترب لوازم جانبی («${ch.cls.slice(4)}») است ولی محصول سایت کالای اصلی است`);
             }
             else {
                 logit -= 0.3;
             }
         }
-        // ویژگی‌های فرعی (بولت/دام ، IP/آنالوگ ، DVR/NVR ، اینترنال/اکسترنال)
+        // ویژگی‌های فرعی (بولت/دام ، IP/آنالوگ ، DVR/NVR ، اینترنال/اکسترنال ، مدیریتی/غیرمدیریتی)
         if (classMatch === "match") {
             const featConflicts = [];
-            for (const key of ["form", "tech", "hddkind"]) {
+            for (const key of ["form", "tech", "hddkind", "mgmt"]) {
                 const tv = t.features[key];
                 const cv = c.features[key];
                 if (tv?.length && cv?.length) {
@@ -234,16 +269,16 @@ function compareParsed(t, c, opt) {
         }
     }
     // ── ۳) برند
-    const tExplicit = (0, lexicon_1.expandBrands)(t.brands);
-    const cExplicit = (0, lexicon_1.expandBrands)(c.brands);
-    const tAll = (0, lexicon_1.expandBrands)([...t.brands, ...t.impliedBrands]);
-    const cAll = (0, lexicon_1.expandBrands)([...c.brands, ...c.impliedBrands]);
+    const tExplicit = new Set(t.brands);
+    const cExplicit = new Set(c.brands);
+    const tAll = new Set([...t.brands, ...t.impliedBrands]);
+    const cAll = new Set([...c.brands, ...c.impliedBrands]);
     let brand = "unknown";
     let explicitBrandAgree = false;
     if (tAll.size && cAll.size) {
-        const inter = [...tAll].some((b) => cAll.has(b));
+        const inter = (0, lexicon_1.areBrandSetsCompatible)(tAll, cAll);
         brand = inter ? "match" : "conflict";
-        explicitBrandAgree = tExplicit.size > 0 && cExplicit.size > 0 && [...tExplicit].some((b) => cExplicit.has(b));
+        explicitBrandAgree = tExplicit.size > 0 && cExplicit.size > 0 && (0, lexicon_1.areBrandSetsCompatible)(tExplicit, cExplicit);
     }
     // ── ۴) کد مدل
     let codeRel = "none";
@@ -358,16 +393,41 @@ function compareParsed(t, c, opt) {
     if (brand === "match")
         logit += targetCoded ? 1.0 : 2.0;
     else if (brand === "conflict" && F.brandConflicts) {
-        if (positiveId && relBest === "equal")
+        const bothExplicitConflict = tExplicit.size > 0 && cExplicit.size > 0 && !(0, lexicon_1.areBrandSetsCompatible)(tExplicit, cExplicit);
+        if (positiveId && relBest === "equal" && !bothExplicitConflict) {
             block(`برند متضاد با وجود کد یکسان (سایت: ${[...tAll].join("/")} ، ترب: ${[...cAll].join("/")})`);
-        else
+        }
+        else {
             veto(22, `برند متفاوت است (سایت: ${[...tAll].join("/")} ، ترب: ${[...cAll].join("/")})`);
+        }
     }
     else if (brand === "unknown" && !targetCoded) {
         if (cAll.size && !tAll.size)
             block("برند محصول سایت مشخص نیست ولی کارت ترب برند دارد");
         else if (tAll.size && !cAll.size)
             block("برند کارت ترب در عنوان نیامده است");
+    }
+    // بررسی نسخه/رده (Pro / Plus / Ultra / Lite / Mini / Max / FE)
+    const tTiers = t.features.tier ?? [];
+    const cTiers = c.features.tier ?? [];
+    if (tTiers.length > 0 || cTiers.length > 0) {
+        const sameTiers = tTiers.length === cTiers.length && tTiers.every((x) => cTiers.includes(x));
+        if (!sameTiers) {
+            const hasDistinctiveExactSku = positiveId &&
+                relBest === "equal" &&
+                tcBest != null &&
+                tcBest.canon.length >= 7 &&
+                !/^(?:NOTE|REDMI|POCO|GALAXY|IPHONE|IPAD|BUDS|MI)\d/i.test(tcBest.canon);
+            if (tTiers.length > 0 && cTiers.length > 0) {
+                veto(16, `نسخه/واریانت متفاوت است (سایت «${tTiers.join("/")}» ≠ ترب «${cTiers.join("/")}»)`);
+            }
+            else if (!hasDistinctiveExactSku) {
+                veto(16, `نسخه/واریانت متفاوت است (سایت «${tTiers.join("/") || "معمولی"}» ≠ ترب «${cTiers.join("/") || "معمولی"}»)`);
+            }
+            else {
+                notes.push(`تفاوت ذکر پسوند تبلیغاتی (${tTiers.join("/") || cTiers.join("/")}) با وجود SKU دقیق یکسان`);
+            }
+        }
     }
     // ── ۶) مشخصات تایپ‌شده
     const idByCode = positiveId; // شناسایی مثبت از راه کد (equal/alias)
@@ -403,12 +463,21 @@ function compareParsed(t, c, opt) {
                 else
                     attrMatches++;
             }
-            else if (primary && key !== "poe")
+            else if (key === "gen") {
+                if (namesSeriesWithoutNumber(c, tv))
+                    primaryUnverified++;
+            }
+            else if (primary && (key !== "poe" || t.head?.cls === "switch"))
                 primaryUnverified++;
         }
         else if (cv?.length && !tv?.length) {
             if (key === "res" && t.attrs.mp?.length)
                 continue;
+            if (key === "gen") {
+                if (namesSeriesWithoutNumber(t, cv))
+                    primaryExtra++;
+                continue;
+            }
             if (primary)
                 primaryExtra++;
         }
@@ -476,7 +545,19 @@ function compareParsed(t, c, opt) {
                 block(`کارت ترب ویژگی «${c.features[key].join("/")}» دارد که در محصول سایت ذکر نشده`);
         }
     }
-    // ── ۸) قیمت (لنگر نرم)
+    // ── ۸) قیمت (لنگر نرم) و سخت‌گیری کالای گران‌قیمت
+    const isHighValue = opt.anchorPriceToman != null && Number.isFinite(opt.anchorPriceToman) && opt.anchorPriceToman >= 10_000_000;
+    if (isHighValue) {
+        if (brand !== "match") {
+            block("کالای گران‌قیمت است و برند مشترک بین محصول سایت و کارت ترب احراز نشد");
+        }
+        if (!targetCoded && opt.anchorPriceToman >= 15_000_000) {
+            block("کالای بسیار گران‌قیمت بدون کد مدل است و تایید خودکار بدون بازبینی مجاز نیست");
+        }
+        if (primaryUnverified > 0) {
+            block("در کالای گران‌قیمت، تمام مشخصات اصلی عنوان سایت باید در کارت ترب تایید شود");
+        }
+    }
     if (F.softPrice && opt.priceRatio != null && Number.isFinite(opt.priceRatio) && opt.priceRatio > 0) {
         const r = opt.priceRatio;
         if (r < 0.42) {
@@ -488,6 +569,10 @@ function compareParsed(t, c, opt) {
         else if (r < 0.55 || r > 1.9) {
             logit -= 1.6;
             block("قیمت کارت ترب نسبت به لنگر قیمت محصول غیرعادی است");
+        }
+        else if (isHighValue && (r < 0.65 || r > 1.55)) {
+            logit -= 0.8;
+            block("برای کالای گران‌قیمت، انحراف قیمت کارت ترب نسبت به لنگر محصول بیش از حد مجاز است");
         }
         else if (r >= 0.85 && r <= 1.3) {
             logit += 0.5;

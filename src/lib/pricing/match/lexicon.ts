@@ -69,7 +69,41 @@ const BRAND_DEFS: Record<string, BrandDef> = {
   nice: { aliases: ["نایس"] },
   xiaomi: { aliases: ["شیائومی", "شیاومی", "xiaomi", "mi"] },
   redmi: { aliases: ["ردمی", "redmi"], parent: "xiaomi" },
+  poco: { aliases: ["پوکو", "poco"], parent: "xiaomi" },
   logitech: { aliases: ["لاجیتک", "logitech"] },
+  // ── برق صنعتی و اتوماسیون
+  schneider: { aliases: ["اشنایدر الکتریک", "اشنایدر", "schneider electric", "schneider"] },
+  telemecanique: { aliases: ["تله مکانیک", "تل مکانیک", "telemecanique"], parent: "schneider" },
+  abb: { aliases: ["ای بی بی", "abb"] },
+  siemens: { aliases: ["زیمنس", "siemens"] },
+  hyundai: { aliases: ["هیوندای", "هیوندا", "hyundai"] },
+  ls: { aliases: ["ال اس الکتریک", "ال اس", "ls electric", "lsis", "ls"] },
+  chint: { aliases: ["چینت", "چنت", "chint"] },
+  delixi: { aliases: ["دلیکسی", "delixi"] },
+  finder: { aliases: ["فایندر", "finder"] },
+  omron: { aliases: ["امرن", "امرون", "omron"] },
+  autonics: { aliases: ["اتونیکس", "آتونیکس", "autonics"] },
+  meanwell: { aliases: ["مین ول", "مینوئل", "mean well", "meanwell"] },
+  delta: { aliases: ["دلتا", "delta"] },
+  parsfanal: { aliases: ["پارس فانال", "پارسفانال", "pars fanal", "parsfanal"] },
+  parman: { aliases: ["پارمان", "parman"] },
+  shivaamvaj: { aliases: ["شیوا امواج", "shiva amvaj"] },
+  faraz: { aliases: ["فراز", "faraz"] },
+  khazar: { aliases: ["خزر الکتریک", "خزر", "khazar"] },
+  kavian: { aliases: ["کاویان", "kavian"] },
+  // ── دیجیتال و مصرفی
+  apple: { aliases: ["اپل", "apple"] },
+  honor: { aliases: ["آنر", "هانر", "honor"] },
+  nokia: { aliases: ["نوکیا", "nokia"] },
+  motorola: { aliases: ["موتورولا", "motorola"] },
+  crucial: { aliases: ["کروشیال", "crucial"] },
+  corsair: { aliases: ["کورسیر", "corsair"] },
+  msi: { aliases: ["ام اس آی", "ام اس ای", "msi"] },
+  lenovo: { aliases: ["لنوو", "lenovo"] },
+  anker: { aliases: ["انکر", "anker"] },
+  baseus: { aliases: ["باسئوس", "بیسوس", "baseus"] },
+  philips: { aliases: ["فیلیپس", "philips"] },
+  osram: { aliases: ["اسرام", "اوسرام", "osram"] },
 };
 
 export interface BrandInfo {
@@ -109,6 +143,23 @@ export function expandBrands(ids: Iterable<string>): Set<string> {
   return out;
 }
 
+/** بررسی سازگاری دو برند: زیربرند با برند مادر خود سازگار است، اما دو زیربرند مجزا (hilook ≠ ezviz ، redmi ≠ poco) با هم در تضادند */
+export function areBrandsCompatible(a: string, b: string): boolean {
+  if (a === b) return true;
+  const pa = BRAND_INFO.get(a)?.parent;
+  const pb = BRAND_INFO.get(b)?.parent;
+  return pa === b || pb === a;
+}
+
+export function areBrandSetsCompatible(setA: Iterable<string>, setB: Iterable<string>): boolean {
+  for (const a of setA) {
+    for (const b of setB) {
+      if (areBrandsCompatible(a, b)) return true;
+    }
+  }
+  return false;
+}
+
 /** اسکن برندهای صریح در توکن‌ها؛ شاخص توکن‌های مصرف‌شده را هم برمی‌گرداند */
 export function scanBrands(tokens: string[]): { ids: string[]; consumed: Set<number> } {
   const ids = new Set<string>();
@@ -146,6 +197,8 @@ const CODE_SHAPE_BRANDS: Array<{ re: RegExp; brand: string }> = [
   { re: /^sdsq/i, brand: "sandisk" },
   { re: /^(?:dgs|des|dir|dwr)-?\d/i, brand: "dlink" },
   { re: /^(?:eap|archer|deco)/i, brand: "tplink" },
+  { re: /^(?:lc1d|lc1f|nsx\d|gv2|gv3|ic60|ez9|act9|atv\d)/i, brand: "schneider" },
+  { re: /^(?:sm-[a-z]\d{3}|mz-[a-z0-9]{2}\d)/i, brand: "samsung" },
 ];
 
 export function brandFromCodeShape(canonLower: string): string | undefined {
@@ -249,6 +302,94 @@ const CLASS_DEFS: ClassDef[] = [
   { cls: "mouse", phrase: "ماوس" },
   { cls: "mouse", phrase: "موس" },
   { cls: "mouse", phrase: "mouse" },
+  // ── برق صنعتی و تابلو برق
+  { cls: "mcb", phrase: "فیوز مینیاتوری" },
+  { cls: "mcb", phrase: "کلید مینیاتوری" },
+  { cls: "mcb", phrase: "مینیاتوری" },
+  { cls: "mcb", phrase: "mcb" },
+  { cls: "mccb", phrase: "کلید اتوماتیک کمپکت" },
+  { cls: "mccb", phrase: "کلید اتوماتیک" },
+  { cls: "mccb", phrase: "اتوماتیک کمپکت" },
+  { cls: "mccb", phrase: "mccb" },
+  { cls: "rccb", phrase: "کلید محافظ جان" },
+  { cls: "rccb", phrase: "فیوز محافظ جان" },
+  { cls: "rccb", phrase: "محافظ جان" },
+  { cls: "rccb", phrase: "کلید نشتی جریان" },
+  { cls: "rccb", phrase: "rccb" },
+  { cls: "rccb", phrase: "rcbo" },
+  { cls: "rccb", phrase: "rcd" },
+  { cls: "mpcb", phrase: "کلید حرارتی مغناطیسی" },
+  { cls: "mpcb", phrase: "کلید حرارتی" },
+  { cls: "mpcb", phrase: "بیمتال کلیدی" },
+  { cls: "mpcb", phrase: "mpcb" },
+  { cls: "contactor", phrase: "کنتاکتور" },
+  { cls: "contactor", phrase: "contactor" },
+  { cls: "bimetall", phrase: "رله حرارتی" },
+  { cls: "bimetall", phrase: "بی متال" },
+  { cls: "bimetall", phrase: "بیمتال" },
+  { cls: "bimetall", phrase: "overload relay" },
+  { cls: "bimetall", phrase: "thermal relay" },
+  { cls: "acc:coil", phrase: "بوبین" },
+  { cls: "acc:coil", phrase: "کویل" },
+  { cls: "acc:coil", phrase: "رله شنت" },
+  { cls: "acc:coil", phrase: "شنت تریپ" },
+  { cls: "acc:coil", phrase: "اندرولتاژ" },
+  { cls: "acc:coil", phrase: "آندرولتاژ" },
+  { cls: "acc:coil", phrase: "undervoltage" },
+  { cls: "acc:coil", phrase: "shunt trip" },
+  { cls: "acc:coil", phrase: "coil" },
+  { cls: "acc:aux", phrase: "کنتاکت کمکی" },
+  { cls: "acc:aux", phrase: "تیغه کمکی" },
+  { cls: "acc:aux", phrase: "پلاتین کمکی" },
+  { cls: "acc:aux", phrase: "کنتاکت خطا" },
+  { cls: "acc:aux", phrase: "کنتاکت آلارم" },
+  { cls: "acc:aux", phrase: "کنتاکت الارم" },
+  { cls: "acc:aux", phrase: "پلاتین کنتاکتور" },
+  { cls: "acc:aux", phrase: "پلاتین" },
+  { cls: "acc:aux", phrase: "auxiliary contact" },
+  { cls: "acc:aux", phrase: "aux contact" },
+  { cls: "acc:handle", phrase: "دسته گردان" },
+  { cls: "acc:handle", phrase: "دسته کلید" },
+  { cls: "acc:handle", phrase: "دسته ممتد" },
+  { cls: "acc:handle", phrase: "مکانیزم دسته" },
+  { cls: "acc:handle", phrase: "rotary handle" },
+  { cls: "acc:frame", phrase: "فریم" },
+  { cls: "acc:frame", phrase: "کادر" },
+  { cls: "acc:frame", phrase: "قاب دور" },
+  { cls: "acc:frame", phrase: "ترمینال شیلد" },
+  { cls: "relay", phrase: "رله کنترل فاز" },
+  { cls: "relay", phrase: "رله کنترل بار" },
+  { cls: "relay", phrase: "رله شیشه ای" },
+  { cls: "relay", phrase: "رله" },
+  { cls: "relay", phrase: "relay" },
+  { cls: "timer", phrase: "تایمر" },
+  { cls: "timer", phrase: "timer" },
+  { cls: "plc", phrase: "plc" },
+  { cls: "inverter", phrase: "اینورتر" },
+  { cls: "inverter", phrase: "inverter" },
+  { cls: "inverter", phrase: "vfd" },
+  { cls: "capacitor", phrase: "خازن" },
+  { cls: "capacitor", phrase: "capacitor" },
+  { cls: "battery", phrase: "باتری" },
+  { cls: "battery", phrase: "باطری" },
+  { cls: "battery", phrase: "battery" },
+  // ── دیجیتال و مصرفی
+  { cls: "phone", phrase: "گوشی موبایل" },
+  { cls: "phone", phrase: "گوشی" },
+  { cls: "phone", phrase: "موبایل" },
+  { cls: "phone", phrase: "تلفن همراه" },
+  { cls: "phone", phrase: "smartphone" },
+  { cls: "phone", phrase: "آیفون" },
+  { cls: "phone", phrase: "ایفون" },
+  { cls: "phone", phrase: "iphone" },
+  { cls: "headphone", phrase: "هدفون" },
+  { cls: "headphone", phrase: "هندزفری" },
+  { cls: "headphone", phrase: "ایرباد" },
+  { cls: "headphone", phrase: "هدست" },
+  { cls: "headphone", phrase: "headphone" },
+  { cls: "headphone", phrase: "earbuds" },
+  { cls: "headphone", phrase: "handsfree" },
+  { cls: "headphone", phrase: "headset" },
   // ── لوازم جانبی/قطعات (head اگر اول بیاید ⇒ کارت «لوازم جانبی» است)
   { cls: "acc:mount", phrase: "پایه" },
   { cls: "acc:mount", phrase: "براکت" },
@@ -256,13 +397,22 @@ const CLASS_DEFS: ClassDef[] = [
   { cls: "acc:mount", phrase: "mount" },
   { cls: "acc:mount", phrase: "stand" },
   { cls: "acc:tripod", phrase: "سه پایه" },
+  { cls: "acc:cover", phrase: "کاور ترمینال" },
   { cls: "acc:cover", phrase: "کاور" },
+  { cls: "acc:cover", phrase: "درپوش" },
+  { cls: "acc:cover", phrase: "محافظ صفحه" },
+  { cls: "acc:cover", phrase: "گلس" },
+  { cls: "acc:cover", phrase: "برچسب محافظ" },
   { cls: "acc:cover", phrase: "قاب" },
   { cls: "acc:cover", phrase: "هوزینگ" },
   { cls: "acc:cover", phrase: "housing" },
   { cls: "acc:cover", phrase: "سایبان" },
   { cls: "acc:cover", phrase: "پوسته" },
   { cls: "acc:cover", phrase: "محافظ" },
+  { cls: "acc:adapter", phrase: "مبدل" },
+  { cls: "acc:adapter", phrase: "تبدیل" },
+  { cls: "acc:adapter", phrase: "کانورتر" },
+  { cls: "acc:adapter", phrase: "converter" },
   { cls: "acc:junction", phrase: "جعبه تقسیم" },
   { cls: "acc:junction", phrase: "جعبه اتصال" },
   { cls: "acc:junction", phrase: "جانکشن" },
@@ -303,6 +453,9 @@ const CLASS_DEFS: ClassDef[] = [
   { cls: "acc:manual", phrase: "دفترچه" },
   { cls: "acc:box", phrase: "کارتن" },
   { cls: "acc:box", phrase: "جعبه خالی" },
+  { cls: "acc:box", phrase: "باکس" },
+  { cls: "acc:box", phrase: "محفظه" },
+  { cls: "acc:box", phrase: "تابلو برق خالی" },
 ];
 
 export interface ClassHit {
@@ -391,6 +544,26 @@ const FEATURE_DEFS: FeatureDef[] = [
   { feature: "wireless", value: "yes", phrase: "wi-fi" },
   { feature: "wireless", value: "yes", phrase: "بیسیم" },
   { feature: "wireless", value: "yes", phrase: "بی سیم" },
+  // مدیریتی / غیرمدیریتی (سوییچ شبکه)
+  { feature: "mgmt", value: "unmanaged", phrase: "غیر مدیریتی" },
+  { feature: "mgmt", value: "unmanaged", phrase: "غیرمدیریتی" },
+  { feature: "mgmt", value: "unmanaged", phrase: "unmanaged" },
+  { feature: "mgmt", value: "managed", phrase: "مدیریتی" },
+  { feature: "mgmt", value: "managed", phrase: "managed" },
+  { feature: "mgmt", value: "smart", phrase: "اسمارت" },
+  // ردهٔ واریانت (Pro / Plus / Ultra / Lite / Mini / Max / FE)
+  { feature: "tier", value: "pro", phrase: "پرو" },
+  { feature: "tier", value: "pro", phrase: "pro" },
+  { feature: "tier", value: "plus", phrase: "پلاس" },
+  { feature: "tier", value: "ultra", phrase: "اولترا" },
+  { feature: "tier", value: "ultra", phrase: "ultra" },
+  { feature: "tier", value: "lite", phrase: "لایت" },
+  { feature: "tier", value: "lite", phrase: "lite" },
+  { feature: "tier", value: "mini", phrase: "مینی" },
+  { feature: "tier", value: "mini", phrase: "mini" },
+  { feature: "tier", value: "max", phrase: "مکس" },
+  { feature: "tier", value: "max", phrase: "max" },
+  { feature: "tier", value: "fe", phrase: "fe" },
 ];
 
 const FEATURE_INDEX = new Map<string, Array<{ tokens: string[]; def: FeatureDef }>>();
@@ -428,8 +601,8 @@ const phraseSet = (phrases: string[]): string[][] => phrases.map((p) => tokenize
 export const COMPAT_MARKERS = phraseSet(["مناسب", "مخصوص", "ویژه", "برای", "سازگار", "جهت", "compatible", "for", "fits"]);
 /** نشانگر «همراه با» — اقلام همراه */
 export const COMPANION_MARKERS = phraseSet(["به همراه", "همراه", "بهمراه", "همراه با", "به علاوه", "بعلاوه", "plus", "with", "شامل"]);
-export const PACK_WORDS = new Set(["پک", "بسته", "ست", "کیت", "پکیج", "باندل", "pack", "kit", "set", "bundle", "combo", "کمبو"]);
-export const QTY_UNIT_WORDS = new Set(["عددی", "تایی", "عدد", "دستگاهی", "دانه", "تکی", "pcs", "pc"]);
+export const PACK_WORDS = new Set(["پک", "بسته", "ست", "کیت", "پکیج", "باندل", "pack", "kit", "set", "bundle", "combo", "کمبو", "جفت", "pair"]);
+export const QTY_UNIT_WORDS = new Set(["عددی", "تایی", "عدد", "دستگاهی", "دانه", "تکی", "pcs", "pc", "جفت", "جفتی", "pair", "پک", "بسته", "حلقه", "رول"]);
 
 export const USED_PHRASES = phraseSet([
   "استوک",
@@ -441,6 +614,7 @@ export const USED_PHRASES = phraseSet([
   "ریفرب",
   "refurbished",
   "refurb",
+  "renewed",
   "used",
   "second hand",
   "secondhand",
@@ -451,28 +625,67 @@ export const USED_PHRASES = phraseSet([
   "مرجوعی",
   "درجه 2",
   "درجه دو",
+  "در حد نو",
+  "ویترینی",
+  "نمایشگاهی",
+  "مستعمل",
+  "بدون جعبه",
+  "فاقد جعبه",
+  "ریپک",
+  "repack",
 ]);
 
 export const COUNTERFEIT_PHRASES = phraseSet([
   "های کپی",
+  "هایکپی",
+  "highcopy",
   "کپی برابر اصل",
   "کپی اصلی",
+  "کپی درجه یک",
+  "کپی درجه 1",
+  "طرح اصل",
+  "طرح اصلی",
+  "مشابه اصل",
+  "مشابه اصلی",
   "تقلبی",
   "غیر اصل",
   "غیراصل",
+  "غیر اصلی",
+  "غیراصلی",
   "غیر اورجینال",
   "غیراورجینال",
   "فیک",
   "fake",
   "replica",
+  "imitation",
+  "clone",
 ]);
 
-export const DEFECTIVE_PHRASES = phraseSet(["خراب", "سوخته", "معیوب", "تعمیری", "اوراقی", "ایراد دار", "ایرادی", "برای قطعات", "جهت قطعات"]);
+export const DEFECTIVE_PHRASES = phraseSet([
+  "خراب",
+  "سوخته",
+  "معیوب",
+  "تعمیری",
+  "تعمیر شده",
+  "تعمیرشده",
+  "سرویس شده",
+  "ریبال",
+  "ریبال شده",
+  "اوراقی",
+  "ایراد دار",
+  "ایرادی",
+  "ضربه خورده",
+  "شکسته",
+  "نیم سوز",
+  "برد خراب",
+  "برای قطعات",
+  "جهت قطعات",
+]);
 
 /** واژه‌های توقف/بی‌اثر (هیچ اطلاعات هویتی ندارند) */
 export const STOPWORDS = new Set(
   [
-    "و", "یا", "در", "به", "از", "با", "تا", "برای", "که", "این", "آن", "را", "هم", "یک", "دارای", "بدون", "مدل", "کد", "برند", "نوع", "طرح",
+    "و", "یا", "در", "به", "از", "با", "تا", "برای", "که", "این", "آن", "را", "هم", "یک", "دارای", "بدون", "مدل", "کد", "برند", "نوع",
     "مشخصات", "قیمت", "خرید", "فروش", "فروشگاه", "ارسال", "فوری", "رایگان", "موجود", "پیش", "تحویل", "همراه", "بهمراه",
     "اصلی", "اصل", "اورجینال", "اصالت", "سلامت", "فیزیکی", "جدید", "جدیدترین", "نسخه", "نو", "اکبند", "پلمپ", "گارانتی", "ضمانت", "تضمینی",
     "شرکتی", "رسمی", "ماهه", "ساله", "سال", "ماه", "کیفیت", "عالی", "ظرفیت", "رزولوشن", "طول", "اندازه", "سایز", "کد", "مناسب", "ویژه", "مخصوص", "جهت", "سازگار",
@@ -484,7 +697,7 @@ export const STOPWORDS = new Set(
 export const GENERIC_WORDS = new Set(
   [
     "دوربین", "مداربسته", "دستگاه", "دیجیتال", "شبکه", "تحت", "امنیتی", "سیستم", "پکیج", "تصویر", "دید", "شب", "رنگی", "فلزی", "پلاستیکی",
-    "بولت", "دام", "بزرگ", "کوچک", "نسل", "سنسور", "چشمی", "هوشمند", "بیسیم", "بی", "سیم", "وارم", "لایت", "ضد", "اب", "پشتیبانی", "قابلیت",
+    "بولت", "دام", "بزرگ", "کوچک", "نسل", "سنسور", "چشمی", "هوشمند", "بیسیم", "بی", "سیم", "وارم", "وارملایت", "warmlight", "ضد", "اب", "پشتیبانی", "قابلیت",
     "میکروفون", "میکروفن", "داخلی", "خارجی", "صدا", "ضبط", "ویدیو", "ویدئو", "کننده", "هارد", "دیسک", "اینترنال", "اکسترنال", "کارت", "حافظه",
     "سوییچ", "روتر", "کابل", "منبع", "تغذیه", "ip", "poe", "cctv", "camera", "dvr", "nvr", "xvr", "hdd", "switch", "router", "port", "gigabit",
     // معادل‌های انگلیسیِ توصیفی (عنوان انگلیسی ترب اغلب ترجمهٔ همان عنوان فارسی است و نشانهٔ «سری/نسخهٔ متفاوت» نیست)
@@ -498,9 +711,11 @@ export const GENERIC_WORDS = new Set(
   ].map((w) => normalizeText(w)),
 );
 
-/** واژه‌های فارسیِ نوع‌ساز: وجودشان فقط در یک طرف یعنی واریانت متفاوت (مدیریتی ≠ ساده ، پرو ≠ معمولی) */
+/** واژه‌های نوع‌ساز: وجودشان فقط در یک طرف یعنی واریانت متفاوت (مدیریتی ≠ ساده ، پرو ≠ معمولی) */
 export const VARIANT_WORDS = new Set(
-  ["مدیریتی", "پرو", "پلاس", "مینی", "لایت", "اکستریم", "اولترا", "رکمونت", "دسکتاپ", "سقفی", "حرفه ای", "حرفهای", "اکسترنال", "اینترنال", "پرتابل", "بنفش", "قرمز", "مشکی", "سفید", "آبی"].map((w) =>
-    normalizeText(w),
-  ),
+  [
+    "مدیریتی", "غیرمدیریتی", "پرو", "پلاس", "مینی", "لایت", "مکس", "اکستریم", "اولترا", "رکمونت", "دسکتاپ", "سقفی",
+    "حرفه ای", "حرفهای", "اکسترنال", "اینترنال", "پرتابل", "بنفش", "قرمز", "مشکی", "سفید", "آبی",
+    "pro", "plus", "mini", "lite", "max", "ultra", "extreme", "fe", "se", "managed", "unmanaged", "rackmount",
+  ].map((w) => normalizeText(w)),
 );

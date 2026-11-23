@@ -113,3 +113,55 @@ test('M10. v4.2.0+ (H06/H22): کالای عمومی بدون کد مدل و بد
   assert.notEqual(r.verdict, 'approve')
   assert.ok(r.score < 80)
 })
+
+// ── ۴.۲.۱: «نسل/شمارهٔ سری» در نام‌های بدون کد (eval/matching/realistic3.cjs، N12)
+const { parseTitle } = loadTsModule('src/lib/pricing/match/parse.ts')
+
+test('M11. v4.2.1: نسل/شمارهٔ سری — Buds 4 ≠ Buds 3 و Band 8 ≠ Band 7 خودکار تایید نمی‌شوند', () => {
+  const buds = { productName: 'هدفون بی سیم شیائومی مدل Redmi Buds 4 Lite', sku: null, anchorPriceToman: 1450000 }
+  for (const t of ['هدفون بی سیم شیائومی مدل Redmi Buds 3 Lite']) {
+    const r = evaluateTorobCandidate(buds, card('g', t, 1300000))
+    assert.notEqual(r.verdict, 'approve', t)
+    assert.ok(r.score < 80, `${t} → ${r.score}`)
+  }
+  const band = { productName: 'مچ بند هوشمند شیائومی مدل Mi Band 8', sku: null, anchorPriceToman: 2400000 }
+  const r2 = evaluateTorobCandidate(band, card('g2', 'مچ بند هوشمند شیائومی مدل Mi Band 7', 1900000))
+  assert.notEqual(r2.verdict, 'approve')
+})
+
+test('M12. v4.2.1: استخراج gen — املاهای یکسان یک مقدارند؛ عدد واحددار/تعداد gen نمی‌شود', () => {
+  const g = (s) => parseTitle(s).attrs.gen
+  assert.deepEqual(g('Samsung Galaxy Buds2 Pro'), ['buds:2'])
+  assert.deepEqual(g('Samsung Galaxy Buds 2 Pro'), ['buds:2'])
+  assert.deepEqual(g('Apple iPhone 14 Pro Max 256GB'), ['iphone:14'])
+  assert.notDeepEqual(g('Apple iPhone 13 Pro'), g('Apple iPhone 14 Pro'))
+  assert.deepEqual(g('Xiaomi Redmi Note 12 4G'), ['note:12'])
+  // اعداد دارای واحد، اعشار، تعداد و عدد چهاررقمی gen نیستند
+  assert.equal(g('Dahua camera 2 MP lens 2.8 mm'), undefined)
+  assert.equal(g('Kingston SSD 64 GB'), undefined)
+  assert.equal(g('HDMI cable 3 m'), undefined)
+  assert.equal(g('Pack 2 pcs mouse'), undefined)
+  assert.equal(g('Intel Core i5 12400'), undefined)
+})
+
+test('M13. v4.2.1: gen هم‌خوان تضاد نمی‌سازد؛ املای یکسان با کد یکسان تایید می‌شود', () => {
+  const t = { productName: 'هدفون بی سیم سامسونگ مدل Galaxy Buds2 Pro SM-R510', sku: 'SM-R510', anchorPriceToman: 7200000 }
+  const same = evaluateTorobCandidate(t, card('ok', 'هدفون بلوتوثی سامسونگ مدل Galaxy Buds2 Pro SM-R510', 7300000))
+  assert.equal(same.verdict, 'approve')
+  // املای فاصله‌دار («Buds 2»): gen یکی است و نباید تضاد «نسل/شمارهٔ سری» گزارش شود
+  // (پایین‌آمدن به review به‌خاطر منطق چندکدی است که پیش از این هم بود، نه gen)
+  const spaced = evaluateTorobCandidate(t, card('sp', 'هدفون بلوتوثی سامسونگ مدل Galaxy Buds 2 Pro SM-R510', 7300000))
+  assert.ok(!spaced.notes.join(' ').includes('نسل/شمارهٔ سری'))
+})
+
+test('M14. v4.2.1: gen یک‌طرفه به‌خاطر تفاوت نوشتار (Cat6 ⟷ «کت ۶») کارت درست را به ریویو نمی‌برد', () => {
+  const t = { productName: 'کابل شبکه دی نت Cat6 UTP 305 متری', sku: null, anchorPriceToman: 9500000 }
+  const r = evaluateTorobCandidate(t, card('c', 'دی نت کابل شبکه کت 6 UTP 305 متری', 9400000))
+  assert.equal(r.verdict, 'approve', `${r.verdict} ${r.score}`)
+})
+
+test('M15. v4.2.1: gen یک‌طرفه وقتی طرف مقابل همان واژهٔ سری را بدون عدد دارد (Buds Pro ⟷ Buds2 Pro) تایید خودکار نمی‌شود', () => {
+  const t = { productName: 'هدفون بی سیم سامسونگ مدل Galaxy Buds2 Pro', sku: null, anchorPriceToman: 7200000 }
+  const r = evaluateTorobCandidate(t, card('g', 'هدفون بی سیم سامسونگ مدل Galaxy Buds Pro', 5200000))
+  assert.notEqual(r.verdict, 'approve', `${r.verdict} ${r.score}`)
+})

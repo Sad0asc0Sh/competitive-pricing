@@ -4,25 +4,32 @@ exports.dynamic = void 0;
 exports.GET = GET;
 exports.PATCH = PATCH;
 exports.DELETE = DELETE;
-const db_1 = require("@/db");
+const index_ts_1 = require("../../../../db/index.ts");
 const schema_1 = require("../../../../db/schema");
+const auth_1 = require("../../../../lib/auth");
 const sourcing_1 = require("../../../../lib/pricing/sourcing");
 const bootstrap_1 = require("../../../../lib/services/bootstrap");
 const registry_1 = require("../../../../lib/sources/registry");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
-async function GET(_, { params }) {
+async function GET(req, { params }) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const { id } = await params;
-    const [row] = await db_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).limit(1);
+    const [row] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).limit(1);
     if (!row)
         return server_1.NextResponse.json({ error: "یافت نشد" }, { status: 404 });
     return server_1.NextResponse.json(row);
 }
 async function PATCH(req, { params }) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const { id } = await params;
     const body = (await req.json().catch(() => ({})));
-    const [existing] = await db_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).limit(1);
+    const [existing] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).limit(1);
     if (!existing)
         return server_1.NextResponse.json({ error: "یافت نشد" }, { status: 404 });
     const allowed = [
@@ -40,6 +47,7 @@ async function PATCH(req, { params }) {
         "minProfitAmount",
         "preferredCampaignType",
         "autoApply",
+        "showInFeatured",
         "profileId",
         "status",
     ];
@@ -65,6 +73,8 @@ async function PATCH(req, { params }) {
     }
     if ("profileId" in patch)
         patch.profileId = patch.profileId ? Number(patch.profileId) : null;
+    if ("showInFeatured" in patch)
+        patch.showInFeatured = Boolean(patch.showInFeatured);
     const { config } = await (0, bootstrap_1.getProfileConfig)(patch.profileId ?? existing.profileId);
     const supplierQuotes = patch.supplierQuotes ?? existing.supplierQuotes ?? [];
     const manualCost = patch.costPrice ?? existing.costPrice;
@@ -84,15 +94,18 @@ async function PATCH(req, { params }) {
     }
     patch.updatedAt = new Date();
     try {
-        const [row] = await db_1.db.update(schema_1.products).set(patch).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).returning();
+        const [row] = await index_ts_1.db.update(schema_1.products).set(patch).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).returning();
         return server_1.NextResponse.json(row);
     }
     catch (e) {
         return server_1.NextResponse.json({ error: e instanceof Error ? e.message : "خطا" }, { status: 400 });
     }
 }
-async function DELETE(_, { params }) {
+async function DELETE(req, { params }) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const { id } = await params;
-    await db_1.db.delete(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id)));
+    await index_ts_1.db.delete(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id)));
     return server_1.NextResponse.json({ ok: true });
 }

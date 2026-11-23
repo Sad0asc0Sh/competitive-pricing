@@ -4,31 +4,57 @@ exports.config = void 0;
 exports.proxy = proxy;
 const server_1 = require("next/server");
 const auth_1 = require("./lib/auth");
-/**
- * دروازه ورود مدیر: وقتی ADMIN_PASSWORD تنظیم شده باشد، همه صفحات و APIها
- * بدون کوکی نشست معتبر بسته‌اند.
- * استثناها: صفحه و API لاگین/خروج، ‎/api/health‎ و اندپوینت‌های کرون
- * (‎/api/cron‎ و ‎/api/scheduler/tick‎) که سکرت جدا (CRON_SECRET) دارند.
- */
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/auth/logout", "/api/health", "/api/cron", "/api/scheduler/tick"];
+const PUBLIC_PATHS = [
+    "/login",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/health",
+];
+const CRON_PATHS = [
+    "/api/cron",
+    "/api/scheduler/tick",
+];
 async function proxy(req) {
-    if (!(0, auth_1.isAuthEnabled)())
-        return server_1.NextResponse.next();
     const { pathname } = req.nextUrl;
+    if (pathname.startsWith("/_next") ||
+        pathname.startsWith("/favicon") ||
+        pathname.includes(".")) {
+        return server_1.NextResponse.next();
+    }
     if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
         return server_1.NextResponse.next();
     }
-    const token = req.cookies.get(auth_1.SESSION_COOKIE)?.value;
-    if (await (0, auth_1.isValidSessionToken)(token))
+    if (CRON_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+        const denied = await (0, auth_1.requireCronOrAdminAuth)(req);
+        if (denied)
+            return denied;
         return server_1.NextResponse.next();
-    if (pathname.startsWith("/api/")) {
-        return server_1.NextResponse.json({ error: "ابتدا وارد شوید" }, { status: 401 });
     }
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.search = pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : "";
-    return server_1.NextResponse.redirect(url);
+    if (pathname.startsWith("/api/")) {
+        const denied = await (0, auth_1.requireAdminAuth)(req);
+        if (denied)
+            return denied;
+        return server_1.NextResponse.next();
+    }
+    const status = (0, auth_1.getAuthConfigStatus)();
+    if (status.bypass) {
+        return server_1.NextResponse.next();
+    }
+    if (!status.configured) {
+        const loginUrl = new URL("/login", req.url);
+        loginUrl.searchParams.set("error", "auth_not_configured");
+        loginUrl.searchParams.set("next", pathname);
+        return server_1.NextResponse.redirect(loginUrl);
+    }
+    const token = (0, auth_1.extractSessionTokenFromRequest)(req);
+    const valid = await (0, auth_1.verifySessionToken)(token);
+    if (!valid) {
+        const loginUrl = new URL("/login", req.url);
+        loginUrl.searchParams.set("next", pathname);
+        return server_1.NextResponse.redirect(loginUrl);
+    }
+    return server_1.NextResponse.next();
 }
 exports.config = {
-    matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|woff2?)$).*)"],
+    matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

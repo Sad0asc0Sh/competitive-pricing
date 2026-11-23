@@ -43,21 +43,40 @@ async function main() {
   const pool = new Pool({ connectionString: url })
   try {
     const params = []
-    let where = `source IN ('torob','manual') AND steps IS NOT NULL`
+    // فقط تصمیم‌های واقعی ترب (live_torob یا shadow_torob) مجازند؛ تصمیم‌های شبیه‌سازی یا دستی اکیداً حذف می‌شوند
+    let where = `source = 'torob' AND COALESCE(is_simulated, false) = false AND COALESCE(validation_source, 'live_torob') IN ('live_torob', 'shadow_torob') AND steps IS NOT NULL`
     if (since) {
       params.push(since)
       where += ` AND created_at >= $${params.length}`
     }
     params.push(limit)
     const { rows } = await pool.query(
-      `SELECT id, status, final_price AS "finalPrice", confidence, steps, created_at AS "createdAt"
+      `SELECT id, status, source, is_simulated AS "isSimulated", validation_source AS "validationSource", final_price AS "finalPrice", confidence, steps, created_at AS "createdAt"
          FROM price_decisions WHERE ${where} ORDER BY id DESC LIMIT $${params.length}`,
       params,
     )
     const built = buildRows(rows.reverse(), { audit, useReview: !flag('no-review') })
     const pos = built.rows.filter((r) => r.label === 1).length
     const bySource = built.rows.reduce((a, r) => ((a[r.labelSource] = (a[r.labelSource] || 0) + 1), a), {})
-    fs.writeFileSync(out, JSON.stringify({ meta: { exportedAt: new Date().toISOString(), since, decisionsRead: rows.length, skipped: built.skipped, labelSources: bySource }, rows: built.rows }, null, 2))
+    fs.writeFileSync(
+      out,
+      JSON.stringify(
+        {
+          meta: {
+            exportedAt: new Date().toISOString(),
+            since,
+            decisionsRead: rows.length,
+            skipped: built.skipped,
+            labelSources: bySource,
+            validationSource: 'real_torob_only',
+            simulatedExcluded: true,
+          },
+          rows: built.rows,
+        },
+        null,
+        2,
+      ),
+    )
     console.log(`خوانده‌شده: ${rows.length} تصمیم | ردیف برچسب‌دار: ${built.rows.length} (درست=${pos}, نادرست=${built.rows.length - pos})`)
     console.log(`حذف‌شده: بدون ویژگی (تصمیم‌های قبل از ۴.۲.۰) = ${built.skipped.noFeatures} ، بدون برچسب = ${built.skipped.noLabel}`)
     console.log(`منبع برچسب: ${JSON.stringify(bySource)}  →  ${out}`)

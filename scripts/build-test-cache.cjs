@@ -23,7 +23,9 @@ const srcDir = path.join(root, 'src')
 const cacheDir = path.join(root, 'tests', '.compiled-cache')
 const manifestPath = path.join(cacheDir, 'manifest.json')
 
-const sha256 = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+// ۴.۲.۱: هش مستقل از پایان‌خط (CRLF ⟷ LF). پیش‌تر manifest روی چک‌اوتِ ویندوزی (CRLF) ساخته شده بود و روی هر
+// چک‌اوتِ لینوکس/مک/CI (LF) تستِ H1 برای ۷۳ از ۷۶ فایل «کش کهنه است» می‌داد.
+const sha256 = (text) => crypto.createHash('sha256').update(String(text).replace(/\r\n/g, '\n'), 'utf8').digest('hex')
 
 function listSources(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -92,6 +94,7 @@ function rewriteAliases(code, fullPath) {
   }
   code = code.replace(/from\s+["']@\/lib\/([^"']+)["']/g, (_, p1) => `from "${toImportPath(fullPath, path.resolve(root, 'src/lib', p1))}"`)
   code = code.replace(/from\s+["']@\/db\/([^"']+)["']/g, (_, p1) => `from "${toImportPath(fullPath, path.resolve(root, 'src/db', p1))}"`)
+  code = code.replace(/from\s+["']@\/db["']/g, () => `from "${toImportPath(fullPath, path.resolve(root, 'src/db/index.ts'))}"`)
   return code
 }
 
@@ -127,16 +130,21 @@ function build() {
   console.log(`کش کامپایل: ${Object.keys(files).length} فایل (typescript ${ts.version})`)
 }
 
-if (process.argv.includes('--check')) {
-  const res = checkFreshness()
-  if (res.ok) {
-    console.log('کش کامپایل تازه است.')
+// ۴.۲.۱: فقط وقتی «مستقیم» اجرا شود کار می‌کند. پیش‌تر این بلوک هنگام require هم اجرا می‌شد؛ چون tests/release-hygiene.test.cjs
+// این فایل را require می‌کرد، هر `npm test` کش و manifest را پاک و دوباره می‌ساخت (درخت git پس از هر تست کثیف می‌شد
+// و تست H1 هرگز نمی‌توانست کهنگی را ببیند؛ بدون کامپایلر هم require با process.exit(2) کل فایل تست را می‌کشت).
+if (require.main === module) {
+  if (process.argv.includes('--check')) {
+    const res = checkFreshness()
+    if (res.ok) {
+      console.log('کش کامپایل تازه است.')
+    } else {
+      console.error(res.problems.join('\n'))
+      process.exit(1)
+    }
   } else {
-    console.error(res.problems.join('\n'))
-    process.exit(1)
+    build()
   }
-} else {
-  build()
 }
 
 module.exports = { checkFreshness, listSources, sha256 }

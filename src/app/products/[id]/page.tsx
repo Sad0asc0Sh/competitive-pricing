@@ -97,7 +97,29 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               آخرین تصمیم #{latest.id} · {faDate(latest.createdAt)} ·{" "}
               <span className={`badge ${statusColor[latest.status]}`}>{statusLabel[latest.status]}</span>
             </h2>
-            {latest.status === "pending_review" && <DecisionActions decisionId={latest.id} />}
+            {(latest.status === "pending_review" ||
+              latest.status === "sync_failed" ||
+              latest.status === "pending_sync") && (
+              <DecisionActions
+                decisionId={latest.id}
+                force
+                isBelowFloor={
+                  (latest.finalPrice ?? 0) > 0 &&
+                  (latest.finalPrice ?? 0) <
+                    Math.max(
+                      latest.hardFloorPrice ?? 0,
+                      p.currentHardFloorPrice ?? 0,
+                      latest.effectiveCostPrice ?? 0,
+                      p.costPrice ?? 0
+                    )
+                }
+                syncFailed={
+                  latest.status === "sync_failed" ||
+                  latest.status === "pending_sync" ||
+                  latest.pushStatus === "failed"
+                }
+              />
+            )}
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5 lg:grid-cols-11">
             <Mini k="پیشنهاد معتبر/کل" v={`${faNum(latest.offersUsed)}/${faNum(latest.offersTotal)}`} />
@@ -242,7 +264,31 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                 <td>
                   <span className={`badge ${statusColor[d.status]}`}>{statusLabel[d.status]}</span>
                 </td>
-                <td>{d.status === "pending_review" && <DecisionActions decisionId={d.id} />}</td>
+                <td>
+                  {(d.status === "pending_review" ||
+                    d.status === "sync_failed" ||
+                    d.status === "pending_sync") && (
+                    <DecisionActions
+                      decisionId={d.id}
+                      force
+                      isBelowFloor={
+                        (d.finalPrice ?? 0) > 0 &&
+                        (d.finalPrice ?? 0) <
+                          Math.max(
+                            d.hardFloorPrice ?? 0,
+                            p.currentHardFloorPrice ?? 0,
+                            d.effectiveCostPrice ?? 0,
+                            p.costPrice ?? 0
+                          )
+                      }
+                      syncFailed={
+                        d.status === "sync_failed" ||
+                        d.status === "pending_sync" ||
+                        d.pushStatus === "failed"
+                      }
+                    />
+                  )}
+                </td>
               </tr>
             ))}
             {!decisions.length && (
@@ -272,6 +318,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             minProfitAmount: p.minProfitAmount ?? "",
             preferredCampaignType: p.preferredCampaignType ?? "auto",
             autoApply: p.autoApply,
+            showInFeatured: p.showInFeatured,
           }}
           initialQuotes={p.supplierQuotes}
         />

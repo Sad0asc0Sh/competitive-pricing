@@ -1,12 +1,16 @@
 import { db } from "@/db";
 import { discountCampaigns } from "@/db/schema";
+import { requireAdminAuth } from "@/lib/auth";
 import { ensureDefaults } from "@/lib/services/bootstrap";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   await ensureDefaults();
   const rows = await db.select().from(discountCampaigns).orderBy(discountCampaigns.priority);
   return NextResponse.json(rows);
@@ -32,6 +36,9 @@ const toStrs = (v: unknown): string[] =>
       : [];
 
 export async function POST(req: Request) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const b = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!b) return NextResponse.json({ error: "بدنه نامعتبر" }, { status: 400 });
 
@@ -78,8 +85,13 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const { id } = (await req.json().catch(() => ({}))) as { id?: number };
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
+  const body = (await req.json().catch(() => ({}))) as { id?: number };
+  const urlId = new URL(req.url, "http://localhost").searchParams.get("id");
+  const id = Number(body.id ?? urlId);
   if (!id) return NextResponse.json({ error: "id لازم است" }, { status: 400 });
-  await db.delete(discountCampaigns).where(eq(discountCampaigns.id, Number(id)));
+  await db.delete(discountCampaigns).where(eq(discountCampaigns.id, id));
   return NextResponse.json({ ok: true });
 }

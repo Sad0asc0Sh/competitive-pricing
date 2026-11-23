@@ -20,7 +20,8 @@ const labels = {
     staleSafetyBufferPct: "ضریب احتیاط روی لیست قدیمی همکاران ٪",
     neverBelowManualCost: "هرگز کمتر از قیمت خرید ثبت‌شده انبار نباشد (سازگاری قدیمی)",
     costPolicy: "سیاست تقاطع هزینه انبار و قیمت ریپلیس (replacement_floor | max_inventory_replacement | legacy_never_below_manual)",
-    allowAutoApplyWithoutCost: "اعمال خودکار قیمت معیار بازار حتی در نبود لیست/قیمت خرید (Provisional همیشه ریویو است)",
+    allowAutoApplyWithoutCost: "اعمال خودکار قیمت معیار بازار حتی در نبود لیست/قیمت خرید (پیش‌فرض غیرفعال = همیشه ریویو)",
+    allowMarketMakerWithoutCost: "مجوز صریح سیاست تجاری Market-Maker در نبود قیمت خرید (پیش‌فرض غیرفعال)",
     costlessSafePercentile: "صدک امن بازار در نبود لیست خرید (حذف نیمه ارزان مشکوک)",
     costlessSafetyMarginPct: "حاشیه ایمنی ضدضرر روی هسته بازار در نبود لیست خرید ٪",
     impliedCostBackoffPct: "فاصله تخمینی قیمت خرید از کف امن بازار در نبود لیست ٪",
@@ -33,14 +34,19 @@ const labels = {
     includeInPersonSellers: "لحاظ کردن فروشندگان حضوری مشهد در رقابت محلی",
     minShopScore: "حداقل امتیاز فروشگاه رقیب در ترب (۰ تا ۵)",
     shopBlacklist: "لیست سیاه فروشگاه‌ها (کاما)",
-    ownShopNames: "نام فروشگاه خودمان در ترب (کاما)",
+    ownShopNames: "نام فروشگاه خودمان در ترب (کاما)؛ املاهای رایج برند همیشه خودکار شناخته می‌شوند",
+    ownShopIds: "شناسهٔ فروشندهٔ خودمان در ترب (shop_id، کاما) — دقیق‌ترین راه؛ پس از دیدن پیام «پژواک قیمت خودی» از گزارش تصمیم بردارید",
     outliers: "۲) حذف داده‌های پرت و فروشندگان غیربه‌روز",
-    method: "روش آماری حذف پرت",
+    method: "روش آماری/تجمیع",
     iqrK: "ضریب IQR",
     madK: "ضریب MAD",
     hardBandPct: "باند سخت بالای میانه بازار ٪ (حذف گران‌فروشان پرت)",
     lowerStaleBandPct: "باند سخت پایین حول میانه فروشندگان تازه ٪ (حذف ارزان‌فروشان آپدیت‌نشده)",
     minSamples: "حداقل نمونه برای روش آماری",
+    classifyClusterPct: "حداکثر فاصله گروه خرید هم‌قیمت ٪ (تشخیص هسته تاییدشده R0)",
+    suspectLowBandPct: "باند بدگمانی پایین R1 زیر مرجع ٪ (تشخیص دام قیمتی)",
+    freshCutoffDays: "آستانه تازگی «به‌روز» برای طبقه‌بندی R0/R1 (روز)",
+    minClusterMembers: "حداقل اعضای خوشه برای تایید هسته R0",
     aggregation: "۳) تجمیع و کشف قیمت معیار بازار",
     trimPct: "درصد برش دو سر بازار (trimmed mean)",
     recencyHalfLifeDays: "نیمه‌عمر وزن تازگی (روز)",
@@ -57,6 +63,8 @@ const labels = {
     highTrustScoreThreshold: "حداقل امتیاز فروشگاه‌های خوش‌نام (High-Trust)",
     undercutAmount: "کاهش زیر قیمت رقیب هدف (تومان)",
     undercutPct: "کاهش زیر قیمت رقیب هدف ٪",
+    leaderGapPct: "حداکثر فاصله مجاز از رهبر منفرد در حالت پریمیوم ٪",
+    leaderMinMarginPct: "حداقل حاشیه سود برای دنبال‌کردن رهبر منفرد ٪",
     leaderPremiumMode: "حالت premium رهبر منفرد: نشستن بالای رهبر (پیش‌فرض false: رتبه ۱ زیر رهبر یا زیر بدنه بازار)",
     localMonopolyDiscountFromRefPct: "تخفیف زیر مرجع کشوری در زمان تک‌فروشندگی در مشهد ٪",
     fallbackToReference: "در اختلاف زیاد، روی مرجع بمان",
@@ -68,19 +76,25 @@ const labels = {
     strictAboveCost: "تضمین مطلق قیمت فروش > قیمت خرید و تامین",
     guards: "۶) محافظ‌ها و پایداری",
     maxChangePctPerRun: "حداکثر تغییر قیمت در هر اجرا ٪",
+    maxIncreasePct: "سقف مجاز افزایش قیمت در هر اجرا ٪",
+    maxDecreasePct: "سقف مجاز کاهش قیمت در هر اجرا ٪",
+    maxDailyChangePct: "سقف مجاز تغییرات تجمعی ۲۴ ساعته ٪",
     minConfidenceAutoApply: "حداقل اعتماد برای اعمال خودکار (0-1)",
     minValidOffers: "حداقل پیشنهاد معتبر",
     hysteresisPct: "آستانه هیسترزیس (جلوگیری از نوسان جزئی) ٪",
+    minFreshRatio: "حداقل نسبت پیشنهادهای به‌روز از کل معتبرها (0-1)",
     profitApproveMarginPct: "حداقل حاشیه سود برای اعمال خودکار ٪ (۰ = هر قیمت بالای کف سود؛ بیشتر = ریویو)",
     discount: "۷) کشف سقف واقعی بازار (معیار تخفیف) و اعمال درصد تخفیف روی کف",
     mode: "روش کشف سقف قیمت بازار (معیار تخفیف)",
-    basePriceMode: "روش پایه سنتی (سازگاری)",
+    basePriceMode: "روش پایه کشف سقف (basePriceMode)",
     marketUpperPercentile: "صدک سقف بازار تحت رصد (مثلاً ۸۵ یعنی صدک ۸۵ فروشندگان معتبر بدون پرت)",
     maxCeilingAboveMedianPct: "حداکثر فاصله مجاز سقف از میانه بازار ٪ (سپر ضد قیمت پرت)",
     calibrateCeilingForExactFloor: "کالیبراسیون دقیق سقف تا با درصد تخفیف صحیح دقیقاً به کف هدف برسد",
     markupPct: "درصد افزایش روی کف (در حالت markup یا نبود داده)",
     minDiscountPct: "حداقل درصد تخفیف روی سقف ٪",
     maxDiscountPct: "حداکثر درصد تخفیف روی سقف ٪",
+    ownPriceWindowDays: "پنجره تاریخی قیمت خودی برای مرجع تخفیف (روز)",
+    ownPriceMinHoldHours: "حداقل دوام قیمت خودی برای تبدیل به مرجع تخفیف (ساعت)",
     rounding: "۸) گرد کردن قیمت‌ها",
     finalStep: "گام گرد کردن قیمت کف (نهایی)",
     baseStep: "گام گرد کردن قیمت سقف (معیار)",
@@ -91,8 +105,28 @@ const labels = {
     rejectBelowPct: "آستانه رد کامل ٪ (زیر این درصد = رد فوری و عدم ورود به سیستم)",
     approveAbovePct: "آستانه تایید خودکار ٪ (بین رد تا این عدد = ریویو | بالای این عدد = تایید و ادامه خودکار)",
     strictGateVeto: "قانون وتوی سخت‌گیرانه (اگر حتی ۱ مقیاس رد شود، کل تصمیم متوقف شود)",
+    shareCostWithApi: "ارسال اعداد خام هزینه/کف سود به API خارجی SubQ (پیش‌فرض false = محرمانگی کامل)",
     ai: "۱۰) هوش مصنوعی مکمل",
     reviewBelowConfidence: "بازبینی AI وقتی اعتماد کمتر از",
+    costless: "۱۱) مسیر کالاهای بدون قیمت خرید (Provisional)",
+    provisionalPercentile: "صدک استخراج قیمت موقت بازار در نبود قیمت خرید",
+    minCredibleFresh: "حداقل فروشندگان معتبر و به‌روز برای فعال‌شدن قیمت موقت",
+    autoApply: "اجازه اعمال خودکار قیمت موقت بدون قیمت خرید (پیش‌فرض false = همیشه ریویو)",
+    engine: "۱۲) نسخه موتور",
+    version: "نسخه موتور قیمت‌گذاری",
+    estimator: "۱۳) تخمین‌گر احتمالی نسخه ۲ (Estimator v2)",
+    validityModel: "مدل احتمالی اعتبار پیشنهادها (Validity Model)",
+    softStaleness: "کاهش نرم وزن قدمت به‌جای حذف سخت سنی",
+    hardMaxOfferAgeDays: "سقف مطلق سن پیشنهاد در حالت نرم (روز)",
+    guaranteeFix: "اصلاح تشخیص گارانتی معتبر در برابر disabled",
+    competitivenessCostRatio: "نسبت وزن رقابت به حفظ حاشیه سود",
+    marketConflictByProbability: "تشخیص تعارض بازار بر اساس احتمال اعتبار",
+    conflictMinProb: "حداقل احتمال اعتبار برای ثبت تعارض بازار (0-1)",
+    truncationAware: "لحاظ کردن برش لیست فروشندگان ترب (Truncation-Aware)",
+    confirmedAnchorOverridesGap: "اولویت لنگر تاییدشده با احتمال بالا بر سقف فاصله مرجع",
+    anchorOverrideMinProb: "حداقل احتمال اعتبار لنگر برای عبور از سقف فاصله (0-1)",
+    anchorOverrideMaxGapPct: "حداکثر فاصله مجاز لنگر تاییدشده از مرجع ٪",
+    adaptiveClusterRadius: "شعاع خوشه‌بندی تطبیقی بر اساس پراکندگی بازار",
 };
 const gateTitles = {
     identity_match: "مقیاس ۱ (ورودی): تطابق هویت و کد مدل کالا در ترب",
@@ -101,36 +135,50 @@ const gateTitles = {
     ceiling_discount_validity: "مقیاس ۴: اصالت سقف معیار (بدون پرت) و تخفیف روی کف",
 };
 const selectOptions = {
-    selectionMode: [
+    "sourcing.selectionMode": [
         { value: "priority_then_lowest", label: "اولویت همکار مشهد/معتبر، سپس ارزان‌ترین" },
         { value: "lowest_valid", label: "ارزان‌ترین همکار معتبر" },
         { value: "conservative_high", label: "محافظه‌کارانه (بالاترین همکار معتبر)" },
         { value: "weighted_priority", label: "میانگین وزنی اولویت همکاران" },
     ],
-    costPolicy: [
+    "sourcing.costPolicy": [
         { value: "replacement_floor", label: "کف از قیمت ریپلیس (هشدار در صورت عبور از هزینه انبار)" },
         { value: "max_inventory_replacement", label: "کف از بیشینه هزینه انبار و ریپلیس (محافظه‌کارانه)" },
         { value: "legacy_never_below_manual", label: "سازگاری ۳.۶: هرگز کمتر از هزینه انبار" },
     ],
-    method: [
+    "outliers.method": [
         { value: "iqr", label: "ترکیبی IQR + MAD + باند فروشندگان تازه (پیشنهادی)" },
         { value: "mad", label: "انحراف مطلق از میانه (MAD)" },
         { value: "band", label: "باند درصدی حول میانه" },
     ],
-    mode: [
+    "aggregation.method": [
+        { value: "trimmed_weighted_mean", label: "میانگین وزنی بریده (trimmed_weighted_mean — پیشنهادی)" },
+        { value: "median", label: "میانه (median)" },
+        { value: "weighted_mean", label: "میانگین وزنی (weighted_mean)" },
+        { value: "modal_consensus", label: "هسته چگال بازار (modal_consensus)" },
+    ],
+    "discount.mode": [
         { value: "market_percentile_ceiling", label: "صدک بالای بازار تحت رصد (حذف کامل پرت‌ها — پیشنهادی)" },
         { value: "highest_valid_seller", label: "بالاترین فروشنده معتبر بازار (محصور در سپر ضدپرت)" },
         { value: "trimmed_upper_cluster", label: "میانگین نیمه بالایی فروشندگان معتبر بازار" },
         { value: "markup", label: "افزایش درصدی ثابت روی کف هدف (Markup)" },
+    ],
+    "discount.basePriceMode": [
+        { value: "market_ceiling", label: "سقف اصولی بازار (market_ceiling)" },
+        { value: "market_upper", label: "صدک بالای بازار (market_upper)" },
+        { value: "cluster_ceiling", label: "سقف خوشه بالایی (cluster_ceiling)" },
+        { value: "markup", label: "افزایش درصدی روی کف (markup)" },
+    ],
+    "supervisor.mode": [
         { value: "hybrid_subq_and_local", label: "ترکیبی SubQ SystemOne API + موتور آنی محلی (پیشنهادی)" },
         { value: "subq_api_only", label: "فقط API رسمی SubQ SystemOne (نیازمند SUBQ_API_KEY)" },
         { value: "local_instant_only", label: "فقط موتور آنی محلی SystemOne (بدون نیاز به اینترنت خارجی)" },
     ],
-    basePriceMode: [
-        { value: "market_upper", label: "سقف بازار تحت رصد (market_upper)" },
-        { value: "markup", label: "افزایش درصدی (markup)" },
+    "estimator.mode": [
+        { value: "v2", label: "نسخه ۲ — مدل احتمالی اعتبار و بهینه‌سازی انتظار سود/رقابت (v2)" },
+        { value: "legacy", label: "نسخه کلاسیک ۴.۱.۲ (legacy)" },
     ],
-    psychological: [
+    "rounding.psychological": [
         { value: "none", label: "بدون رُند روانی (دقیق روی ضریب گام)" },
         { value: "x900", label: "ختم به ۹۰۰" },
         { value: "x000", label: "ختم به ۰۰۰" },
@@ -243,10 +291,19 @@ function ProfileEditor({ profiles }) {
                             : ""}`, children: [(0, jsx_runtime_1.jsx)("h3", { className: "mb-3 font-bold text-slate-800", children: labels[sec] ?? sec }), sec === "supervisor" ? ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-4", children: [(0, jsx_runtime_1.jsxs)("p", { className: "text-xs leading-5 text-slate-600", children: ["\u0627\u06CC\u0646 \u0646\u0627\u0638\u0631 \u0628\u0627\u0644\u0627\u0633\u0631 (`SubQ SystemOne \u2014 subq-snap-preview`) \u0641\u0642\u0637 \u062A\u0635\u0645\u06CC\u0645\u200C\u06AF\u06CC\u0631\u0646\u062F\u0647 \u0627\u0633\u062A: \u062F\u0631 \u06F4 \u0645\u0642\u06CC\u0627\u0633 \u062D\u06CC\u0627\u062A\u06CC \u0627\u0645\u062A\u06CC\u0627\u0632 `noul` (`0%` \u062A\u0627 `100%`) \u0635\u0627\u062F\u0631 \u0645\u06CC\u200C\u06A9\u0646\u062F. \u0628\u0647 \u0635\u0648\u0631\u062A \u067E\u06CC\u0634\u200C\u0641\u0631\u0636 \u0627\u06AF\u0631 \u0627\u0645\u062A\u06CC\u0627\u0632 ", (0, jsx_runtime_1.jsx)("b", { children: "\u0632\u06CC\u0631 \u06F4\u06F5\u066A" }), " \u0628\u0627\u0634\u062F ", (0, jsx_runtime_1.jsx)("b", { children: "\u0631\u062F \u06A9\u0627\u0645\u0644" }), " \u0645\u06CC\u200C\u0634\u0648\u062F\u060C \u0627\u06AF\u0631 \u0628\u06CC\u0646 ", (0, jsx_runtime_1.jsx)("b", { children: "\u06F4\u06F5\u066A \u062A\u0627 \u06F8\u06F0\u066A" }), " \u0628\u0627\u0634\u062F \u0628\u0647 ", (0, jsx_runtime_1.jsx)("b", { children: "\u0628\u062E\u0634 \u0631\u06CC\u0648\u06CC\u0648" }), " \u0645\u06CC\u200C\u0631\u0648\u062F \u0648 \u0627\u06AF\u0631 ", (0, jsx_runtime_1.jsx)("b", { children: "\u06F8\u06F0\u066A \u0628\u0647 \u0628\u0627\u0644\u0627" }), " \u0628\u0627\u0634\u062F ", (0, jsx_runtime_1.jsx)("b", { children: "\u062E\u0648\u062F\u06A9\u0627\u0631 \u062A\u0627\u06CC\u06CC\u062F \u0648 \u0627\u0639\u0645\u0627\u0644" }), " \u0645\u06CC\u200C\u06AF\u0631\u062F\u062F."] }), (0, jsx_runtime_1.jsxs)("div", { className: "grid grid-cols-1 gap-3 md:grid-cols-3", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0648\u0636\u0639\u06CC\u062A \u0646\u0627\u0638\u0631 \u0628\u0627\u0644\u0627\u0633\u0631" }), (0, jsx_runtime_1.jsxs)("label", { className: "inline-flex items-center gap-2 text-xs font-medium", children: [(0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: cfg.supervisor.enabled, onChange: (e) => setField("supervisor", "enabled", e.target.checked) }), (0, jsx_runtime_1.jsx)("span", { children: cfg.supervisor.enabled ? "فعال (نظارت روی تمام مراحل)" : "غیرفعال" })] })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u062D\u0627\u0644\u062A \u0627\u062C\u0631\u0627\u06CC SystemOne" }), (0, jsx_runtime_1.jsxs)("select", { className: "input text-xs", value: cfg.supervisor.mode, onChange: (e) => setField("supervisor", "mode", e.target.value), children: [(0, jsx_runtime_1.jsx)("option", { value: "hybrid_subq_and_local", children: "\u062A\u0631\u06A9\u06CC\u0628\u06CC SubQ API + \u0645\u0648\u062A\u0648\u0631 \u0622\u0646\u06CC \u0645\u062D\u0644\u06CC (\u067E\u06CC\u0634\u0646\u0647\u0627\u062F\u06CC)" }), (0, jsx_runtime_1.jsx)("option", { value: "subq_api_only", children: "\u0641\u0642\u0637 SubQ SystemOne API (`/v1/systemone`)" }), (0, jsx_runtime_1.jsx)("option", { value: "local_instant_only", children: "\u0641\u0642\u0637 \u0645\u0648\u062A\u0648\u0631 \u0622\u0646\u06CC \u0645\u062D\u0644\u06CC (\u0628\u062F\u0648\u0646 \u062A\u0627\u062E\u06CC\u0631 \u0634\u0628\u06A9\u0647)" })] })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0645\u062F\u0644 SubQ (`model`)" }), (0, jsx_runtime_1.jsx)("input", { className: "input text-xs", dir: "ltr", value: cfg.supervisor.model, onChange: (e) => setField("supervisor", "model", e.target.value) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label text-rose-700 font-bold", children: "\u0622\u0633\u062A\u0627\u0646\u0647 \u0633\u0631\u0627\u0633\u0631\u06CC \u0631\u062F \u06A9\u0627\u0645\u0644 (\u066A)" }), (0, jsx_runtime_1.jsx)("input", { className: "input num", type: "number", min: 5, max: 90, value: cfg.supervisor.rejectBelowPct, onChange: (e) => setField("supervisor", "rejectBelowPct", Number(e.target.value)) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label text-emerald-700 font-bold", children: "\u0622\u0633\u062A\u0627\u0646\u0647 \u0633\u0631\u0627\u0633\u0631\u06CC \u062A\u0627\u06CC\u06CC\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 (\u066A)" }), (0, jsx_runtime_1.jsx)("input", { className: "input num", type: "number", min: 20, max: 99, value: cfg.supervisor.approveAbovePct, onChange: (e) => setField("supervisor", "approveAbovePct", Number(e.target.value)) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0622\u062F\u0631\u0633 \u0633\u0631\u0648\u0631 SubQ (`baseURL`)" }), (0, jsx_runtime_1.jsx)("input", { className: "input text-xs", dir: "ltr", value: cfg.supervisor.baseUrl, onChange: (e) => setField("supervisor", "baseUrl", e.target.value) })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "rounded-xl border border-indigo-200 bg-white p-3", children: [(0, jsx_runtime_1.jsx)("div", { className: "mb-2 text-xs font-bold text-indigo-900", children: "\uD83C\uDFAF \u0634\u062E\u0635\u06CC\u200C\u0633\u0627\u0632\u06CC \u0622\u0633\u062A\u0627\u0646\u0647\u200C\u0647\u0627\u06CC \u062A\u0635\u0645\u06CC\u0645\u200C\u06AF\u06CC\u0631\u06CC \u062F\u0631 \u0647\u0631 \u06F4 \u0645\u0642\u06CC\u0627\u0633 (\u0631\u062F / \u0631\u06CC\u0648\u06CC\u0648 / \u062A\u0627\u06CC\u06CC\u062F \u062E\u0648\u062F\u06A9\u0627\u0631):" }), (0, jsx_runtime_1.jsx)("div", { className: "grid gap-2.5 md:grid-cols-2", children: Object.keys(cfg.supervisor.gates).map((gKey) => {
                                                 const g = cfg.supervisor.gates[gKey];
                                                 return ((0, jsx_runtime_1.jsxs)("div", { className: "rounded-lg border border-slate-200 bg-slate-50/70 p-2.5", children: [(0, jsx_runtime_1.jsx)("div", { className: "mb-1.5 text-xs font-bold text-slate-800", children: gateTitles[gKey] ?? gKey }), (0, jsx_runtime_1.jsxs)("div", { className: "grid grid-cols-3 gap-2", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label text-[11px] text-rose-700", children: "\u0631\u062F \u0632\u06CC\u0631 (\u066A)" }), (0, jsx_runtime_1.jsx)("input", { className: "input num text-xs", type: "number", min: 5, max: 90, value: g.rejectBelowPct, onChange: (e) => setGateField(gKey, "rejectBelowPct", Number(e.target.value)) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label text-[11px] text-emerald-700", children: "\u062A\u0627\u06CC\u06CC\u062F \u0628\u0627\u0644\u0627\u06CC (\u066A)" }), (0, jsx_runtime_1.jsx)("input", { className: "input num text-xs", type: "number", min: 20, max: 99, value: g.approveAbovePct, onChange: (e) => setGateField(gKey, "approveAbovePct", Number(e.target.value)) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label text-[11px]", children: "\u0648\u0632\u0646 (0..1)" }), (0, jsx_runtime_1.jsx)("input", { className: "input num text-xs", type: "number", step: 0.05, min: 0.05, max: 1, value: g.weight, onChange: (e) => setGateField(gKey, "weight", Number(e.target.value)) })] })] })] }, gKey));
-                                            }) })] })] })) : ((0, jsx_runtime_1.jsx)("div", { className: "space-y-2.5", children: Object.entries(cfg[sec]).map(([k, v]) => ((0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: labels[k] ?? k }), typeof v === "boolean" ? ((0, jsx_runtime_1.jsxs)("label", { className: "inline-flex items-center gap-2 text-xs text-slate-700", children: [(0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: v, onChange: (e) => setField(sec, k, e.target.checked) }), (0, jsx_runtime_1.jsx)("span", { children: v ? "فعال" : "غیرفعال" })] })) : Array.isArray(v) ? ((0, jsx_runtime_1.jsx)("input", { className: "input", value: v.join(","), onChange: (e) => setField(sec, k, e.target.value
-                                            .split(",")
-                                            .map((s) => s.trim())
-                                            .filter(Boolean)) })) : selectOptions[k] ? ((0, jsx_runtime_1.jsx)("select", { className: "input", value: String(v), onChange: (e) => setField(sec, k, e.target.value), children: selectOptions[k].map((o) => ((0, jsx_runtime_1.jsx)("option", { value: o.value, children: o.label }, o.value))) })) : typeof v === "string" ? ((0, jsx_runtime_1.jsx)("input", { className: "input", value: v, onChange: (e) => setField(sec, k, e.target.value) })) : ((0, jsx_runtime_1.jsx)("input", { className: "input num", type: "number", step: "any", value: v, onChange: (e) => setField(sec, k, Number(e.target.value)) }))] }, k))) }))] }, sec))) })] }));
+                                            }) })] })] })) : ((0, jsx_runtime_1.jsx)("div", { className: "space-y-2.5", children: Object.entries(cfg[sec] ?? {}).map(([k, v]) => {
+                                // Skip nested complex objects/tier arrays that are managed programmatically
+                                if (v != null &&
+                                    typeof v === "object" &&
+                                    (!Array.isArray(v) || (v.length > 0 && typeof v[0] === "object"))) {
+                                    return null;
+                                }
+                                const opts = selectOptions[`${sec}.${k}`] ?? selectOptions[k];
+                                return ((0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: labels[k] ?? k }), typeof v === "boolean" ? ((0, jsx_runtime_1.jsxs)("label", { className: "inline-flex items-center gap-2 text-xs text-slate-700", children: [(0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: v, onChange: (e) => setField(sec, k, e.target.checked) }), (0, jsx_runtime_1.jsx)("span", { children: v ? "فعال" : "غیرفعال" })] })) : Array.isArray(v) ? ((0, jsx_runtime_1.jsx)("input", { className: "input", value: v.join(","), onChange: (e) => setField(sec, k, e.target.value
+                                                .split(",")
+                                                .map((s) => s.trim())
+                                                .filter(Boolean)) })) : opts ? ((0, jsx_runtime_1.jsx)("select", { className: "input", value: String(v), onChange: (e) => setField(sec, k, e.target.value), children: opts.map((o) => ((0, jsx_runtime_1.jsx)("option", { value: o.value, children: o.label }, o.value))) })) : typeof v === "string" ? ((0, jsx_runtime_1.jsx)("input", { className: "input", value: v, onChange: (e) => setField(sec, k, e.target.value) })) : ((0, jsx_runtime_1.jsx)("input", { className: "input num", type: "number", step: "any", value: v, onChange: (e) => setField(sec, k, Number(e.target.value)) }))] }, k));
+                            }) }))] }, sec))) })] }));
 }
 function sourceLabel(source) {
     if (source === "db")
@@ -310,7 +367,7 @@ function AISettingsPanel({ initial }) {
 function ScheduleEditor({ items }) {
     const router = (0, navigation_1.useRouter)();
     const [pending, start] = (0, react_1.useTransition)();
-    const [draft, setDraft] = (0, react_1.useState)({ name: "", intervalMinutes: 180, category: "" });
+    const [draft, setDraft] = (0, react_1.useState)({ name: "", intervalMinutes: 180, category: "", productIds: "" });
     const call = (body, method = "POST") => start(async () => {
         await fetch("/api/schedules", {
             method,
@@ -319,13 +376,21 @@ function ScheduleEditor({ items }) {
         });
         router.refresh();
     });
-    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-3", children: [(0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "\u0646\u0627\u0645" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0628\u0627\u0632\u0647 (\u062F\u0642\u06CC\u0642\u0647)" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0641\u06CC\u0644\u062A\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0622\u062E\u0631\u06CC\u0646 \u0627\u062C\u0631\u0627" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0627\u062C\u0631\u0627\u06CC \u0628\u0639\u062F\u06CC" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0641\u0639\u0627\u0644" }), (0, jsx_runtime_1.jsx)("th", {})] }) }), (0, jsx_runtime_1.jsx)("tbody", { children: items.map((s) => ((0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("td", { children: s.name }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: s.intervalMinutes }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: s.filter?.category ? `دسته: ${s.filter.category}` : "همه محصولات" }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: s.lastRunAt ? new Date(s.lastRunAt).toLocaleString("fa-IR") : "—" }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: s.nextRunAt ? new Date(s.nextRunAt).toLocaleString("fa-IR") : "—" }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: s.active, onChange: (e) => call({
-                                            id: s.id,
-                                            name: s.name,
-                                            intervalMinutes: s.intervalMinutes,
-                                            category: s.filter?.category,
-                                            active: e.target.checked,
-                                        }) }) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("button", { className: "btn-danger", disabled: pending, onClick: () => call({ id: s.id }, "DELETE"), children: "\u062D\u0630\u0641" }) })] }, s.id))) })] }), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-end gap-2", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0646\u0627\u0645" }), (0, jsx_runtime_1.jsx)("input", { className: "input", value: draft.name, onChange: (e) => setDraft({ ...draft, name: e.target.value }) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0647\u0631 \u0686\u0646\u062F \u062F\u0642\u06CC\u0642\u0647" }), (0, jsx_runtime_1.jsx)("input", { className: "input num", type: "number", value: draft.intervalMinutes, onChange: (e) => setDraft({ ...draft, intervalMinutes: Number(e.target.value) }) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0641\u0642\u0637 \u062F\u0633\u062A\u0647 (\u0627\u062E\u062A\u06CC\u0627\u0631\u06CC)" }), (0, jsx_runtime_1.jsx)("input", { className: "input", value: draft.category, onChange: (e) => setDraft({ ...draft, category: e.target.value }) })] }), (0, jsx_runtime_1.jsx)("button", { className: "btn-primary", disabled: pending || !draft.name, onClick: () => call(draft), children: "\u0627\u0641\u0632\u0648\u062F\u0646 \u0632\u0645\u0627\u0646\u200C\u0628\u0646\u062F\u06CC" })] })] }));
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-3", children: [(0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "\u0646\u0627\u0645" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0628\u0627\u0632\u0647 (\u062F\u0642\u06CC\u0642\u0647)" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0641\u06CC\u0644\u062A\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0622\u062E\u0631\u06CC\u0646 \u0627\u062C\u0631\u0627" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0627\u062C\u0631\u0627\u06CC \u0628\u0639\u062F\u06CC" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0641\u0639\u0627\u0644" }), (0, jsx_runtime_1.jsx)("th", {})] }) }), (0, jsx_runtime_1.jsx)("tbody", { children: items.map((s) => {
+                            const filterParts = [];
+                            if (s.filter?.category)
+                                filterParts.push(`دسته: ${s.filter.category}`);
+                            if (s.filter?.productIds?.length)
+                                filterParts.push(`کالاها: ${s.filter.productIds.join(", ")}`);
+                            return ((0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("td", { children: s.name }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: s.intervalMinutes }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: filterParts.length ? filterParts.join(" · ") : "همه محصولات" }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: s.lastRunAt ? new Date(s.lastRunAt).toLocaleString("fa-IR") : "—" }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: s.nextRunAt ? new Date(s.nextRunAt).toLocaleString("fa-IR") : "—" }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: s.active, onChange: (e) => call({
+                                                id: s.id,
+                                                name: s.name,
+                                                intervalMinutes: s.intervalMinutes,
+                                                category: s.filter?.category,
+                                                productIds: s.filter?.productIds,
+                                                active: e.target.checked,
+                                            }) }) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("button", { className: "btn-danger", disabled: pending, onClick: () => call({ id: s.id }, "DELETE"), children: "\u062D\u0630\u0641" }) })] }, s.id));
+                        }) })] }), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-end gap-2", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0646\u0627\u0645" }), (0, jsx_runtime_1.jsx)("input", { className: "input", value: draft.name, onChange: (e) => setDraft({ ...draft, name: e.target.value }) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0647\u0631 \u0686\u0646\u062F \u062F\u0642\u06CC\u0642\u0647" }), (0, jsx_runtime_1.jsx)("input", { className: "input num", type: "number", value: draft.intervalMinutes, onChange: (e) => setDraft({ ...draft, intervalMinutes: Number(e.target.value) }) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0641\u0642\u0637 \u062F\u0633\u062A\u0647 (\u0627\u062E\u062A\u06CC\u0627\u0631\u06CC)" }), (0, jsx_runtime_1.jsx)("input", { className: "input", value: draft.category, onChange: (e) => setDraft({ ...draft, category: e.target.value }) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0634\u0646\u0627\u0633\u0647 \u06A9\u0627\u0644\u0627\u0647\u0627 (\u0627\u062E\u062A\u06CC\u0627\u0631\u06CC\u060C \u0628\u0627 \u06A9\u0627\u0645\u0627)" }), (0, jsx_runtime_1.jsx)("input", { className: "input", dir: "ltr", placeholder: "1, 2, 5", value: draft.productIds, onChange: (e) => setDraft({ ...draft, productIds: e.target.value }) })] }), (0, jsx_runtime_1.jsx)("button", { className: "btn-primary", disabled: pending || !draft.name, onClick: () => call(draft), children: "\u0627\u0641\u0632\u0648\u062F\u0646 \u0632\u0645\u0627\u0646\u200C\u0628\u0646\u062F\u06CC" })] })] }));
 }
 /* ---------------- کانکتور فروشگاه ---------------- */
 function ConnectorEditor({ items }) {

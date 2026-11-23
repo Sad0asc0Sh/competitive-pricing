@@ -4,8 +4,13 @@ import { buildDiscount } from "./discount";
 import { applyRecencyWeights, applyValidityFilters } from "./filters";
 import { applyGuards } from "./guards";
 import { evaluateTorobCandidate } from "./matcher";
+import { detectOwnPriceEcho, makeOwnShopMatcher } from "./own-shop";
 import { removeOutliers } from "./outliers";
-import { resolveSupplyCost } from "./sourcing";
+import {
+  deriveSafeMarketConsensusSupply,
+  isMarketMakerWithoutCostEnabled,
+  resolveSupplyCost,
+} from "./sourcing";
 import { decideTargetPrice, evaluateCompetitivePosition } from "./strategy";
 import { ceilToStep, percentile } from "./stats";
 import { assessValidity, type ValidityReport } from "./validity";
@@ -35,6 +40,7 @@ const UNDERCUT_ANCHOR_STRATEGIES = new Set([
 
 export function runPricingPipeline(source: SourceResult, ctx: PricingContext): PricingResult {
   const cfg = ctx.config;
+  const ownShopMatcher = makeOwnShopMatcher(cfg.filters.ownShopNames, cfg.filters.ownShopIds);
   const now = ctx.now ?? new Date();
   const steps: DecisionStepLog[] = [];
   const reviewReasons: string[] = [];
@@ -57,6 +63,8 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   let supply = resolveSupplyCost({
     supplierQuotes: ctx.supplierQuotes,
     manualCostPrice: ctx.costPrice,
+    inventoryCost: ctx.inventoryCost,
+    replacementCost: ctx.replacementCost,
     minMarginPctOverride: ctx.minMarginPctOverride,
     minProfitAmountOverride: ctx.minProfitAmountOverride,
     config: cfg,
@@ -93,20 +101,51 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   }
 
   // ---------- 1) سلامت منبع، تطبیق هویت ۷ لایه محصول و اعتبار لیستینگ
+  const isSourceChallenged = Boolean(
+    source.isChallenged ||
+      source.sourceStatus === "challenged" ||
+      source.meta?.isChallenged ||
+      source.meta?.challenged,
+  );
+  const isSourceDegraded = Boolean(
+    source.degraded ||
+      source.sourceStatus === "degraded" ||
+      source.sourceStatus === "error" ||
+      source.meta?.degraded,
+  );
+  if (isSourceChallenged) {
+    reviewReasons.push("چالش امنیتی/مسدودیت در استعلام منبع (challenged) — نیازمند بازبینی دستی");
+  }
+  if (isSourceDegraded) {
+    reviewReasons.push("داده منبع در وضعیت تنزل‌یافته یا ناقص (degraded) دریافت شد — نیازمند بازبینی دستی");
+  }
+  if (Array.isArray(source.errors) && source.errors.length > 0) {
+    for (const errMsg of source.errors) {
+      if (typeof errMsg === "string" && errMsg.trim()) {
+        reviewReasons.push(`خطای منبع: ${errMsg.trim()}`);
+      }
+    }
+  }
+
   log({
     step: "source",
     title: "استعلام منبع (ترب)",
     message: source.ok
       ? `${source.offers.length} پیشنهاد از «${source.source}» دریافت شد (${source.totalSellerCount} فروشنده در لیستینگ)`
       : `خطا در استعلام: ${source.error ?? "نامشخص"}`,
-    level: source.ok ? "info" : "error",
-    data: { totalSellerCount: source.totalSellerCount, productTitle: source.productTitle, prk: source.prk },
+    level: source.ok && !isSourceChallenged && !isSourceDegraded ? "info" : "error",
+    data: {
+      totalSellerCount: source.totalSellerCount,
+      productTitle: source.productTitle,
+      prk: source.prk,
+      sourceStatus: source.sourceStatus ?? (source.ok ? "ok" : "error"),
+      isChallenged: isSourceChallenged,
+      degraded: isSourceDegraded,
+    },
   });
 
-  const ownLower = cfg.filters.ownShopNames.map((n) => n.toLowerCase());
-  const selfShopInListing = source.offers.some((o) =>
-    ownLower.some((own) => own && o.shopName.toLowerCase().includes(own)),
-  );
+  // ۴.۲.۱: همان تشخیص‌دهندهٔ فیلتر (کلید فشرده) — قبلاً اینجا مقایسهٔ خام و در فیلتر مقایسهٔ نرمال‌شده بود و ناهم‌خوان بودند
+  const selfShopInListing = source.offers.some((o) => ownShopMatcher({ shopName: o.shopName, shopId: o.shopId }));
   let identityMatchScorePct = 92;
   // آیا حضور فروشگاه خودمان به‌عنوان «تأیید متقاطع هویت» پذیرفته می‌شود؟ (پیش‌فرض بله؛ تضاد هویتی آن را باطل می‌کند)
   let selfConfirmsIdentity = selfShopInListing;
@@ -251,6 +290,22 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     data: { ...reasonCounts, localValidBeforeOutlier },
   });
 
+  // ۴.۲.۱ — گارد «پژواک قیمت خودی»: اگر ارزان‌ترین پیشنهاد معتبر دقیقاً برابر قیمت‌های اخیرِ خودمان باشد، احتمالاً
+  // پیشنهاد خودمان با نام ناشناخته است؛ undercut زیر آن در هر اجرا یک پله پایین‌تر می‌آید (مسابقهٔ کاهشی با خودمان).
+  const echo = detectOwnPriceEcho(offers, ctx.ownRecentPrices);
+  if (echo.cheapestIsEcho) {
+    reviewReasons.push(
+      `ارزان‌ترین پیشنهاد معتبر (${fa(echo.cheapestPrice)}) دقیقاً برابر قیمت اخیر خودمان است — احتمال پیشنهاد خودی با نام ناشناخته (${echo.shopNames.join("، ")}); اعمال خودکار متوقف شد. اگر این فروشگاه خودِ ماست، نام یا شناسهٔ آن را در «نام فروشگاه خودمان» اضافه کنید`,
+    );
+    log({
+      step: "self_echo",
+      title: "گارد پژواک قیمت خودی",
+      message: `ارزان‌ترین پیشنهاد (${fa(echo.cheapestPrice)}) با قیمت اخیر خودمان یکی است؛ فروشگاه(ها): ${echo.shopNames.join("، ")}`,
+      level: "warn",
+      data: { cheapestPrice: echo.cheapestPrice, shopNames: echo.shopNames },
+    });
+  }
+
   const positiveRawPrices = source.offers
     .map((o) => o.price)
     .filter((p) => Number.isFinite(p) && p > 0);
@@ -261,7 +316,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   let validity: ValidityReport | null = null;
   if (useValidity) {
     validity = assessValidity(offers, now, {
-      params: est.validity,
+      params: est.validity && Object.keys(est.validity).length > 0 ? est.validity : est.validityParams,
       freshCutoffDays: cfg.outliers.freshCutoffDays,
       highTrustScoreThreshold: cfg.rank1.highTrustScoreThreshold,
       competitivenessCostRatio: est.competitivenessCostRatio,
@@ -339,21 +394,74 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     ceilingPercentile: cfg.discount.marketUpperPercentile,
   };
   let market = summarizeMarket(offers, cfg.aggregation, marketOpts);
-  const offersTruncated = source.meta?.offersTruncated === true;
+  const offersTruncated = Boolean(
+    source.isTruncated ||
+      source.sourceStatus === "truncated" ||
+      source.meta?.isTruncated ||
+      source.meta?.offersTruncated === true,
+  );
   const strategyOpts = {
     skipGapRule: useValidity && est.chaseConfirmedLow,
     truncated: v2 && est.truncationAware && offersTruncated,
   };
 
   let isProvisional = false;
+  const marketMakerOptIn = isMarketMakerWithoutCostEnabled(cfg);
   if (isInitiallyCostless) {
-    // مسیر Provisional (نسخه ۴.۱): اجماع ترب دیگر تبدیل به کف خودکار نمی‌شود؛
-    // قیمت پیشنهادی = صدک پایین پول «به‌روز + معتبر» و همیشه مسیر ریویو/تایید انسان است.
     const credibleFresh = offers.filter((o) => o.included && o.fresh && o.credible && o.price > 0);
-    if (credibleFresh.length >= cfg.costless.minCredibleFresh && market.reference != null) {
+    const minCredibleNeeded = Math.max(1, cfg.costless?.minCredibleFresh ?? 3);
+
+    if (marketMakerOptIn) {
+      if (credibleFresh.length >= minCredibleNeeded && market.reference != null && market.count >= Math.max(2, cfg.guards.minValidOffers)) {
+        supply = deriveSafeMarketConsensusSupply(supply, market, cfg, source.priceTrend);
+        marketOpts.hardFloorPrice = supply.hardFloorPrice;
+        market = summarizeMarket(offers, cfg.aggregation, marketOpts);
+        isProvisional = false;
+        log({
+          step: "sourcing",
+          title: "کشف هوشمند کف امن اجماع بازار (Market-Maker Consensus)",
+          message: supply.explanation,
+          level: "info",
+          data: {
+            costSource: supply.costSource,
+            hardFloorPrice: supply.hardFloorPrice,
+            impliedCostPrice: supply.impliedCostPrice ?? null,
+            effectiveCostPrice: supply.effectiveCostPrice,
+            usedMarketConsensusFloor: supply.usedMarketConsensusFloor,
+          },
+        });
+      } else {
+        target = null;
+        isProvisional = true;
+        reviewReasons.push(
+          `تعداد فروشندگان به‌روز و معتبر (${credibleFresh.length} < ${minCredibleNeeded}) برای قیمت‌گذاری Market-Maker بدون قیمت خرید کافی نیست`,
+        );
+        log({
+          step: "provisional",
+          title: "مسیر Market-Maker بدون قیمت خرید متوقف شد (کمبود داده معتبر)",
+          message: `فقط ${credibleFresh.length} فروشنده به‌روز و معتبر (حداقل لازم: ${minCredibleNeeded})`,
+          level: "warn",
+        });
+      }
+    } else if (credibleFresh.length >= minCredibleNeeded && market.reference != null) {
+      // مسیر پیش‌فرض ایمن Provisional (نسخه ۴.۱ / ۴.۲): بدون قیمت خرید، هرگز اعمال خودکار رخ نمی‌دهد؛
+      // قیمت پیشنهادی از صدک امن پول «به‌روز + معتبر» محاسبه شده و الزامی به صف بازبینی می‌رود.
       const poolPrices = credibleFresh.map((o) => o.price);
+      const effectiveProvisionalPct =
+        cfg.costless.provisionalPercentile !== 30
+          ? cfg.costless.provisionalPercentile
+          : cfg.sourcing.costlessSafePercentile !== 55
+            ? cfg.sourcing.costlessSafePercentile
+            : cfg.costless.provisionalPercentile;
+      const customSafetyMarginPct =
+        cfg.sourcing.costlessSafetyMarginPct != null &&
+        Number.isFinite(cfg.sourcing.costlessSafetyMarginPct) &&
+        cfg.sourcing.costlessSafetyMarginPct !== 1.0
+          ? Math.max(0, cfg.sourcing.costlessSafetyMarginPct)
+          : 0;
+      const rawProv = percentile(poolPrices, effectiveProvisionalPct) * (1 + customSafetyMarginPct / 100);
       const provisional = ceilToStep(
-        percentile(poolPrices, cfg.costless.provisionalPercentile),
+        rawProv,
         Math.max(1, cfg.rounding.finalStep),
       );
       strategy = "provisional_market_percentile";
@@ -361,14 +469,14 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       target = provisional;
       isProvisional = true;
       reviewReasons.push(
-        `بدون قیمت خرید و لیست همکار — قیمت Provisional (${fa(provisional)} = صدک ${cfg.costless.provisionalPercentile} از ${poolPrices.length} فروشنده به‌روز و معتبر)` +
-          (cfg.costless.autoApply ? "" : " — با تایید مدیر وارد کمپین/تایید انبار می‌شود"),
+        `بدون قیمت خرید و لیست همکار — قیمت Provisional (${fa(provisional)} = صدک ${effectiveProvisionalPct} از ${poolPrices.length} فروشنده به‌روز و معتبر)` +
+          " — نیازمند بازبینی و تایید دستی مدیر",
       );
       log({
         step: "provisional",
         title: "مسیر بی‌هزینه Provisional (بدون تحمیلی از اجماع ترب)",
         message:
-          `قیمت Provisional = صدهم ${cfg.costless.provisionalPercentile} پول به‌روز و معتبر (${poolPrices.length} عضو): ${fa(provisional)} تومان؛` +
+          `قیمت Provisional = صدهم ${effectiveProvisionalPct} پول به‌روز و معتبر (${poolPrices.length} عضو): ${fa(provisional)} تومان؛` +
           ` ارزان‌ترین ${fa(Math.min(...poolPrices))} و گران‌ترین ${fa(Math.max(...poolPrices))} — هیچ ادعای سود قطعی دارد نیست (review)`,
         level: "warn",
         data: { provisional, poolSize: poolPrices.length, desiredMinProfit: supply.hardFloorPrice },
@@ -379,7 +487,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       log({
         step: "provisional",
         title: "مسیر بی‌هزینه Provisional غیرفعال",
-        message: `فقط ${credibleFresh.length} فروشنده به‌روز و معتبر (حداقل لازم: ${cfg.costless.minCredibleFresh}) — بدون پیشنهاد Provisional`,
+        message: `فقط ${credibleFresh.length} فروشنده به‌روز و معتبر (حداقل لازم: ${minCredibleNeeded}) — بدون پیشنهاد Provisional`,
         level: "warn",
       });
     }
@@ -528,16 +636,55 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   // بقیه (کف/Provisional) → رفتار قبلی با سقف‌گیری به بالا هنگام زیر-کف.
   const guardCtx = {
     costPrice: supply.effectiveCostPrice,
+    inventoryCost: supply.inventoryCostPrice,
+    replacementCost: supply.replacementCostPrice,
+    costPolicy: supply.costPolicyUsed,
     minMarginPct: supply.minMarginPctUsed,
     minProfitAmountToman: supply.minProfitAmountUsed,
     fixedCostToman: cfg.margin.fixedCostToman,
+    strictAboveCost: cfg.margin.strictAboveCost ?? true,
     hardFloorPriceOverride: supply.hardFloorPrice,
     currentPrice: ctx.currentFinalPrice,
+    price24hAgo: ctx.price24hAgo,
   };
   const guarded = applyGuards(target, guardCtx, cfg.guards, cfg.rounding, {
     direction: UNDERCUT_ANCHOR_STRATEGIES.has(strategy) ? "floor" : "nearest",
   });
   reviewReasons.push(...guarded.reviewReasons);
+
+  // حفاظت در برابر فروش ناخواسته زیر هزینهٔ موجودی انبار در سیاست replacement_floor
+  if (
+    supply.costPolicyUsed === "replacement_floor" &&
+    supply.inventoryCostPrice != null &&
+    supply.inventoryCostPrice > 0 &&
+    guarded.price <= supply.inventoryCostPrice
+  ) {
+    reviewReasons.push(
+      supply.inventoryReplacementWarning ??
+        `قیمت نهایی (${fa(guarded.price)}) مساوی یا کمتر از هزینه موجودی انبار (${fa(supply.inventoryCostPrice)}) است — نیازمند بازبینی دستی`,
+    );
+  }
+
+  // گاردهای سختگیرانه برای حالت Market-Maker بدون قیمت خرید
+  if (supply.usedMarketConsensusFloor) {
+    if (market.dispersion > 0.15) {
+      reviewReasons.push(
+        `پراکندگی قیمت بازار (${(market.dispersion * 100).toFixed(1)}% > ۱۵٪) در حالت بدون قیمت خرید بالاست — نیازمند بازبینی دستی`,
+      );
+    }
+    if (
+      ctx.currentFinalPrice != null &&
+      ctx.currentFinalPrice > 0 &&
+      guarded.price < ctx.currentFinalPrice * (1 - Math.min(cfg.guards.maxChangePctPerRun || 20, 10) / 100)
+    ) {
+      reviewReasons.push(
+        `کاهش قیمت بیش از ۱۰٪ نسبت به قیمت فعلی (${fa(ctx.currentFinalPrice)}) در حالت بدون قیمت خرید — نیازمند بازبینی دستی`,
+      );
+    }
+    if (supply.hardFloorPrice > 0 && guarded.price < supply.hardFloorPrice) {
+      reviewReasons.push("قیمت نهایی پایین‌تر از کف امن اجماع بازار قرار گرفت — نیازمند بازبینی دستی");
+    }
+  }
 
   log({
     step: "guards",
@@ -778,10 +925,21 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     });
   }
 
+  const costUnknownRequiresReview =
+    supply.effectiveCostPrice <= 0 &&
+    !(
+      marketMakerOptIn &&
+      supply.usedMarketConsensusFloor &&
+      !isProvisional &&
+      supply.hardFloorPrice > 0 &&
+      finalPrice >= supply.hardFloorPrice
+    );
+
   const needsReview =
     reviewReasons.length > 0 ||
     !source.ok ||
-    supply.effectiveCostPrice <= 0 ||
+    isProvisional ||
+    costUnknownRequiresReview ||
     rejectedBySupervisor ||
     (supervisor.enabled && supervisor.verdict !== "approve");
 

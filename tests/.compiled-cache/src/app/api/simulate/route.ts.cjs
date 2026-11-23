@@ -2,17 +2,19 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.POST = POST;
+const config_1 = require("../../../lib/ai/config");
+const auth_1 = require("../../../lib/auth");
 const engine_1 = require("../../../lib/pricing/engine");
 const sourcing_1 = require("../../../lib/pricing/sourcing");
 const systemone_supervisor_1 = require("../../../lib/pricing/systemone-supervisor");
-const config_1 = require("../../../lib/ai/config");
 const bootstrap_1 = require("../../../lib/services/bootstrap");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
 async function POST(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const b = (await req.json().catch(() => null));
-    // سیستم واقعی بدون داده ساختگی: نام محصول و حداقل ۲ پیشنهاد معتبر الزامی است؛
-    // هیچ مقدار پیش‌فرض نمونه‌ای (مثل دوربین داهوا) برنمی‌گردانیم.
     if (!b?.productName?.trim())
         return server_1.NextResponse.json({ error: "نام محصول (productName) الزامی است" }, { status: 400 });
     if (!Array.isArray(b?.offers) || b.offers.length < 2)
@@ -76,7 +78,6 @@ async function POST(req) {
             baseUrl: subqRuntime.baseUrl,
             model: subqRuntime.model,
         });
-        // همگام‌سازی پرچم‌های رد/ریویو با حکم واقعی API ناظر (اگر توکن ثبت شده باشد)
         result.rejectedBySupervisor = result.supervisor.verdict === "reject";
         if (result.rejectedBySupervisor) {
             if (!result.reviewReasons.some((r) => r.startsWith("رد توسط ناظر بالاسر SystemOne"))) {

@@ -132,7 +132,20 @@ export function removeOutliers(
   // ۳) سقف پایین بدگمانی (R1) و سقف بالای سخت.
   //    سمت بالا هرگز تنگ‌تر از ۱۰٪ بالای مرجع نیست؛ در نمونه‌های کوچک IQR/MAD ناپایدار است
   //    و حذف «گران‌فروش پرت» نباید به قیمت حذف بدنه‌ی عادی تمام شود.
-  const bandLo = stableRef * (1 - Math.max(0, cfg.suspectLowBandPct) / 100);
+  //    اگر کاربر lowerStaleBandPct را از مقدار پیش‌فرض (۱۶) تغییر داده باشد، در تشخیص پیشنهادهای کهنه و باند پایین لحاظ می‌شود.
+  const rawSuspectPct = cfg.suspectLowBandPct != null && Number.isFinite(cfg.suspectLowBandPct) ? Math.max(0, cfg.suspectLowBandPct) : null;
+  const rawStalePct = cfg.lowerStaleBandPct != null && Number.isFinite(cfg.lowerStaleBandPct) ? Math.max(0, cfg.lowerStaleBandPct) : null;
+  const staleCustomized = rawStalePct != null && rawStalePct !== 16;
+  const suspectCustomized = rawSuspectPct != null && rawSuspectPct !== 12;
+  const effectiveSuspectBandPct =
+    suspectCustomized
+      ? rawSuspectPct!
+      : staleCustomized
+        ? rawStalePct!
+        : (rawSuspectPct ?? rawStalePct ?? 12);
+  const effectiveStaleBandPct = staleCustomized ? rawStalePct! : effectiveSuspectBandPct;
+  const bandLo = stableRef * (1 - effectiveSuspectBandPct / 100);
+  const staleBandLo = stableRef * (1 - effectiveStaleBandPct / 100);
   const highBandPct = Math.max(10, Math.max(0, cfg.hardBandPct));
   const bandHi = stableRef * (1 + highBandPct / 100);
 
@@ -169,13 +182,13 @@ export function removeOutliers(
         o.cls = "confirmed_low";
         continue;
       }
-      if (o.price < bandLo && !opts?.highSideOnly) {
+      if (!opts?.highSideOnly && (!o.fresh ? o.price < staleBandLo : o.price < bandLo)) {
         // R1: زیر باند بدگمانی
         if (!o.fresh) {
           markSuspect(
             o,
             "stale_low",
-            `قیمت کهنه و بیش از ${cfg.suspectLowBandPct}% زیر مرجع بازار (فروشنده به‌روز نشده)`,
+            `قیمت کهنه و بیش از ${effectiveStaleBandPct}% زیر مرجع بازار (فروشنده به‌روز نشده)`,
           );
           continue;
         }
@@ -183,7 +196,7 @@ export function removeOutliers(
           markSuspect(
             o,
             "suspect_low",
-            `فروش منفرد بیش از ${cfg.suspectLowBandPct}% زیر مرجع بازار و فاقد خوشه همقیمت معتبر`,
+            `فروش منفرد بیش از ${effectiveSuspectBandPct}% زیر مرجع بازار و فاقد خوشه همقیمت معتبر`,
           );
           continue;
         }
@@ -242,9 +255,10 @@ export function removeOutliers(
 }
 
 function weightedMedianInt(pool: OfferEvaluation[]): number | null {
-  if (!pool.length) return null;
-  const xs = pool.map((o) => o.price);
-  const ws = pool.map((o) => Math.max(0.05, o.weight));
+  const validPool = pool.filter((o) => typeof o.price === "number" && Number.isFinite(o.price) && o.price > 0);
+  if (!validPool.length) return null;
+  const xs = validPool.map((o) => o.price);
+  const ws = validPool.map((o) => (typeof o.weight === "number" && Number.isFinite(o.weight) ? Math.max(0.05, o.weight) : 0.05));
   const pairs = xs
     .map((x, i) => ({ x, w: ws[i] }))
     .sort((a, b) => a.x - b.x);

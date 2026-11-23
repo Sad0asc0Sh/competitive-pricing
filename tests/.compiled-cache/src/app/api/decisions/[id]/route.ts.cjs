@@ -1,33 +1,142 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.GET = GET;
 exports.POST = POST;
-const db_1 = require("@/db");
+const index_ts_1 = require("../../../../db/index.ts");
 const schema_1 = require("../../../../db/schema");
-const runner_1 = require("../../../../lib/services/runner");
+const auth_1 = require("../../../../lib/auth");
+const runnerService = __importStar(require("../../../../lib/services/runner"));
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
-async function GET(_, { params }) {
+async function GET(req, { params }) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const { id } = await params;
-    const [d] = await db_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, Number(id))).limit(1);
+    const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, Number(id))).limit(1);
     if (!d)
         return server_1.NextResponse.json({ error: "یافت نشد" }, { status: 404 });
-    const offers = await db_1.db.select().from(schema_1.competitorOffers).where((0, drizzle_orm_1.eq)(schema_1.competitorOffers.decisionId, d.id));
+    const offers = await index_ts_1.db.select().from(schema_1.competitorOffers).where((0, drizzle_orm_1.eq)(schema_1.competitorOffers.decisionId, d.id));
     return server_1.NextResponse.json({ ...d, offers });
 }
-/** POST /api/decisions/:id  body: { action: 'approve' | 'reject', force?: boolean } */
+/**
+ * POST /api/decisions/:id
+ * body: {
+ *   action: 'approve' | 'reject' | 'retry_sync',
+ *   force?: boolean,
+ *   allowBelowCost?: boolean,
+ *   belowCostReason?: string,
+ *   authorizedBy?: string
+ * }
+ */
 async function POST(req, { params }) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const { id } = await params;
-    const { action, force } = (await req.json().catch(() => ({})));
-    if (action === "approve") {
-        const r = await (0, runner_1.applyDecision)(Number(id), null, { force: force === true });
-        return server_1.NextResponse.json(r, { status: r.ok ? 200 : 400 });
+    const decisionId = Number(id);
+    if (!Number.isFinite(decisionId) || decisionId <= 0) {
+        return server_1.NextResponse.json({ ok: false, error: "شناسه تصمیم نامعتبر است" }, { status: 400 });
     }
+    const body = (await req.json().catch(() => ({})));
+    const action = body.action;
+    const force = body.force === true;
+    const allowBelowCost = body.allowBelowCost === true;
+    const belowCostReason = typeof body.belowCostReason === "string" ? body.belowCostReason.trim() : "";
+    const authorizedBy = typeof body.authorizedBy === "string" ? body.authorizedBy.trim() : "";
     if (action === "reject") {
-        await (0, runner_1.rejectDecision)(Number(id));
-        return server_1.NextResponse.json({ ok: true });
+        await runnerService.rejectDecision(decisionId);
+        return server_1.NextResponse.json({ ok: true, message: "تصمیم رد شد" });
     }
-    return server_1.NextResponse.json({ error: "action نامعتبر" }, { status: 400 });
+    if (action !== "approve" && action !== "retry_sync") {
+        return server_1.NextResponse.json({ ok: false, error: "action نامعتبر" }, { status: 400 });
+    }
+    if (allowBelowCost) {
+        if (belowCostReason.length < 5 || authorizedBy.length < 2) {
+            const msg = "برای تایید زیر قیمت خرید یا کف سود، ثبت دلیل معتبر (حداقل ۵ کاراکتر) و نام تاییدکننده (authorizedBy) الزامی است.";
+            return server_1.NextResponse.json({
+                ok: false,
+                code: "INVALID_BELOW_COST_OVERRIDE",
+                belowCostBlocked: true,
+                error: msg,
+                message: msg,
+            }, { status: 400 });
+        }
+    }
+    // Defence-in-depth floor guard at API boundary:
+    // Ordinary force=true MUST NOT bypass cost or hard profit floors without explicit authorized override.
+    const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
+    if (!d) {
+        return server_1.NextResponse.json({ ok: false, error: "تصمیم یافت نشد", message: "تصمیم یافت نشد" }, { status: 404 });
+    }
+    const [p] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId)).limit(1);
+    const finalPrice = d.finalPrice ?? 0;
+    const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, p?.costPrice ?? 0);
+    const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p?.currentHardFloorPrice ?? 0, effectiveCost);
+    const isBelowCostOrFloor = (effectiveCost > 0 && finalPrice <= effectiveCost) ||
+        (effectiveFloor > 0 && finalPrice < effectiveFloor);
+    if (isBelowCostOrFloor && !allowBelowCost) {
+        const floorLabel = Math.max(effectiveCost, effectiveFloor).toLocaleString("fa-IR");
+        const finalLabel = finalPrice.toLocaleString("fa-IR");
+        const msg = `خط قرمز قیمت‌گذاری: قیمت نهایی (${finalLabel}) پایین‌تر از کف مجاز/قیمت خرید (${floorLabel}) است. تایید معمولی یا force مجاز به عبور از کف هزینه نیست؛ نیازمند مجوز صریح زیر قیمت خرید (allowBelowCost + دلیل + نام تاییدکننده) است.`;
+        return server_1.NextResponse.json({
+            ok: false,
+            code: "BELOW_FLOOR_BLOCKED",
+            belowCostBlocked: true,
+            error: msg,
+            message: msg,
+        }, { status: 422 });
+    }
+    const applyOpts = {
+        force,
+        allowBelowCost,
+        belowCostReason: allowBelowCost ? belowCostReason : undefined,
+        authorizedBy: allowBelowCost ? authorizedBy : undefined,
+    };
+    const extRunner = runnerService;
+    const r = action === "retry_sync" && typeof extRunner.retryDecisionSync === "function"
+        ? await extRunner.retryDecisionSync(decisionId, applyOpts)
+        : await extRunner.applyDecision(decisionId, null, applyOpts);
+    const msg = r.message || r.error || (r.ok ? "انجام شد" : "خطا در اعمال تصمیم");
+    return server_1.NextResponse.json({
+        ...r,
+        ok: r.ok,
+        message: msg,
+        ...(r.ok ? {} : { error: msg }),
+    }, { status: r.ok ? 200 : 400 });
 }

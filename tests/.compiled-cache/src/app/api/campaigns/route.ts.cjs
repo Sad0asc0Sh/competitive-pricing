@@ -4,15 +4,19 @@ exports.dynamic = void 0;
 exports.GET = GET;
 exports.POST = POST;
 exports.DELETE = DELETE;
-const db_1 = require("@/db");
+const index_ts_1 = require("../../../db/index.ts");
 const schema_1 = require("../../../db/schema");
+const auth_1 = require("../../../lib/auth");
 const bootstrap_1 = require("../../../lib/services/bootstrap");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
-async function GET() {
+async function GET(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     await (0, bootstrap_1.ensureDefaults)();
-    const rows = await db_1.db.select().from(schema_1.discountCampaigns).orderBy(schema_1.discountCampaigns.priority);
+    const rows = await index_ts_1.db.select().from(schema_1.discountCampaigns).orderBy(schema_1.discountCampaigns.priority);
     return server_1.NextResponse.json(rows);
 }
 const toNums = (v) => Array.isArray(v)
@@ -32,6 +36,9 @@ const toStrs = (v) => Array.isArray(v)
             .filter(Boolean)
         : [];
 async function POST(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const b = (await req.json().catch(() => null));
     if (!b)
         return server_1.NextResponse.json({ error: "بدنه نامعتبر" }, { status: 400 });
@@ -63,20 +70,25 @@ async function POST(req) {
         targetProductIds: toNums(b.targetProductIds),
     };
     if (b.id) {
-        const [row] = await db_1.db
+        const [row] = await index_ts_1.db
             .update(schema_1.discountCampaigns)
             .set(values)
             .where((0, drizzle_orm_1.eq)(schema_1.discountCampaigns.id, Number(b.id)))
             .returning();
         return server_1.NextResponse.json(row);
     }
-    const [row] = await db_1.db.insert(schema_1.discountCampaigns).values(values).returning();
+    const [row] = await index_ts_1.db.insert(schema_1.discountCampaigns).values(values).returning();
     return server_1.NextResponse.json(row, { status: 201 });
 }
 async function DELETE(req) {
-    const { id } = (await req.json().catch(() => ({})));
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
+    const body = (await req.json().catch(() => ({})));
+    const urlId = new URL(req.url, "http://localhost").searchParams.get("id");
+    const id = Number(body.id ?? urlId);
     if (!id)
         return server_1.NextResponse.json({ error: "id لازم است" }, { status: 400 });
-    await db_1.db.delete(schema_1.discountCampaigns).where((0, drizzle_orm_1.eq)(schema_1.discountCampaigns.id, Number(id)));
+    await index_ts_1.db.delete(schema_1.discountCampaigns).where((0, drizzle_orm_1.eq)(schema_1.discountCampaigns.id, id));
     return server_1.NextResponse.json({ ok: true });
 }

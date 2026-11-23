@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const { Pool } = require("pg");
 const path = require("path");
+const { deriveImportPrice } = require("./lib/import-price.cjs");
 
 const PRICING_APP_DIR = process.env.PRICING_APP_DIR || "/home/debian/apps/ai-driven-competitive-pricing-system";
 const EKGKALA_BACKEND_DIR = process.env.EKGKALA_BACKEND_DIR || "/home/debian/apps/ekgkala-project/ekgkala-backend";
@@ -41,6 +42,7 @@ async function run() {
   const client = await pool.connect();
 
   let imported = 0;
+  let variableCount = 0;
   const seenSkus = new Set();
 
   try {
@@ -65,14 +67,12 @@ async function run() {
       const name = brandName && !rawName.toLowerCase().includes(brandName.toLowerCase()) ? `${rawName} (${brandName})` : rawName;
       const category = p.category && p.category.name ? String(p.category.name).trim() : null;
       const storeExternalId = cleanCode || String(p._id);
-      const costPrice = Math.max(0, Math.round(Number(p.costPrice) || 0));
-      const basePrice = Math.max(0, Math.round(Number(p.price) || 0));
-      const discount = Math.max(0, Number(p.discount) || 0);
-      const finalPrice = discount > 0 ? Math.round(basePrice * (1 - discount / 100)) : basePrice;
+      // ۴.۲.۱: محصول متغیر قیمتش را در تنوع‌ها دارد؛ قیمت پایه = ارزان‌ترین تنوع موجود و autoApply=false (scripts/lib/import-price.cjs)
+      const { costPrice, basePrice, finalPrice, discount, autoApply, isVariable } = deriveImportPrice(p);
+      if (isVariable) variableCount++;
 
-      // گارد کلیدی: محصولاتی که هنوز قیمت خرید همکار (costPrice) ندارند، با autoApply = false ایمپورت می‌شوند
+      // گارد کلیدی: محصولاتی که هنوز قیمت خرید همکار (costPrice) ندارند (یا متغیرند)، با autoApply = false ایمپورت می‌شوند
       // تا هیچ کارتی بدون تایید مدیر در صف بازبینی به صورت خودکار وارد کمپین‌های تخفیف نشود!
-      const autoApply = costPrice > 0;
 
       const query = `
         INSERT INTO products (
@@ -90,7 +90,7 @@ async function run() {
           name = EXCLUDED.name,
           category = EXCLUDED.category,
           store_external_id = EXCLUDED.store_external_id,
-          auto_apply = CASE WHEN EXCLUDED.cost_price > 0 THEN products.auto_apply ELSE false END,
+          auto_apply = CASE WHEN EXCLUDED.auto_apply THEN products.auto_apply ELSE false END,
           updated_at = NOW()
         RETURNING id;
       `;
@@ -117,6 +117,9 @@ async function run() {
     }
 
     console.log(`Successfully imported/updated ${imported} products into PostgreSQL (costless products safely set to auto_apply = false).`);
+    if (variableCount > 0) {
+      console.log(`⚠️ ${variableCount} محصول متغیر (تنوع‌دار) با auto_apply = false ایمپورت شد؛ قیمتشان فقط رصد می‌شود و pricing-sync فروشگاه آن‌ها را رد می‌کند (docs/IMPLEMENTATION_GUIDE_4.2.1_FA.md §فاز ۲).`);
+    }
   } finally {
     client.release();
     await pool.end();

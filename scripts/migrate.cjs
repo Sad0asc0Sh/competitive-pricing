@@ -36,9 +36,41 @@ const toArg = argv.find((a) => a.startsWith('--to='))
 
 const maskUrl = (value) => String(value || '').replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@')
 
+const BUILTIN_V420_MIGRATION_NAME = '0003_v420_sync_and_validation.sql'
+const BUILTIN_V420_MIGRATION_SQL = `-- ============================================================================
+-- 0003_v420_sync_and_validation.sql — همگام‌سازی پایدار فروشگاه و اعتبارسنجی ۴.۲.۰ (idempotent)
+-- ============================================================================
+BEGIN;
+
+ALTER TABLE "price_runs"
+  ADD COLUMN IF NOT EXISTS "run_mode" varchar(30) NOT NULL DEFAULT 'live',
+  ADD COLUMN IF NOT EXISTS "is_simulated" boolean NOT NULL DEFAULT false;
+
+ALTER TABLE "price_decisions"
+  ADD COLUMN IF NOT EXISTS "idempotency_key" varchar(120),
+  ADD COLUMN IF NOT EXISTS "push_attempts" integer NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS "last_push_attempt_at" timestamp,
+  ADD COLUMN IF NOT EXISTS "store_confirmed_price" integer,
+  ADD COLUMN IF NOT EXISTS "is_simulated" boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "validation_source" varchar(30) NOT NULL DEFAULT 'live_torob';
+
+CREATE INDEX IF NOT EXISTS "decisions_idempotency_idx"
+  ON "price_decisions" ("idempotency_key");
+
+-- اصلاح وضعیت تصمیم‌های قدیمی که بدون تایید فروشگاه (push_status <> 'pushed') برچسب applied خورده بودند
+UPDATE "price_decisions"
+SET "status" = CASE
+  WHEN "push_status" = 'failed' THEN 'sync_failed'
+  ELSE 'pending_sync'
+END
+WHERE "status" = 'applied' AND COALESCE("push_status", '') <> 'pushed';
+
+COMMIT;
+`
+
 function listMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) throw new Error(`پوشه‌ی مهاجرت پیدا نشد: ${MIGRATIONS_DIR}`)
-  return fs
+  const diskMigrations = fs
     .readdirSync(MIGRATIONS_DIR)
     .filter((name) => /^\d{4}_.+\.sql$/.test(name))
     .sort()
@@ -47,6 +79,16 @@ function listMigrations() {
       const sql = fs.readFileSync(full, 'utf8')
       return { name, full, sql, checksum: crypto.createHash('sha256').update(sql).digest('hex').slice(0, 16) }
     })
+
+  if (!diskMigrations.some((m) => m.name.startsWith('0003_'))) {
+    diskMigrations.push({
+      name: BUILTIN_V420_MIGRATION_NAME,
+      full: path.join(MIGRATIONS_DIR, BUILTIN_V420_MIGRATION_NAME),
+      sql: BUILTIN_V420_MIGRATION_SQL,
+      checksum: crypto.createHash('sha256').update(BUILTIN_V420_MIGRATION_SQL).digest('hex').slice(0, 16),
+    })
+  }
+  return diskMigrations
 }
 
 function selectMigrations(all) {
@@ -141,8 +183,17 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  if (AS_JSON) console.log(JSON.stringify({ error: error.message }, null, 2))
-  console.error('migrate failed:', error.message)
-  process.exit(1)
-})
+if (require.main === module) {
+  main().catch((error) => {
+    if (AS_JSON) console.log(JSON.stringify({ error: error.message }, null, 2))
+    console.error('migrate failed:', error.message)
+    process.exit(1)
+  })
+}
+
+module.exports = {
+  listMigrations,
+  selectMigrations,
+  BUILTIN_V420_MIGRATION_NAME,
+  BUILTIN_V420_MIGRATION_SQL,
+}

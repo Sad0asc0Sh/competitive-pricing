@@ -1,7 +1,9 @@
+import type { MarketSummary } from "./aggregate";
 import { ceilToStep, median, weightedMean } from "./stats";
 import type {
   CostResolutionPolicy,
   EvaluatedSupplierQuote,
+  MarketPriceTrend,
   PricingProfileConfig,
   SupplierQuote,
   SupplyCostResolution,
@@ -178,6 +180,8 @@ export function parseColleaguePriceListText(
 export function resolveSupplyCost(input: {
   supplierQuotes?: SupplierQuote[];
   manualCostPrice: number;
+  inventoryCost?: number | null;
+  replacementCost?: number | null;
   minMarginPctOverride?: number | null;
   minProfitAmountOverride?: number | null;
   config: PricingProfileConfig;
@@ -200,7 +204,10 @@ export function resolveSupplyCost(input: {
       ? Math.max(0, Number(input.minProfitAmountOverride))
       : Math.max(0, mCfg.minProfitAmountToman);
 
-  const manualCost = Math.max(0, Math.round(Number(input.manualCostPrice) || 0));
+  const rawManual = Math.max(0, Math.round(Number(input.manualCostPrice) || 0));
+  const rawInventory = Math.max(0, Math.round(Number(input.inventoryCost) || 0));
+  const manualCost = rawInventory > 0 && rawManual > 0 ? Math.max(rawInventory, rawManual) : rawInventory || rawManual;
+  const explicitReplacementCost = Math.max(0, Math.round(Number(input.replacementCost) || 0));
   const rawQuotes = Array.isArray(input.supplierQuotes) ? input.supplierQuotes : [];
   const warnings: string[] = [];
 
@@ -345,7 +352,17 @@ export function resolveSupplyCost(input: {
       }
     }
 
-    if (policy === "legacy_never_below_manual" && sCfg.neverBelowManualCost && manualCost > effectiveCostPrice) {
+    if (explicitReplacementCost > effectiveCostPrice && policy !== "replacement_floor") {
+      warnings.push(
+        `هزینه جایگزینی صریح محصول (${explicitReplacementCost.toLocaleString("fa-IR")}) بالاتر از لیست همکار (${effectiveCostPrice.toLocaleString("fa-IR")}) است؛ عدد بالاتر ملاک قرار گرفت`,
+      );
+      effectiveCostPrice = explicitReplacementCost;
+      baseBuyPrice = explicitReplacementCost;
+      overheadAmount = Math.max(0, effectiveCostPrice - (selectedQuote?.buyPriceToman ?? 0));
+      explanation += ` (ارتقا به هزینه جایگزینی: ${explicitReplacementCost.toLocaleString("fa-IR")} تومان)`;
+    }
+
+    if (policy === "legacy_never_below_manual" && manualCost > effectiveCostPrice) {
       warnings.push(
         `قیمت تمام‌شده ثبت‌شده در انبار (${manualCost.toLocaleString("fa-IR")}) بالاتر از لیست همکار (${effectiveCostPrice.toLocaleString("fa-IR")}) است؛ برای جلوگیری از ضرر روی موجودی فعلی، عدد بالاتر ملاک قرار گرفت`,
       );
@@ -375,6 +392,7 @@ export function resolveSupplyCost(input: {
 
     const baseFallback = Math.max(
       manualCost,
+      explicitReplacementCost,
       inStockStale[0]?.effectiveSupplyCost ?? 0,
     );
 
@@ -396,19 +414,47 @@ export function resolveSupplyCost(input: {
         explanation = `استفاده از قیمت تمام‌شده دستی محصول: ${effectiveCostPrice.toLocaleString("fa-IR")} تومان`;
       }
     }
-  } else if (manualCost > 0) {
+  } else if (manualCost > 0 || explicitReplacementCost > 0 || validQuotes.length > 0) {
     costSource = "manual_cost";
     const ovh =
-      sCfg.enabled && sCfg.defaultOverheadPct > 0
+      manualCost > 0 && sCfg.enabled && sCfg.defaultOverheadPct > 0
         ? Math.ceil((manualCost * sCfg.defaultOverheadPct) / 100)
         : 0;
-    baseBuyPrice = manualCost;
-    overheadAmount = ovh;
-    effectiveCostPrice = manualCost + ovh;
-    explanation =
-      ovh > 0
-        ? `قیمت خرید محصول ${manualCost.toLocaleString("fa-IR")} + سربار تامین ${ovh.toLocaleString("fa-IR")} = تمام‌شده ${effectiveCostPrice.toLocaleString("fa-IR")} تومان`
-        : `قیمت تمام‌شده محصول: ${effectiveCostPrice.toLocaleString("fa-IR")} تومان`;
+    const manualWithOvh = manualCost > 0 ? manualCost + ovh : 0;
+    const fallbackQuoteCost = !sCfg.enabled && validQuotes.length > 0 ? validQuotes[0].effectiveSupplyCost : 0;
+    const replacementCandidate = Math.max(explicitReplacementCost, fallbackQuoteCost);
+
+    if (manualWithOvh === 0 && replacementCandidate > 0) {
+      usedFallbackCost = true;
+      baseBuyPrice = replacementCandidate;
+      overheadAmount = 0;
+      effectiveCostPrice = replacementCandidate;
+      explanation = `استفاده از هزینه جایگزینی/ریپلیس محصول: ${effectiveCostPrice.toLocaleString("fa-IR")} تومان`;
+    } else if (replacementCandidate > 0 && policy === "replacement_floor" && manualWithOvh > replacementCandidate) {
+      baseBuyPrice = replacementCandidate;
+      overheadAmount = 0;
+      effectiveCostPrice = replacementCandidate;
+      inventoryReplacementWarning =
+        `قیمت فروش ممکن است زیر هزینه‌ی موجودی انبار (${manualCost.toLocaleString("fa-IR")}) تعیین شود؛ ملاک ریپلیس ارزان‌تر (${effectiveCostPrice.toLocaleString("fa-IR")}) است`;
+      warnings.push(inventoryReplacementWarning);
+      explanation = `قیمت ریپلیس (${effectiveCostPrice.toLocaleString("fa-IR")} تومان) ملاک است؛ انبار گران‌تر: ${manualCost.toLocaleString("fa-IR")} تومان`;
+    } else if (replacementCandidate > manualWithOvh) {
+      baseBuyPrice = replacementCandidate;
+      overheadAmount = Math.max(0, replacementCandidate - manualCost);
+      effectiveCostPrice = replacementCandidate;
+      warnings.push(
+        `هزینه جایگزینی (${replacementCandidate.toLocaleString("fa-IR")}) بالاتر از هزینه موجودی انبار (${manualWithOvh.toLocaleString("fa-IR")}) است؛ عدد بالاتر ملاک قرار گرفت`,
+      );
+      explanation = `حفاظت در برابر افزایش هزینه جایگزینی: تمام‌شده ${effectiveCostPrice.toLocaleString("fa-IR")} تومان`;
+    } else {
+      baseBuyPrice = manualCost;
+      overheadAmount = ovh;
+      effectiveCostPrice = manualWithOvh;
+      explanation =
+        ovh > 0
+          ? `قیمت خرید محصول ${manualCost.toLocaleString("fa-IR")} + سربار تامین ${ovh.toLocaleString("fa-IR")} = تمام‌شده ${effectiveCostPrice.toLocaleString("fa-IR")} تومان`
+          : `قیمت تمام‌شده محصول: ${effectiveCostPrice.toLocaleString("fa-IR")} تومان`;
+    }
   } else {
     costSource = "none";
     effectiveCostPrice = 0;
@@ -424,13 +470,21 @@ export function resolveSupplyCost(input: {
     fixedCostToman: mCfg.fixedCostToman ?? 0,
     finalStep: rCfg.finalStep,
     psychological: rCfg.psychological,
+    strictAboveCost: mCfg.strictAboveCost ?? true,
   });
+
+  const resolvedReplacementCost =
+    validQuotes.length > 0
+      ? Math.max(selectedQuote?.effectiveSupplyCost ?? lowestQuoteCost ?? 0, explicitReplacementCost)
+      : explicitReplacementCost;
 
   return {
     costSource,
     effectiveCostPrice,
     baseBuyPrice,
     overheadAmount,
+    inventoryCostPrice: manualCost,
+    replacementCostPrice: resolvedReplacementCost,
     selectedQuote,
     evaluatedQuotes,
     validQuotesCount: validQuotes.length,
@@ -450,6 +504,91 @@ export function resolveSupplyCost(input: {
   };
 }
 
+export function isMarketMakerWithoutCostEnabled(config?: Partial<PricingProfileConfig> | null): boolean {
+  if (!config) return false;
+  return Boolean(
+    config.sourcing?.allowMarketMakerWithoutCost ||
+      config.sourcing?.allowAutoApplyWithoutCost ||
+      config.costless?.autoApply,
+  );
+}
+
+/**
+ * استخراج هوشمند «کف امن بازار» (Market-Maker Consensus Supply) برای کالاهای فاقد لیست خرید/قیمت تمام‌شده.
+ * توجه امنیتی (۴.۲.۰):
+ *  - `effectiveCostPrice` هرگز با عدد فرضی جایگزین نمی‌شود (صفر می‌ماند تا در دیتابیس به‌عنوان قیمت خرید واقعی ذخیره نشود).
+ *  - قیمت خرید تخمینی صرفاً در `impliedCostPrice` گزارش می‌شود و `hardFloorPrice` به‌عنوان کف امن فروش عمل می‌کند.
+ *  - در صورت عدم فعال‌سازی صریح سیاست Market-Maker بدون قیمت خرید (`allowMarketMakerWithoutCost` / `allowAutoApplyWithoutCost` / `costless.autoApply`),
+ *    همواره هشدار بازبینی دستی ثبت می‌شود.
+ */
+export function deriveSafeMarketConsensusSupply(
+  initialSupply: SupplyCostResolution,
+  market: MarketSummary,
+  config: PricingProfileConfig,
+  priceTrend?: MarketPriceTrend | null,
+): SupplyCostResolution {
+  if (initialSupply.effectiveCostPrice > 0 || market.count === 0 || market.reference == null) {
+    if (initialSupply.effectiveCostPrice <= 0 && market.count === 0) {
+      return {
+        ...initialSupply,
+        warnings: [
+          ...initialSupply.warnings,
+          "محصول فاقد لیست قیمت همکار، فاقد قیمت خرید و فاقد فروشنده معتبر در ترب است",
+        ],
+      };
+    }
+    return initialSupply;
+  }
+
+  const sCfg = config.sourcing;
+  const rCfg = config.rounding;
+
+  const modal = market.modalConsensus ?? market.reference;
+  const trimmedW = market.trimmedWeightedMean ?? market.reference;
+  const safePct = market.safePercentilePrice ?? market.median ?? market.reference;
+  const med = market.median ?? market.reference;
+
+  // ترکیب وزنی سه لنگر آماری برای رسیدن به دقیق‌ترین «قیمت معیار به‌روز بازار»
+  const consensusBase = Math.round(0.45 * modal + 0.35 * trimmedW + 0.2 * safePct);
+
+  // کف امن ضدضرر در حالت بدون لیست خرید:
+  // هرگز پایین‌تر از میانه فروشندگان به‌روز و میانگین وزنی بریده نرود؛ به علاوه حاشیه ایمنی costlessSafetyMarginPct و ۱.۵٪ در روند صعودی
+  const safetyMarginPct = Math.max(0, Number(sCfg.costlessSafetyMarginPct) || 0);
+  const trendBufferPct = (priceTrend?.direction === "rising" ? 1.5 : 0) + safetyMarginPct;
+  const rawSafeSellingFloor = Math.max(med, trimmedW, consensusBase) * (1 + trendBufferPct / 100);
+  const step = Math.max(1, rCfg.finalStep || 1000);
+  const hardFloorPrice = ceilToStep(rawSafeSellingFloor, step);
+
+  // استخراج قیمت خرید تخمینی امن (فقط جهت گزارش در `impliedCostPrice`، به اندازه impliedCostBackoffPct زیر کف امن بازار)
+  const backoffPct = Math.max(initialSupply.minMarginPctUsed + 1, Number(sCfg.impliedCostBackoffPct) || 6);
+  const impliedCostPrice = Math.max(
+    1000,
+    Math.round(hardFloorPrice / (1 + backoffPct / 100)),
+  );
+
+  const warnings = [...initialSupply.warnings];
+  if (!isMarketMakerWithoutCostEnabled(config)) {
+    warnings.push("قیمت بر اساس اجماع بازار ترب (بدون لیست خرید همکار) تعیین شد — نیازمند تأیید دستی");
+  }
+
+  return {
+    ...initialSupply,
+    costSource: "market_consensus_safe_floor",
+    effectiveCostPrice: 0,
+    baseBuyPrice: 0,
+    impliedCostPrice,
+    overheadAmount: 0,
+    hardFloorPrice,
+    usedMarketConsensusFloor: true,
+    safetyBufferAppliedPct: trendBufferPct,
+    warnings,
+    explanation:
+      `کشف هوشمند از ترب (بدون لیست خرید): پس از حذف قیمت‌های پرت/قدیمی، هسته چگال بازار ${modal.toLocaleString("fa-IR")}، ` +
+      `میانگین وزنی بریده ${trimmedW.toLocaleString("fa-IR")} و میانه ${Math.round(med).toLocaleString("fa-IR")} تومان است → ` +
+      `کف امن ضدضرر بازار: ${hardFloorPrice.toLocaleString("fa-IR")} تومان (قیمت خرید تخمینی امن: ${impliedCostPrice.toLocaleString("fa-IR")} تومان)`,
+  };
+}
+
 export function computeHardFloorPrice(opts: {
   effectiveCostPrice: number;
   minMarginPct: number;
@@ -457,30 +596,35 @@ export function computeHardFloorPrice(opts: {
   fixedCostToman?: number;
   finalStep: number;
   psychological?: "none" | "x900" | "x000";
+  strictAboveCost?: boolean;
 }): number {
-  const cost = Math.max(0, Math.round(opts.effectiveCostPrice));
+  const cost = Math.max(0, Math.round(Number(opts.effectiveCostPrice) || 0));
   if (cost <= 0) return 0;
 
-  const step = Math.max(1, opts.finalStep || 1000);
-  const fixed = Math.max(0, Math.round(opts.fixedCostToman ?? 0));
-  const minMarginPct = Math.max(0, opts.minMarginPct);
-  const minProfitAmount = Math.max(1, Math.round(opts.minProfitAmountToman ?? 0));
+  const step = Math.max(1, Math.round(Number(opts.finalStep) || 1000));
+  const fixed = Math.max(0, Math.round(Number(opts.fixedCostToman) || 0));
+  const minMarginPct = Math.max(0, Number(opts.minMarginPct) || 0);
+  const strictAboveCost = opts.strictAboveCost !== false;
+  const rawProfitAmount = Math.max(0, Math.round(Number(opts.minProfitAmountToman) || 0));
+  const minProfitAmount = strictAboveCost ? Math.max(1, rawProfitAmount) : rawProfitAmount;
 
   const byPct = cost * (1 + minMarginPct / 100) + fixed;
   const byAmount = cost + minProfitAmount + fixed;
-  const rawMin = Math.max(byPct, byAmount, cost + 1);
+  const rawMin = Math.max(byPct, byAmount, strictAboveCost ? cost + 1 : cost);
 
   let floor = ceilToStep(rawMin, step);
   if (opts.psychological === "x900" && step >= 1000) {
     const candidate = floor - 100;
-    if (candidate >= rawMin && candidate > cost) {
+    if (candidate >= rawMin && (strictAboveCost ? candidate > cost : candidate >= cost)) {
       floor = candidate;
     } else {
       floor = floor + step - 100;
     }
   }
-  if (floor <= cost) {
+  if (strictAboveCost && floor <= cost) {
     floor = cost + Math.max(step, minProfitAmount);
+  } else if (!strictAboveCost && floor < cost) {
+    floor = ceilToStep(cost, step);
   }
   return Math.round(floor);
 }

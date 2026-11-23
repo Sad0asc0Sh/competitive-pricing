@@ -1,3 +1,4 @@
+import { makeOwnShopMatcher } from "./own-shop";
 import { isMatchingCity, normalizeFaText } from "./sourcing";
 import type { OfferEvaluation, PricingProfileConfig, RawOffer } from "./types";
 
@@ -88,7 +89,8 @@ export function applyValidityFilters(
       : cfg.maxOfferAgeDays;
   const maxAgeMs = effectiveMaxAgeDays * 24 * 3600 * 1000;
   const blacklist = new Set(cfg.shopBlacklist.map((s) => normalizeFaText(s)).filter(Boolean));
-  const own = new Set(cfg.ownShopNames.map((s) => normalizeFaText(s)).filter(Boolean));
+  // ۴.۲.۱: تشخیص مقاوم فروشگاه خودمان (کلید فشرده + املاهای داخلی + شناسهٔ فروشنده)؛ src/lib/pricing/own-shop.ts
+  const isOwnShop = makeOwnShopMatcher(cfg.ownShopNames, cfg.ownShopIds);
   const defaultCity = rankCfg?.defaultCity ?? "مشهد";
   const cityAliases = rankCfg?.localCityAliases ?? ["مشهد", "mashhad"];
 
@@ -117,11 +119,7 @@ export function applyValidityFilters(
     if (!Number.isFinite(o.price) || o.price <= 0) {
       return exclude(ev, "قیمت نامعتبر/صفر");
     }
-    if (
-      own.has(nameKey) ||
-      (idKey && own.has(idKey)) ||
-      [...own].some((ownName) => ownName.length >= 3 && nameKey.includes(ownName))
-    ) {
+    if (isOwnShop({ shopName: o.shopName, shopId: o.shopId })) {
       return exclude(ev, "فروشگاه خودمان");
     }
     if (blacklist.has(nameKey) || (idKey && blacklist.has(idKey))) {

@@ -78,10 +78,14 @@ exports.products = (0, pg_core_1.pgTable)("products", {
     createdAt: (0, pg_core_1.timestamp)("created_at").defaultNow().notNull(),
     updatedAt: (0, pg_core_1.timestamp)("updated_at").defaultNow().notNull(),
 }, (t) => [(0, pg_core_1.index)("products_status_idx").on(t.status)]);
-/** هر بار اجرای موتور قیمت (دستی/زمان‌بندی/API) */
+/** هر بار اجرای موتور قیمت (دستی/زمان‌بندی/API/سایه) */
 exports.priceRuns = (0, pg_core_1.pgTable)("price_runs", {
     id: (0, pg_core_1.serial)("id").primaryKey(),
-    trigger: (0, pg_core_1.varchar)("trigger", { length: 30 }).notNull(), // manual | schedule | api
+    trigger: (0, pg_core_1.varchar)("trigger", { length: 30 }).notNull(), // manual | schedule | api | shadow
+    /** حالت اجرا: live (اعمال واقعی) | shadow (مشاهده واقعی ترب بدون پوش به فروشگاه) | simulate (شبیه‌سازی/دستی) */
+    runMode: (0, pg_core_1.varchar)("run_mode", { length: 30 }).default("live").notNull(),
+    /** آیا این اجرا با داده‌های شبیه‌سازی یا دستی انجام شده است؟ */
+    isSimulated: (0, pg_core_1.boolean)("is_simulated").default(false).notNull(),
     status: (0, pg_core_1.varchar)("status", { length: 30 }).default("running").notNull(), // running | done | failed
     scheduleId: (0, pg_core_1.integer)("schedule_id"),
     totalProducts: (0, pg_core_1.integer)("total_products").default(0).notNull(),
@@ -135,25 +139,35 @@ exports.priceDecisions = (0, pg_core_1.pgTable)("price_decisions", {
     netProfitToman: (0, pg_core_1.integer)("net_profit_toman"),
     netMarginPct: (0, pg_core_1.real)("net_margin_pct"),
     confidence: (0, pg_core_1.real)("confidence").default(0).notNull(),
-    status: (0, pg_core_1.varchar)("status", { length: 30 }).notNull(), // applied | pending_review | rejected | failed | skipped
+    status: (0, pg_core_1.varchar)("status", { length: 30 }).notNull(), // applied | pending_sync | sync_failed | pending_review | rejected | failed | skipped | superseded
     steps: (0, pg_core_1.jsonb)("steps").$type().default([]).notNull(),
-    /** نسخه‌ی موتور ۴.۱.۱ که این تصمیم را ساخته (قابل‌ردیابی) */
-    engineVersion: (0, pg_core_1.varchar)("engine_version", { length: 20 }).default("4.1.1").notNull(),
+    /** نسخه‌ی موتور ۴.۲.۰ که این تصمیم را ساخته (قابل‌ردیابی) */
+    engineVersion: (0, pg_core_1.varchar)("engine_version", { length: 20 }).default("4.2.0").notNull(),
     /** فروشنده suspect_low زیر قیمت پیشنهادی ما (market_conflict → review) */
     marketConflict: (0, pg_core_1.boolean)("market_conflict").default(false).notNull(),
     /** مرجع مقایسه تخفیف: none | own_price_7d | market_p75 */
     referenceKind: (0, pg_core_1.varchar)("reference_kind", { length: 30 }),
     /** کف نهایی متناسب با مرجع/کف بازار و از روی کف دقیق اعمال شد (true) یا به‌قدر لازم کالیبره نشده (false) */
     floorConfirmed: (0, pg_core_1.boolean)("floor_confirmed").default(false).notNull(),
-    pushStatus: (0, pg_core_1.varchar)("push_status", { length: 30 }), // pushed | failed | skipped
+    /** کلید یکتا برای جلوگیری از اعمال تکراری تصمیم در فروشگاه */
+    idempotencyKey: (0, pg_core_1.varchar)("idempotency_key", { length: 120 }),
+    pushStatus: (0, pg_core_1.varchar)("push_status", { length: 30 }), // pushed | pending | failed | skipped | superseded
+    pushAttempts: (0, pg_core_1.integer)("push_attempts").default(0).notNull(),
+    lastPushAttemptAt: (0, pg_core_1.timestamp)("last_push_attempt_at"),
+    storeConfirmedPrice: (0, pg_core_1.integer)("store_confirmed_price"),
     pushError: (0, pg_core_1.text)("push_error"),
     pushedAt: (0, pg_core_1.timestamp)("pushed_at"),
+    /** آیا این تصمیم حاصل داده شبیه‌سازی/دستی است؟ (نباید وارد کالیبراسیون شود) */
+    isSimulated: (0, pg_core_1.boolean)("is_simulated").default(false).notNull(),
+    /** منبع اعتبارسنجی: live_torob | shadow_torob | simulated */
+    validationSource: (0, pg_core_1.varchar)("validation_source", { length: 30 }).default("live_torob").notNull(),
     createdAt: (0, pg_core_1.timestamp)("created_at").defaultNow().notNull(),
 }, (t) => [
     (0, pg_core_1.index)("decisions_product_idx").on(t.productId),
     (0, pg_core_1.index)("decisions_run_idx").on(t.runId),
     // هم‌نام با ایندکس SQL مهاجرت؛ بدون این تعریف drizzle-kit push آن را drift می‌دید (N3).
     (0, pg_core_1.index)("decisions_push_recovery_idx").on(t.status, t.pushStatus, t.createdAt),
+    (0, pg_core_1.index)("decisions_idempotency_idx").on(t.idempotencyKey),
 ]);
 /** پیشنهادهای رقبا (اسنپ‌شات ترب شامل شهر فروشنده و نوع آنلاین/حضوری) برای هر تصمیم */
 exports.competitorOffers = (0, pg_core_1.pgTable)("competitor_offers", {
@@ -227,7 +241,10 @@ exports.schedules = (0, pg_core_1.pgTable)("schedules", {
     name: (0, pg_core_1.text)("name").notNull(),
     intervalMinutes: (0, pg_core_1.integer)("interval_minutes").default(360).notNull(),
     active: (0, pg_core_1.boolean)("active").default(true).notNull(),
-    filter: (0, pg_core_1.jsonb)("filter").$type().default({}).notNull(),
+    filter: (0, pg_core_1.jsonb)("filter")
+        .$type()
+        .default({})
+        .notNull(),
     lastRunAt: (0, pg_core_1.timestamp)("last_run_at"),
     nextRunAt: (0, pg_core_1.timestamp)("next_run_at"),
     createdAt: (0, pg_core_1.timestamp)("created_at").defaultNow().notNull(),

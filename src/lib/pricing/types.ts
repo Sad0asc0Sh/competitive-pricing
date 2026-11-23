@@ -38,6 +38,12 @@ export interface SupplyCostResolution {
   effectiveCostPrice: number;
   baseBuyPrice: number;
   overheadAmount: number;
+  /** هزینه موجودی انبار ثبت‌شده (تومان) */
+  inventoryCostPrice?: number;
+  /** هزینه جایگزینی/ریپلیس از لیست همکار یا فیلد replacementCost (تومان) */
+  replacementCostPrice?: number;
+  /** قیمت خرید تخمینی امن در حالت Market-Maker (فقط جهت گزارش؛ هرگز جایگزین قیمت خرید واقعی نمی‌شود) */
+  impliedCostPrice?: number;
   selectedQuote: EvaluatedSupplierQuote | null;
   evaluatedQuotes: EvaluatedSupplierQuote[];
   validQuotesCount: number;
@@ -100,10 +106,18 @@ export interface SourceResult {
   offers: RawOffer[];
   totalSellerCount: number;
   inPersonSellerCount?: number;
+  lowestListedPrice?: number | null;
+  highestListedPrice?: number | null;
   priceTrend?: MarketPriceTrend | null;
   fetchedAt: Date;
   ok: boolean;
   error?: string;
+  sourceStatus?: "ok" | "degraded" | "challenged" | "truncated" | "empty" | "error";
+  isTruncated?: boolean;
+  isChallenged?: boolean;
+  degraded?: boolean;
+  errors?: string[];
+  warnings?: string[];
   meta?: Record<string, unknown>;
 }
 
@@ -165,7 +179,10 @@ export type CeilingDiscoveryMode =
   | "trimmed_upper_cluster"
   | "cluster_ceiling"
   | "market_upper"
-  | "markup";
+  | "markup"
+  | "ceiling"
+  | "current"
+  | "hybrid";
 
 /**
  * تایپ‌های ناظر و تصمیم‌گیرنده بالاسر (`SubQ SystemOne Supervisor`)
@@ -264,6 +281,8 @@ export interface PricingProfileConfig {
      *  max_inventory_replacement (کف از max انبار/ریپلیس) | legacy_never_below_manual (رفتار ۳.۶) */
     costPolicy: CostResolutionPolicy;
     allowAutoApplyWithoutCost: boolean;
+    /** مجوز صریح سیاست تجاری برای قیمت‌گذاری Market-Maker در نبود قیمت خرید (پیش‌فرض: false → نیازمند بازبینی دستی) */
+    allowMarketMakerWithoutCost?: boolean;
     costlessSafePercentile: number;
     costlessSafetyMarginPct: number;
     impliedCostBackoffPct: number;
@@ -279,6 +298,8 @@ export interface PricingProfileConfig {
     minShopScore: number;
     shopBlacklist: string[];
     ownShopNames: string[];
+    /** ۴.۲.۱: شناسهٔ فروشندهٔ خودمان در ترب (shop_id)؛ دقیق‌ترین راه تشخیص پیشنهاد خودی (اختیاری) */
+    ownShopIds?: string[];
   };
   /** ---------- ۲) حذف داده‌های پرت و فروشندگان غیربه‌روز ---------- */
   outliers: {
@@ -343,6 +364,12 @@ export interface PricingProfileConfig {
   /** ---------- ۶) محافظ‌ها ---------- */
   guards: {
     maxChangePctPerRun: number;
+    /** سقف مجاز افزایش قیمت در هر اجرا (٪)؛ در صورت عدم تعیین از maxChangePctPerRun استفاده می‌شود */
+    maxIncreasePct?: number;
+    /** سقف مجاز کاهش قیمت در هر اجرا (٪)؛ در صورت عدم تعیین از maxChangePctPerRun استفاده می‌شود */
+    maxDecreasePct?: number;
+    /** سقف مجاز تغییرات تجمعی ۲۴ ساعته (٪) */
+    maxDailyChangePct?: number;
     minConfidenceAutoApply: number;
     minValidOffers: number;
     hysteresisPct: number;
@@ -390,6 +417,8 @@ export interface PricingProfileConfig {
     minCredibleFresh: number;
     /** اجازه اعمال خودکار قیمت provision یک (پیش‌فرض false → همیشه review) */
     autoApply: boolean;
+    /** حداقل اعتماد برای اعمال خودکار مسیر بی‌هزینه (اختیاری؛ پیش‌فرض ۰٫۹) */
+    minConfidence?: number;
   };
   /** ---------- ۱۲) نسخه موتور (ذخیره در هر تصمیم) ---------- */
   engine: {
@@ -414,6 +443,8 @@ export interface PricingProfileConfig {
     competitivenessCostRatio: number;
     /** پارامترهای مدل اعتبار (override جزئی) */
     validity: Partial<ValidityParams>;
+    /** نام مستعار پارامترهای مدل اعتبار برای سازگاری */
+    validityParams?: Partial<ValidityParams>;
     /** پیشنهاد زیر قیمت ما فقط وقتی «تعارض بازار/ریویو» می‌شود که احتمال اعتبارش معنادار باشد */
     marketConflictByProbability: boolean;
     /** حداقل احتمال اعتبار برای ثبت «تعارض بازار» (با marketConflictByProbability) */
@@ -468,7 +499,9 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     includeInPersonSellers: true,
     minShopScore: 0,
     shopBlacklist: [],
-    ownShopNames: ["sgeooole", "ekgkala", "ای کا جی کالا", "ای‌کا‌جی کالا"],
+    // ۴.۲.۱: املاهای رایج دیگر (ای کی جی کالا، ایکاجی…) همیشه در own-shop.ts افزوده می‌شوند؛ این فهرست برای نام‌های اضافهٔ خاص شماست.
+    ownShopNames: ["sgeooole", "ekgkala", "ای کا جی کالا", "ای‌کا‌جی کالا", "ای کی جی کالا"],
+    ownShopIds: [],
   },
   outliers: {
     method: "iqr",
@@ -571,7 +604,7 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     autoApply: false,
   },
   engine: {
-    version: "4.2.0",
+    version: "4.2.1",
   },
   estimator: {
     mode: "v2",
@@ -607,16 +640,108 @@ export interface PricingContext {
   productName: string;
   sku?: string | null;
   costPrice: number;
+  /** هزینه موجودی انبار ثبت‌شده (در صورت تفکیک از costPrice) */
+  inventoryCost?: number | null;
+  /** هزینه جایگزینی/ریپلیس صریح محصول (تومان) */
+  replacementCost?: number | null;
   supplierQuotes?: SupplierQuote[];
   minMarginPctOverride?: number | null;
   minProfitAmountOverride?: number | null;
   currentFinalPrice?: number | null;
+  /** قیمت ۲۴ ساعت قبل محصول (برای سقف نوسان روزانه maxDailyChangePct) */
+  price24hAgo?: number | null;
+  /**
+   * ۴.۲.۱: قیمت‌هایی که خودمان اخیراً داشته‌ایم (فعلی + push‌شده‌های ۱۴ روز اخیر). اگر ارزان‌ترین پیشنهاد «رقیب»
+   * دقیقاً یکی از این‌ها باشد، احتمالاً پیشنهاد خودمان با نام ناشناخته است ⇒ اعمال خودکار متوقف می‌شود (گارد پژواک).
+   */
+  ownRecentPrices?: number[];
   category?: string | null;
   cardIndex?: number;
   config: PricingProfileConfig;
   now?: Date;
   /** تاریخچه قیمت خودی محصولات (برای مرجع own_price_7d) — محاسبه در runner */
   discountContext?: DiscountContext;
+}
+
+export interface BelowCostAuthorization {
+  /** آیا فروش استثنایی زیر قیمت تمام‌شده مجاز است؟ */
+  allowBelowCost?: boolean;
+  /** آیا فروش زیر کف سود هدف (اما بالای قیمت تمام‌شده) مجاز است؟ */
+  allowBelowFloor?: boolean;
+  /** دلیل مکتوب و قابل ممیزی برای مجوز فروش زیر کف/هزینه */
+  reason?: string | null;
+  /** نام مستعار دلیل در درخواست‌های API */
+  belowCostReason?: string | null;
+  /** شناسه یا نام تاییدکننده مجاز (اپراتور/مدیر) */
+  authorizedBy?: string | null;
+  /** کد سیاست مجاز (مثلاً clearance, damaged, obsolescence, executive_override) */
+  policyCode?: string | null;
+  /** حداکثر درصد زیان مجاز نسبت به قیمت تمام‌شده (پیش‌فرض: 50) */
+  maxLossPct?: number | null;
+}
+
+export interface DecisionFloorSafetyInput {
+  finalPrice: number | null | undefined;
+  effectiveCostPrice?: number | null;
+  inventoryCost?: number | null;
+  replacementCost?: number | null;
+  manualCostPrice?: number | null;
+  hardFloorPrice?: number | null;
+  currentHardFloorPrice?: number | null;
+  minMarginPct?: number | null;
+  minProfitAmountToman?: number | null;
+  fixedCostToman?: number | null;
+  finalStep?: number | null;
+  psychological?: "none" | "x900" | "x000";
+  strictAboveCost?: boolean;
+  force?: boolean;
+  allowMarketMakerWithoutCost?: boolean;
+  isProvisional?: boolean;
+  usedMarketConsensusFloor?: boolean;
+  confidence?: number | null;
+  minConfidenceAutoApply?: number | null;
+  authorization?: BelowCostAuthorization | null;
+  allowBelowCost?: boolean;
+  allowBelowFloor?: boolean;
+  belowCostReason?: string | null;
+  reason?: string | null;
+  authorizedBy?: string | null;
+  policyCode?: string | null;
+  maxLossPct?: number | null;
+}
+
+export interface DecisionFloorSafetyResult {
+  ok: boolean;
+  status:
+    | "safe"
+    | "authorized_below_floor"
+    | "authorized_below_cost"
+    | "blocked_below_cost"
+    | "blocked_below_floor"
+    | "blocked_unknown_cost"
+    | "blocked_invalid_price";
+  isBelowCost: boolean;
+  isBelowFloor: boolean;
+  isCostUnknown: boolean;
+  authorizedOverride: boolean;
+  effectiveCost: number;
+  effectiveFloor: number;
+  inventoryCost: number;
+  replacementCost: number;
+  lossAmountToman: number;
+  lossPct: number;
+  reason: string | null;
+  auditRecord: {
+    authorizedBy: string;
+    reason: string;
+    policyCode: string;
+    finalPrice: number;
+    effectiveCost: number;
+    effectiveFloor: number;
+    lossAmountToman: number;
+    lossPct: number;
+    timestamp: string;
+  } | null;
 }
 
 export interface MarketFloorCeilingReport {

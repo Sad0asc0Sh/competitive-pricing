@@ -1,4 +1,4 @@
-import { clamp, median, percentile, sortAsc } from "./stats";
+import { clamp, mean, median, percentile, roundToStep, sortAsc } from "./stats";
 import type {
   DiscountDecisionKind,
   MarketFloorCeilingReport,
@@ -120,16 +120,41 @@ export function calibrateBaseForPct(final: number, pct: number): number {
   return Math.max(final + 1, Math.ceil(final / factor));
 }
 
-/** صدک ۷۵ پول معتبر و سقف-دار: min(صدک ۷۵، بالاترین credible) — نمایشگر بازارِ «پایین رو به مرجع کشوند» */
-export function marketReferenceP75(offers: OfferEvaluation[]): number | null {
+/** صدک مرجع پول معتبر و سقف-دار: پیش‌فرض min(صدک ۷۵، بالاترین credible)؛ با پشتیبانی از mode و marketUpperPercentile */
+export function marketReferenceP75(
+  offers: OfferEvaluation[],
+  cfg?: Partial<PricingProfileConfig["discount"]>,
+): number | null {
   const included = offers.filter((o) => o.included && o.price > 0);
   const credible = included.filter((o) => o.credible);
   const pool = credible.length >= 3 ? credible : included;
   if (!pool.length) return null;
   const prices = pool.map((o) => o.price).sort((a, b) => a - b);
-  const p75 = percentile(prices, 75);
   const highest = prices[prices.length - 1];
-  return Math.min(p75, highest);
+  const med = median(prices);
+  const maxAboveMedPct =
+    cfg?.maxCeilingAboveMedianPct != null && Number.isFinite(cfg.maxCeilingAboveMedianPct) && cfg.maxCeilingAboveMedianPct > 0
+      ? cfg.maxCeilingAboveMedianPct
+      : null;
+  const medCap = maxAboveMedPct != null && Number.isFinite(med) ? Math.round(med * (1 + maxAboveMedPct / 100)) : Infinity;
+
+  const mode = cfg?.mode ?? "market_percentile_ceiling";
+  if (mode === "highest_valid_seller") {
+    return Math.min(highest, medCap);
+  }
+  if (mode === "trimmed_upper_cluster" || mode === "cluster_ceiling") {
+    const upperHalf = prices.slice(Math.floor(prices.length / 2));
+    const upperMean = upperHalf.length ? Math.round(mean(upperHalf)) : highest;
+    return Math.min(upperMean, highest, medCap);
+  }
+
+  const customPctSelected =
+    cfg?.marketUpperPercentile != null &&
+    Number.isFinite(cfg.marketUpperPercentile) &&
+    (cfg.marketUpperPercentile !== 85 || cfg?.basePriceMode === "market_upper" || cfg?.basePriceMode === "ceiling");
+  const targetPct = customPctSelected ? clamp(cfg!.marketUpperPercentile!, 50, 99) : 75;
+  const pVal = percentile(prices, targetPct);
+  return customPctSelected ? Math.min(Math.round(pVal), highest, medCap) : Math.min(pVal, highest);
 }
 
 export function pickDiscountReference(
@@ -138,15 +163,45 @@ export function pickDiscountReference(
   cfg: PricingProfileConfig["discount"],
   opts: DiscountSourceConfig = {},
 ): { kind: DiscountDecisionKind; refPrice: number | null } {
+  const mode = cfg?.mode ?? "market_percentile_ceiling";
+  const baseMode = cfg?.basePriceMode ?? "market_ceiling";
+  const markupPct = cfg?.markupPct != null && Number.isFinite(cfg.markupPct) ? Math.max(0, cfg.markupPct) : 12;
+
+  if (mode === "markup" || baseMode === "markup") {
+    if (markupPct > 0) {
+      const markupRef = Math.round(finalPrice * (1 + markupPct / 100));
+      if (markupRef > finalPrice) {
+        return { kind: "entry_min", refPrice: markupRef };
+      }
+    }
+    return { kind: "none", refPrice: null };
+  }
+
   const ownHigh = Math.round(Math.max(0, Number(opts.ownStableHigh7d ?? 0)));
   const hasOwn =
     opts.hasOwnPriceHistory &&
     Number.isFinite(ownHigh) &&
     ownHigh > 0 &&
     ownHigh > Math.ceil(finalPrice * 1.01);
-  if (hasOwn) return { kind: "own_price_7d", refPrice: ownHigh };
-  const p75 = marketReferenceP75(offers);
-  if (p75 != null && p75 > finalPrice) return { kind: "market_p75", refPrice: p75 };
+
+  if (baseMode === "current") {
+    if (hasOwn) return { kind: "own_price_7d", refPrice: ownHigh };
+    return { kind: "none", refPrice: null };
+  }
+
+  if (baseMode !== "ceiling" && baseMode !== "market_upper" && hasOwn) {
+    return { kind: "own_price_7d", refPrice: ownHigh };
+  }
+
+  const pRef = marketReferenceP75(offers, cfg);
+  if (pRef != null && pRef > finalPrice) return { kind: "market_p75", refPrice: pRef };
+
+  // اگر کاربر صراحتاً markupPct را تغییر داده باشد و مرجع بازار بالاتر از کف نبود، از markup استفاده کن
+  if (cfg?.markupPct != null && cfg.markupPct !== 12 && markupPct > 0) {
+    const markupRef = Math.round(finalPrice * (1 + markupPct / 100));
+    if (markupRef > finalPrice) return { kind: "entry_min", refPrice: markupRef };
+  }
+
   return { kind: "none", refPrice: null };
 }
 
@@ -270,14 +325,30 @@ export function buildDiscount(
     (monitoredMarketMedian != null ? Math.min(medianCeilingCap ?? Infinity, refPrice) : refPrice);
 
   let adjustedForRef = false;
-  let base = calibrateBaseForPct(finalPrice, pct);
-  // سقف هرگز نباید از مرجع بالاتر برود؛ درصد را کمتر کن تا سقف زیر مرجع بماند
-  for (let guard = 0; guard < 6 && base > refPrice; guard++) {
-    pct -= 1;
-    adjustedForRef = true;
-    if (pct < 1) break;
+  const shouldCalibrateExact = cfg.calibrateCeilingForExactFloor !== false;
+  const baseStep = Math.max(1, Math.round(Number(rounding?.baseStep) || 1000));
+  let base: number;
+
+  if (shouldCalibrateExact) {
     base = calibrateBaseForPct(finalPrice, pct);
+    // سقف هرگز نباید از مرجع بالاتر برود؛ درصد را کمتر کن تا سقف زیر مرجع بماند
+    for (let guard = 0; guard < 6 && base > refPrice; guard++) {
+      pct -= 1;
+      adjustedForRef = true;
+      if (pct < 1) break;
+      base = calibrateBaseForPct(finalPrice, pct);
+    }
+  } else {
+    const rawUnroundedBase = Math.min(refPrice, Math.round(finalPrice / Math.max(0.05, 1 - pct / 100)));
+    base = roundToStep(rawUnroundedBase, baseStep);
+    if (base > refPrice && baseStep > 1) {
+      base = Math.floor(refPrice / baseStep) * baseStep;
+    }
+    if (base > finalPrice) {
+      pct = clamp(Math.round(((base - finalPrice) / base) * 100), 1, maxDisc);
+    }
   }
+
   if (base <= finalPrice || pct < 1) {
     return noDiscountOutcome(
       finalPrice,

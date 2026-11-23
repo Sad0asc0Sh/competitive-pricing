@@ -1,4 +1,4 @@
-import { computeModalConsensusPrice } from "./aggregate";
+import { computeModalConsensusPrice, hasGuarantee } from "./aggregate";
 import { median } from "./stats";
 import type { OfferClass, OfferEvaluation } from "./types";
 
@@ -144,18 +144,24 @@ export interface ValidityReport {
   excludedOffers: OfferEvaluation[];
 }
 
-const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
-const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
-const logit = (p: number) => Math.log(clamp(p, 1e-6, 1 - 1e-6) / (1 - clamp(p, 1e-6, 1 - 1e-6)));
+const clamp = (x: number, lo: number, hi: number) =>
+  Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : lo;
+const sigmoid = (x: number) => (Number.isFinite(x) ? 1 / (1 + Math.exp(-x)) : 0.5);
+const logit = (p: number) => {
+  const cp = clamp(p, 1e-6, 1 - 1e-6);
+  return Math.log(cp / (1 - cp));
+};
 
 function robustSigma(depths: number[], P: ValidityParams): number {
   // MAD روی عمق‌های نزدیک بدنه (±۱۲٪) تا آلودگی پراکندگی را باد نکند
-  const near = depths.filter((d) => Math.abs(d) <= 0.12);
+  const near = depths.filter((d) => Number.isFinite(d) && Math.abs(d) <= 0.12);
   if (near.length < 3) return clamp(P.sigmaPrior, P.sigmaMin, P.sigmaMax);
   const m = median(near);
-  const mad = median(near.map((d) => Math.abs(d - m))) * 1.4826;
+  const madVal = median(near.map((d) => Math.abs(d - m))) * 1.4826;
   const n = near.length;
-  const blended = Math.sqrt((n * mad * mad + P.sigmaPriorWeight * P.sigmaPrior * P.sigmaPrior) / (n + P.sigmaPriorWeight));
+  const priorW = Math.max(0, Number.isFinite(P.sigmaPriorWeight) ? P.sigmaPriorWeight : 4);
+  const denom = Math.max(1e-6, n + priorW);
+  const blended = Math.sqrt((n * madVal * madVal + priorW * P.sigmaPrior * P.sigmaPrior) / denom);
   return clamp(blended, P.sigmaMin, P.sigmaMax);
 }
 
@@ -165,9 +171,19 @@ function estimateDrift(
   sigma: number,
   P: ValidityParams,
 ): { drift: number; se: number } {
-  const use = rows.filter((r) => r.age <= P.driftMaxAgeDays && Math.abs(r.depth) <= 3 * sigma + 0.03);
-  if (use.length < 3) return { drift: 0, se: P.driftPriorSd };
+  const priorSd = Math.max(1e-6, Number.isFinite(P.driftPriorSd) ? P.driftPriorSd : 0.005);
+  const use = rows.filter(
+    (r) =>
+      Number.isFinite(r.age) &&
+      Number.isFinite(r.depth) &&
+      Number.isFinite(r.w) &&
+      r.w > 0 &&
+      r.age <= P.driftMaxAgeDays &&
+      Math.abs(r.depth) <= 3 * sigma + 0.03,
+  );
+  if (use.length < 3) return { drift: 0, se: priorSd };
   const sw = use.reduce((s, r) => s + r.w, 0);
+  if (!(sw > 0)) return { drift: 0, se: priorSd };
   const ma = use.reduce((s, r) => s + r.w * r.age, 0) / sw;
   const md = use.reduce((s, r) => s + r.w * r.depth, 0) / sw;
   let sxx = 0;
@@ -177,25 +193,26 @@ function estimateDrift(
     sxy += r.w * (r.age - ma) * (r.depth - md);
   }
   // وزن‌ها نرمال‌شده به میانگین ۱ تا ریج مقیاس‌پذیر بماند
-  const wMean = sw / use.length;
+  const wMean = Math.max(1e-9, sw / use.length);
   sxx /= wMean;
   sxy /= wMean;
-  const lambda = (sigma * sigma) / (P.driftPriorSd * P.driftPriorSd);
-  const slope = sxy / (sxx + lambda); // d = slope × age  (رشد بازار ⇒ قیمت کهنه پایین‌تر ⇒ slope منفی)
-  const se = sigma / Math.sqrt(sxx + lambda);
+  const lambda = (sigma * sigma) / (priorSd * priorSd);
+  const denom = Math.max(1e-12, sxx + lambda);
+  const slope = sxy / denom; // d = slope × age  (رشد بازار ⇒ قیمت کهنه پایین‌تر ⇒ slope منفی)
+  const se = sigma / Math.sqrt(denom);
   return { drift: -slope, se };
 }
 
 function reputationLogit(o: OfferEvaluation, P: ValidityParams): number {
   let x = 0;
-  if (o.shopScore == null) {
+  if (o.shopScore == null || !Number.isFinite(o.shopScore)) {
     x -= P.nullScorePenalty;
   } else {
     x += clamp(P.scoreCoef * (o.shopScore - P.scoreRef), P.scoreMin, P.scoreMax);
   }
-  const votes = Math.max(0, o.shopVotes ?? 0);
+  const votes = Math.max(0, Number.isFinite(o.shopVotes) ? (o.shopVotes ?? 0) : 0);
   x += P.votesCoef * (Math.log1p(votes / 10) - Math.log1p(3)); // ۳۰ رأی ≈ مرجع
-  if (typeof o.guarantee === "string" && o.guarantee.toLowerCase() === "enabled") x += P.guaranteeBonus;
+  if (hasGuarantee(o.guarantee, true)) x += P.guaranteeBonus;
   if (o.sellerType === "in_person") x -= P.inPersonPenalty;
   return x;
 }
@@ -217,7 +234,14 @@ export function assessValidity(
   },
 ): ValidityReport {
   const P: ValidityParams = { ...DEFAULT_VALIDITY_PARAMS, ...(opts.params ?? {}) };
-  const live = offers.filter((o) => o.included);
+  for (const o of offers) {
+    if (o.included && !(typeof o.price === "number" && Number.isFinite(o.price) && o.price > 0)) {
+      o.included = false;
+      o.weight = 0;
+      o.excludeReason = "قیمت نامعتبر یا غیرمثبت";
+    }
+  }
+  const live = offers.filter((o) => o.included && typeof o.price === "number" && Number.isFinite(o.price) && o.price > 0);
   const perOffer = new Map<OfferEvaluation, OfferValidity>();
 
   const ageOf = (o: OfferEvaluation): number | null =>
@@ -344,8 +368,10 @@ export function assessValidity(
   const pNone = Math.max(0, 1 - dist.reduce((acc, d) => acc + d.p, 0));
 
   // ---- لنگر: نخستین سطحی که احتمال تجمعیِ وجود پیشنهاد معتبر ≥ آستانه شود
-  const ratio = Math.max(0.05, opts.competitivenessCostRatio ?? 1);
-  const tau = clamp(1 / (1 + ratio), 0.2, 0.8) * (P.anchorCumProb / 0.5); // با ratio=1 ⇒ anchorCumProb
+  const rawRatio = Number(opts.competitivenessCostRatio ?? 1);
+  const ratio = Number.isFinite(rawRatio) && rawRatio > 0 ? Math.max(0.05, rawRatio) : 1;
+  const anchorProb = Number.isFinite(P.anchorCumProb) && P.anchorCumProb > 0 ? clamp(P.anchorCumProb, 0.05, 0.95) : 0.5;
+  const tau = clamp(clamp(1 / (1 + ratio), 0.2, 0.8) * (anchorProb / 0.5), 0.05, 0.95); // با ratio=1 ⇒ anchorCumProb
   let anchorIdx = -1;
   for (let k = 0; k < sorted.length; k++) {
     if (cumByK[k] >= tau) {

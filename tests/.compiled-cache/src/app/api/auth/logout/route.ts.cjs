@@ -13,10 +13,10 @@ function clearAndRedirect(req) {
         targetUrl = new URL("/login", origin);
     }
     catch {
-        targetUrl = new URL("/login", req.url);
+        targetUrl = new URL("/login", "http://localhost");
     }
     const res = server_1.NextResponse.redirect(targetUrl, { status: 303 });
-    res.cookies.set(auth_1.SESSION_COOKIE, "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 });
+    res.cookies.set(auth_1.SESSION_COOKIE, "", (0, auth_1.getSessionCookieOptions)(req, 0));
     return res;
 }
 async function POST(req) {

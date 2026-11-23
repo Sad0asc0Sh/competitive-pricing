@@ -2,33 +2,23 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.POST = POST;
-const db_1 = require("@/db");
+const index_ts_1 = require("../../../db/index.ts");
 const schema_1 = require("../../../db/schema");
+const auth_1 = require("../../../lib/auth");
 const sourcing_1 = require("../../../lib/pricing/sourcing");
 const bootstrap_1 = require("../../../lib/services/bootstrap");
 const runner_1 = require("../../../lib/services/runner");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
-/**
- * POST /api/colleagues
- * درون‌ریزی و بروزرسانی گروهی لیست قیمت همکاران / تامین‌کنندگان (اولویت اول سیستم)
- *
- * ورودی می‌تواند آرایه‌ای از ردیف‌ها (`rows`) یا متن CSV/تلگرامی (`text`) با فرمت زیر باشد:
- * SKU, نام همکار, قیمت خرید, شهر همکار (مثلاً مشهد), اولویت (1-10), موجودی (in/out)
- *
- * به محض دریافت لیست جدید همکاران:
- *  1. پیشنهاد این همکار در لیست همکاران آن محصول (`supplierQuotes`) بروزرسانی یا اضافه می‌شود.
- *  2. موتور تامین (`resolveSupplyCost`) بلافاصله قیمت تمام‌شده جدید (`costPrice`) و خط قرمز فروش (`currentHardFloorPrice`) را محاسبه می‌کند.
- *  3. اگر `triggerRun === true` باشد، بلافاصله موتور قیمت‌گذاری رقابتی ترب و مشهد برای محصولات تغییریافته اجرا می‌شود تا هیچ محصولی حتی یک لحظه زیر قیمت خرید جدید همکار باقی نماند!
- */
 async function POST(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const body = (await req.json().catch(() => null));
     if (!body)
         return server_1.NextResponse.json({ error: "بدنه درخواست نامعتبر است" }, { status: 400 });
     const defaultSupplier = body.defaultSupplierName?.trim() || "همکار اصلی";
-    // شهر نامشخص را «نامعلوم» نگه می‌داریم و به‌درستی «مشهد» یا هر شهر دیگری جعل نمی‌کنیم
-    // (شهر ساختگی می‌توانست ترجیح همکار همشهری در موتور تامین را منحرف کند).
     const defaultCity = body.defaultSupplierCity?.trim() || null;
     const defaultCurrency = body.defaultCurrency ?? "auto";
     const now = new Date();
@@ -45,7 +35,6 @@ async function POST(req) {
             if (/^(sku|کد کالا|کد محصول|شناسه)$/i.test(parts[0]))
                 continue;
             if (parts.length === 2) {
-                // فرمت خلاصه: SKU, قیمت همکار
                 incomingRows.push({
                     sku: parts[0],
                     supplierName: defaultSupplier,
@@ -56,7 +45,6 @@ async function POST(req) {
                 });
             }
             else {
-                // فرمت کامل: SKU, نام همکار, قیمت خرید, شهر همکار, اولویت, موجودی
                 const prio = parts[4] ? Number(parts[4]) : 5;
                 const stockStr = (parts[5] ?? "in").toLowerCase();
                 incomingRows.push({
@@ -74,12 +62,11 @@ async function POST(req) {
     if (!incomingRows.length) {
         return server_1.NextResponse.json({ error: "هیچ ردیف معتبری از لیست همکاران یافت نشد" }, { status: 400 });
     }
-    const allProducts = await db_1.db.select().from(schema_1.products);
+    const allProducts = await index_ts_1.db.select().from(schema_1.products);
     const bySku = new Map(allProducts.map((p) => [p.sku.trim().toUpperCase(), p]));
     const { config } = await (0, bootstrap_1.getProfileConfig)();
     const updatedProductIds = new Set();
     const notFoundSkus = [];
-    // گروه‌بندی ردیف‌ها بر اساس محصول
     const groupedByProduct = new Map();
     for (const r of incomingRows) {
         const p = bySku.get(String(r.sku || "").trim().toUpperCase());
@@ -128,11 +115,17 @@ async function POST(req) {
             config,
             now,
         });
-        await db_1.db
+        await index_ts_1.db
             .update(schema_1.products)
             .set({
             supplierQuotes: existingQuotes,
             costPrice: resolution.effectiveCostPrice > 0 ? resolution.effectiveCostPrice : product.costPrice,
+            ...(resolution.lowestQuoteCost && resolution.lowestQuoteCost > 0
+                ? {
+                    replacementCost: Math.round(resolution.lowestQuoteCost),
+                    replacementCostAt: now,
+                }
+                : {}),
             selectedSupplierName: resolution.selectedQuote?.supplierName ?? null,
             currentHardFloorPrice: resolution.hardFloorPrice,
             updatedAt: now,

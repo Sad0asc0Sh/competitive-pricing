@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.GET = GET;
-const db_1 = require("@/db");
+const index_ts_1 = require("../../../db/index.ts");
 const config_1 = require("../../../lib/ai/config");
 const connectors_1 = require("../../../lib/store/connectors");
 const drizzle_orm_1 = require("drizzle-orm");
@@ -28,7 +28,7 @@ async function checkUrl(url, timeoutMs = 4000) {
 async function GET() {
     let dbOk = false;
     try {
-        await db_1.db.execute((0, drizzle_orm_1.sql) `select 1`);
+        await index_ts_1.db.execute((0, drizzle_orm_1.sql) `select 1`);
         dbOk = true;
     }
     catch {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { SESSION_COOKIE } from "@/lib/auth";
+import { SESSION_COOKIE, getSessionCookieOptions } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -9,10 +9,10 @@ function clearAndRedirect(req: Request) {
   try {
     targetUrl = new URL("/login", origin);
   } catch {
-    targetUrl = new URL("/login", req.url);
+    targetUrl = new URL("/login", "http://localhost");
   }
   const res = NextResponse.redirect(targetUrl, { status: 303 });
-  res.cookies.set(SESSION_COOKIE, "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 });
+  res.cookies.set(SESSION_COOKIE, "", getSessionCookieOptions(req, 0));
   return res;
 }
 

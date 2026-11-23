@@ -17,8 +17,8 @@ import { summarizeOwnPriceHistory } from "@/lib/pricing/own-price-history";
 import { enrichSupervisorWithSubqApi } from "@/lib/pricing/systemone-supervisor";
 import type { PricingResult, RawOffer, SupplierQuote } from "@/lib/pricing/types";
 import { fetchFromSource, isAllowedSourceType } from "@/lib/sources/registry";
-import { pushToStore } from "@/lib/store/connectors";
-import { and, asc, eq, gt, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
+import { buildIdempotencyKey, pushToStore, type BelowCostOverrideMeta, type PushResult } from "@/lib/store/connectors";
+import { and, asc, eq, gt, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { ensureDefaults, getProfileConfig, logActivity } from "./bootstrap";
 
 /** تبدیل ایمن مقادیر موتور به عدد صحیح/اعشاری معتبر قبل از درج در دیتابیس (NaN/Infinity هرگز درج نشود) */
@@ -28,29 +28,60 @@ const safeReal = (v: number | null | undefined, fallback = 0): number =>
   v == null || !Number.isFinite(v) ? fallback : v;
 
 const DEFAULT_INTERVAL_MINUTES = 180;
+const MAX_AUTO_SYNC_ATTEMPTS = 5;
+
+export type RunMode = "live" | "shadow" | "simulate";
+export type ValidationSource = "live_torob" | "shadow_torob" | "simulated";
 
 export interface RunOptions {
-  trigger: "manual" | "schedule" | "api";
+  trigger?: "manual" | "schedule" | "api" | "shadow";
+  triggeredBy?: "manual" | "scheduled" | "schedule" | "api" | "shadow";
+  runMode?: RunMode;
+  isSimulated?: boolean;
   productIds?: number[];
   category?: string;
   scheduleId?: number;
+  profileId?: number;
   /** اعمال روی رنج مشخصی از کارت‌های محصول (۱-مبنا: از کارت شماره X تا کارت شماره Y) */
   cardRangeFrom?: number;
   cardRangeTo?: number;
-  /** پیشنهادهای دستی بازار (فقط برای اجرای تک‌محصولی) */
-  manualOffers?: RawOffer[];
+  /** پیشنهادهای دستی بازار (فقط برای اجرای تک‌محصولی یا شبیه‌سازی) */
+  manualOffers?: RawOffer[] | Record<number, RawOffer[]>;
   /** پیشنهادهای دستی لیست همکاران (در صورت ارسال در لحظه اجرا) */
   manualSupplierQuotes?: SupplierQuote[];
 }
 
 export interface RunSummary {
   runId: number;
+  runMode?: RunMode;
+  isSimulated?: boolean;
   total: number;
   applied: number;
   pendingReview: number;
   failed: number;
+  pendingSync?: number;
+  syncFailed?: number;
   decisionIds: number[];
   lastError?: string | null;
+}
+
+export interface ApplyDecisionOptions {
+  force?: boolean;
+  allowBelowCost?: boolean;
+  belowCostReason?: string;
+  authorizedBy?: string;
+  campaignEndsAt?: Date | null;
+}
+
+export interface ApplyDecisionResult {
+  ok: boolean;
+  message: string;
+  code?: string;
+  status?: string;
+  pushStatus?: string;
+  push?: PushResult;
+  idempotencyKey?: string;
+  confirmedPrice?: number;
 }
 
 /** نامزد اعمال در پایان اجرا (فاز ۴) — push تا پس از تخصیص صندلی منتخب‌ها عقب انداخته شد (P0-4) */
@@ -145,11 +176,46 @@ async function computeOwnDiscountContext(
 }
 
 /**
- * بازیابی تصمیم‌های «applied»ی که push آن‌ها (به‌دلیل کرش وسط اجرا) ثبت نشده است.
- * ۴.۱.۱: در شروع هر اجرا، ردیف‌های applied با push_status IS NULL و قدیمی‌تر از ۱۰ دقیقه
- * دوباره push می‌شوند؛ اگر تصمیم دیگر معتبر نباشد، صریحاً failed علامت می‌خورند.
+ * ۴.۲.۱: قیمت‌هایی که خودمان اخیراً داشته‌ایم (برای گارد «پژواک قیمت خودی» در موتور): قیمت فعلی + قیمت نهایی
+ * تصمیم‌های applied با push موفق در `days` روز اخیر. پنجره بلند است چون ترب قیمت فروشگاه را با تأخیر می‌خواند
+ * (ساعت‌ها تا روزها) و پیشنهاد خودیِ ناشناخته ممکن است هنوز قیمت چند push قبل را نشان دهد.
  */
-async function recoverStuckAppliedDecisions(): Promise<number> {
+async function loadOwnRecentPrices(
+  productId: number,
+  currentPrice: number | null | undefined,
+  days = 14,
+): Promise<number[]> {
+  const out = new Set<number>();
+  const add = (v: unknown) => {
+    const n = Math.round(Number(v));
+    if (Number.isFinite(n) && n > 0) out.add(n);
+  };
+  add(currentPrice);
+  try {
+    const since = new Date(Date.now() - Math.max(1, days) * 86_400_000);
+    const rows = await db
+      .select({ finalPrice: priceDecisions.finalPrice })
+      .from(priceDecisions)
+      .where(
+        and(
+          eq(priceDecisions.productId, productId),
+          eq(priceDecisions.status, "applied"),
+          eq(priceDecisions.pushStatus, "pushed"),
+          gte(priceDecisions.createdAt, since),
+        ),
+      );
+    for (const r of rows) add(r.finalPrice);
+  } catch {
+    // گارد کمکی است؛ خطای دیتابیس جریان قیمت‌گذاری را نمی‌شکند
+  }
+  return Array.from(out);
+}
+
+/**
+ * بازیابی و همگام‌سازی مجدد تصمیم‌های در انتظار پوش (`pending_sync` / `sync_failed`)
+ * و تصمیم‌های قدیمی `applied` که `push_status` آن‌ها هنوز `pushed` نشده است.
+ */
+export async function recoverStuckAppliedDecisions(limit = 50): Promise<number> {
   const cutoff = new Date(Date.now() - 10 * 60_000);
   try {
     const stuck = await db
@@ -157,17 +223,22 @@ async function recoverStuckAppliedDecisions(): Promise<number> {
       .from(priceDecisions)
       .where(
         and(
-          eq(priceDecisions.status, "applied"),
-          isNull(priceDecisions.pushStatus),
-          lt(priceDecisions.createdAt, cutoff),
+          or(
+            and(eq(priceDecisions.status, "applied"), isNull(priceDecisions.pushStatus), lt(priceDecisions.createdAt, cutoff)),
+            and(
+              inArray(priceDecisions.status, ["pending_sync", "sync_failed"]),
+              lt(priceDecisions.pushAttempts, MAX_AUTO_SYNC_ATTEMPTS),
+              lt(priceDecisions.createdAt, cutoff),
+            ),
+          ),
         ),
       )
       .orderBy(asc(priceDecisions.id))
-      .limit(50);
+      .limit(limit);
 
     for (const d of stuck) {
       // اگر تصمیم جدیدتری برای همین محصول با موفقیت push شده، بازپخش تصمیم قدیمی
-      // قیمت فروشگاه را عقب می‌برد؛ قدیمی را failed (superseded) علامت می‌زنیم.
+      // قیمت فروشگاه را عقب می‌برد؛ قدیمی را superseded علامت می‌زنیم.
       const [newerPushed] = await db
         .select({ id: priceDecisions.id })
         .from(priceDecisions)
@@ -184,9 +255,10 @@ async function recoverStuckAppliedDecisions(): Promise<number> {
         await db
           .update(priceDecisions)
           .set({
-            pushStatus: "failed",
+            status: "superseded",
+            pushStatus: "superseded",
             pushError: `تصمیم جدیدتر #${newerPushed.id} قبلاً push شده است (recovery superseded)`,
-            pushedAt: new Date(),
+            lastPushAttemptAt: new Date(),
           })
           .where(eq(priceDecisions.id, d.id));
         continue;
@@ -196,12 +268,17 @@ async function recoverStuckAppliedDecisions(): Promise<number> {
       if (!res.ok) {
         await db
           .update(priceDecisions)
-          .set({ pushStatus: "failed", pushError: res.message, pushedAt: new Date() })
+          .set({
+            status: res.push?.skipped ? "pending_sync" : "sync_failed",
+            pushStatus: res.push?.skipped ? "skipped" : "failed",
+            pushError: res.message,
+            lastPushAttemptAt: new Date(),
+          })
           .where(eq(priceDecisions.id, d.id));
       }
     }
     if (stuck.length) {
-      await logActivity("runner", `بازیابی ${stuck.length} تصمیم appliedِ بدون push_status انجام شد`, {
+      await logActivity("runner", `بازیابی ${stuck.length} تصمیم همگام‌نشده با فروشگاه انجام شد`, {
         decisionIds: stuck.map((d) => d.id),
       });
     }
@@ -211,16 +288,29 @@ async function recoverStuckAppliedDecisions(): Promise<number> {
   }
 }
 
-export async function runPricing(opts: RunOptions): Promise<RunSummary> {
+export async function runPricing(opts: RunOptions = {}): Promise<RunSummary> {
   await ensureDefaults();
   await recoverStuckAppliedDecisions();
+
+  const rawTrigger = opts.trigger ?? opts.triggeredBy ?? "manual";
+  const normalizedTrigger = rawTrigger === "scheduled" ? "schedule" : rawTrigger;
+  const hasManualOffers =
+    Array.isArray(opts.manualOffers)
+      ? opts.manualOffers.length > 0
+      : Boolean(opts.manualOffers && Object.keys(opts.manualOffers).length > 0);
+  const isSimulated = Boolean(opts.isSimulated || opts.runMode === "simulate" || hasManualOffers);
+  const runMode: RunMode = isSimulated
+    ? "simulate"
+    : opts.runMode === "shadow" || normalizedTrigger === "shadow"
+      ? "shadow"
+      : "live";
 
   const conds = [eq(products.status, "active")];
   if (opts.productIds?.length) conds.push(inArray(products.id, opts.productIds));
   if (opts.category) conds.push(eq(products.category, opts.category));
 
   let targets =
-    opts.productIds?.length && opts.trigger !== "schedule"
+    opts.productIds?.length && normalizedTrigger !== "schedule"
       ? await db.select().from(products).where(inArray(products.id, opts.productIds)).orderBy(asc(products.id))
       : await db.select().from(products).where(and(...conds)).orderBy(asc(products.id));
 
@@ -234,15 +324,25 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
 
   const [run] = await db
     .insert(priceRuns)
-    .values({ trigger: opts.trigger, scheduleId: opts.scheduleId, totalProducts: targets.length })
+    .values({
+      trigger: normalizedTrigger,
+      runMode,
+      isSimulated,
+      scheduleId: opts.scheduleId,
+      totalProducts: targets.length,
+    })
     .returning();
 
   const summary: RunSummary = {
     runId: run.id,
+    runMode,
+    isSimulated,
     total: targets.length,
     applied: 0,
     pendingReview: 0,
     failed: 0,
+    pendingSync: 0,
+    syncFailed: 0,
     decisionIds: [],
     lastError: null,
   };
@@ -271,15 +371,23 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
         continue;
       }
       try {
+        const productManualOffers = Array.isArray(opts.manualOffers)
+          ? opts.manualOffers
+          : opts.manualOffers?.[product.id];
         const outcome = await priceOneProduct(product, run.id, campaigns, cardIndex, {
-          manualOffers: opts.manualOffers,
+          manualOffers: productManualOffers,
           manualSupplierQuotes: opts.manualSupplierQuotes,
+          runMode,
+          isSimulated,
+          profileIdOverride: opts.profileId,
         });
         outcomes.push(outcome);
         summary.decisionIds.push(outcome.id);
-        if (outcome.status === "applied") summary.applied++;
-        else if (outcome.status === "pending_review") summary.pendingReview++;
-        else {
+        if (outcome.status === "pending_sync") {
+          // شمارش نهایی applied در فاز ۴ پس از تایید واقعی فروشگاه انجام می‌شود
+        } else if (outcome.status === "pending_review") {
+          summary.pendingReview++;
+        } else {
           summary.failed++;
           if (outcome.errorHint && !summary.lastError) {
             summary.lastError = outcome.errorHint;
@@ -324,35 +432,53 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
     }
   }
 
-  // ---------- فاز ۴: اعمال و push به فروشگاه (بعد از قطعیت صندلی‌ها)
+  // ---------- فاز ۴: اعمال و push به فروشگاه (فقط در اجرای live و پس از تایید واقعی فروشگاه)
   for (const o of outcomes) {
-    if (o.status === "applied" && o.deferred) {
-      await applyDecision(o.deferred.decisionId, o.deferred.campaignEndsAt);
+    if (o.status === "pending_sync" && o.deferred && runMode === "live" && !isSimulated) {
+      const pushRes = await applyDecision(o.deferred.decisionId, o.deferred.campaignEndsAt);
+      if (pushRes.ok) {
+        o.status = "applied";
+        summary.applied++;
+      } else if (pushRes.push?.skipped) {
+        o.status = "pending_sync";
+        summary.pendingSync = (summary.pendingSync ?? 0) + 1;
+        summary.failed++;
+        if (!summary.lastError) summary.lastError = pushRes.message;
+      } else {
+        o.status = "sync_failed";
+        summary.syncFailed = (summary.syncFailed ?? 0) + 1;
+        summary.failed++;
+        if (!summary.lastError) summary.lastError = pushRes.message;
+      }
     }
   }
 
-  // ---------- فاز ۵: گارد انقضا کمپین زمان‌دار (P0-6) — اگر کمپین فعلی به‌زودی منقضی شود و این
-  // اجرا جایگزین فعالِ آنرا اعمال نکرد، با قیمت فعلی «بدون کمپین» به فروشگاه ارسال می‌شود تا کمپین
-  // در سمت فروشگاه منقضی (نه رهاشده) نمایش داده شود.
-  let intervalMinutes = DEFAULT_INTERVAL_MINUTES;
-  try {
-    if (opts.scheduleId) {
-      const s = await db.select({ v: schedules.intervalMinutes }).from(schedules).where(eq(schedules.id, opts.scheduleId)).limit(1);
-      intervalMinutes = s[0]?.v ?? intervalMinutes;
-    } else {
-      const s = await db
-        .select({ v: schedules.intervalMinutes })
-        .from(schedules)
-        .where(eq(schedules.active, true))
-        .orderBy(asc(schedules.id))
-        .limit(1);
-      intervalMinutes = s[0]?.v ?? intervalMinutes;
+  // ---------- فاز ۵: گارد انقضا کمپین زمان‌دار (P0-6) — فقط در اجرای live
+  if (runMode === "live" && !isSimulated) {
+    let intervalMinutes = DEFAULT_INTERVAL_MINUTES;
+    try {
+      if (opts.scheduleId) {
+        const s = await db
+          .select({ v: schedules.intervalMinutes })
+          .from(schedules)
+          .where(eq(schedules.id, opts.scheduleId))
+          .limit(1);
+        intervalMinutes = s[0]?.v ?? intervalMinutes;
+      } else {
+        const s = await db
+          .select({ v: schedules.intervalMinutes })
+          .from(schedules)
+          .where(eq(schedules.active, true))
+          .orderBy(asc(schedules.id))
+          .limit(1);
+        intervalMinutes = s[0]?.v ?? intervalMinutes;
+      }
+    } catch {
+      intervalMinutes = DEFAULT_INTERVAL_MINUTES;
     }
-  } catch {
-    intervalMinutes = DEFAULT_INTERVAL_MINUTES;
+    const appliedProductIds = new Set(outcomes.filter((o) => o.status === "applied").map((o) => o.productId));
+    await runExpiryGuard(targets, appliedProductIds, intervalMinutes, run.id);
   }
-  const appliedProductIds = new Set(outcomes.filter((o) => o.status === "applied").map((o) => o.productId));
-  await runExpiryGuard(targets, appliedProductIds, intervalMinutes, run.id);
 
   await db
     .update(priceRuns)
@@ -361,13 +487,14 @@ export async function runPricing(opts: RunOptions): Promise<RunSummary> {
       applied: summary.applied,
       pendingReview: summary.pendingReview,
       failed: summary.failed,
+      error: summary.lastError,
       finishedAt: new Date(),
     })
     .where(eq(priceRuns.id, run.id));
 
   await logActivity(
     "runner",
-    `اجرای #${run.id} پایان یافت: ${summary.applied} اعمال، ${summary.pendingReview} بازبینی، ${summary.failed} رد/خطا${skippedLocked ? `، ${skippedLocked} قفل‌دار رد شد` : ""}`,
+    `اجرای #${run.id} (${runMode}) پایان یافت: ${summary.applied} اعمال تاییدشده، ${summary.pendingReview} بازبینی، ${summary.failed} رد/خطا${skippedLocked ? `، ${skippedLocked} قفل‌دار رد شد` : ""}`,
     { ...summary, skippedLocked },
   );
   return summary;
@@ -437,7 +564,11 @@ const SUPERVISOR_REASON_PREFIXES = [
   "ناظر بالاسر SystemOne تصمیم را در بازه ریویو قرار داد",
 ];
 
-function syncSupervisorAfterEnrichment(result: PricingResult, sourceOk: boolean): void {
+function syncSupervisorAfterEnrichment(
+  result: PricingResult,
+  sourceOk: boolean,
+  allowCostlessAutoApply = false,
+): void {
   const sup = result.supervisor;
   result.reviewReasons = result.reviewReasons.filter(
     (r) => !SUPERVISOR_REASON_PREFIXES.some((p) => r.startsWith(p)),
@@ -456,7 +587,7 @@ function syncSupervisorAfterEnrichment(result: PricingResult, sourceOk: boolean)
   result.needsReview =
     result.reviewReasons.length > 0 ||
     !sourceOk ||
-    result.supply.effectiveCostPrice <= 0 ||
+    (result.supply.effectiveCostPrice <= 0 && !allowCostlessAutoApply) ||
     result.rejectedBySupervisor ||
     sup.verdict !== "approve";
 
@@ -499,10 +630,23 @@ async function priceOneProduct(
   runId: number,
   campaigns: (typeof discountCampaigns.$inferSelect)[],
   cardIndex: number,
-  opts?: { manualOffers?: RawOffer[]; manualSupplierQuotes?: SupplierQuote[] },
+  opts?: {
+    manualOffers?: RawOffer[];
+    manualSupplierQuotes?: SupplierQuote[];
+    runMode?: RunMode;
+    isSimulated?: boolean;
+    profileIdOverride?: number;
+  },
 ): Promise<ProcessOutcome> {
   const manualOffers = opts?.manualOffers;
   const manualSupplierQuotes = opts?.manualSupplierQuotes;
+  const runMode: RunMode = opts?.runMode ?? (manualOffers?.length ? "simulate" : "live");
+  const isSimulated = Boolean(opts?.isSimulated || runMode === "simulate" || (manualOffers && manualOffers.length > 0));
+  const validationSource: ValidationSource = isSimulated
+    ? "simulated"
+    : runMode === "shadow"
+      ? "shadow_torob"
+      : "live_torob";
 
   if (!manualOffers?.length && !isAllowedSourceType(product.sourceType)) {
     throw new Error(
@@ -510,7 +654,7 @@ async function priceOneProduct(
     );
   }
 
-  const { config } = await getProfileConfig(product.profileId);
+  const { config } = await getProfileConfig(opts?.profileIdOverride ?? product.profileId);
   const supplierQuotes = manualSupplierQuotes ?? product.supplierQuotes ?? [];
 
   // مرجع تخفیف own_price_7d (P3): تاریخچه قیمت خودی دوام‌یافته در پنجره ۷ روزی
@@ -536,6 +680,8 @@ async function priceOneProduct(
     manualOffers,
   );
 
+  const ownRecentPrices = await loadOwnRecentPrices(product.id, product.currentFinalPrice);
+
   const result = runPricingPipeline(source, {
     productId: product.id,
     productName: product.name,
@@ -545,6 +691,7 @@ async function priceOneProduct(
     minMarginPctOverride: product.minMarginPct,
     minProfitAmountOverride: product.minProfitAmount,
     currentFinalPrice: product.currentFinalPrice,
+    ownRecentPrices,
     category: product.category,
     config,
     discountContext,
@@ -558,7 +705,30 @@ async function priceOneProduct(
       baseUrl: subqRuntime.baseUrl,
       model: subqRuntime.model,
     });
-    syncSupervisorAfterEnrichment(result, source.ok);
+    const allowCostless = Boolean(config.sourcing?.allowAutoApplyWithoutCost && config.costless?.autoApply);
+    syncSupervisorAfterEnrichment(result, source.ok, allowCostless);
+  }
+
+  const sourceExt = source as typeof source & {
+    sourceStatus?: string;
+    isChallenged?: boolean;
+    degraded?: boolean;
+  };
+  const sourceDegradedOrChallenged = Boolean(
+    sourceExt.isChallenged ||
+      sourceExt.degraded ||
+      source.meta?.challenged ||
+      source.meta?.degraded ||
+      sourceExt.sourceStatus === "challenged" ||
+      sourceExt.sourceStatus === "degraded" ||
+      sourceExt.sourceStatus === "error",
+  );
+  if (sourceDegradedOrChallenged) {
+    result.needsReview = true;
+    const reason = "منبع استعلام ترب در وضعیت چالش ضدربات یا داده ناقص (degraded/challenged) قرار دارد — نیازمند بازبینی انسانی";
+    if (!result.reviewReasons.includes(reason)) {
+      result.reviewReasons.push(reason);
+    }
   }
 
   if (config.ai.enabled && result.finalPrice && result.confidence < config.ai.reviewBelowConfidence) {
@@ -654,18 +824,59 @@ async function priceOneProduct(
     if (marginGate.reason) result.reviewReasons.push(marginGate.reason);
   }
 
+  const costlessPolicyAuthorized = Boolean(
+    config.sourcing?.allowAutoApplyWithoutCost === true &&
+      config.costless?.autoApply === true &&
+      (product.torobPrk || product.torobUrl) &&
+      result.confidence >= Math.max(0.9, config.costless?.minConfidence ?? 0.9),
+  );
+
   let status: string;
   if (result.rejectedBySupervisor) {
     status = "rejected";
   } else if (!result.finalPrice) {
     status = "failed";
-  } else if (result.isProvisional) {
-    // P2-3: مسیر Provisional هرگز خودکار اعمال نمی‌شود
+  } else if (runMode === "shadow" || isSimulated) {
+    // در حالت shadow یا simulate هرگز پوش خودکار به فروشگاه انجام نمی‌شود
     status = "pending_review";
+  } else if (result.isProvisional) {
+    // به صورت پیش‌فرض کالاهای بدون قیمت خرید نیازمند بازبینی انسانی‌اند مگر هر دو سیاست صریح فعال باشند
+    status =
+      costlessPolicyAuthorized && !result.needsReview && product.autoApply
+        ? "pending_sync"
+        : "pending_review";
   } else if (strictlyAboveCost && !result.needsReview && product.autoApply) {
-    status = "applied";
+    // تصمیم تا قبل از تایید واقعی فروشگاه در وضعیت pending_sync قرار می‌گیرد (نه applied!)
+    status = "pending_sync";
   } else {
     status = "pending_review";
+  }
+
+  if (runMode === "shadow") {
+    result.steps.push({
+      step: "shadow_validation",
+      title: "اجرای آزمایشی در سایه (Shadow Validation — داده واقعی ترب)",
+      message: "تصمیم بر اساس مشاهدات واقعی ترب محاسبه و برای ممیزی/کالیبراسیون ثبت شد (بدون ارسال به فروشگاه)",
+      level: "info",
+      data: {
+        runMode: "shadow",
+        validationSource: "shadow_torob",
+        isSimulated: false,
+        wouldAutoApply: Boolean(strictlyAboveCost && !result.needsReview && product.autoApply && !result.isProvisional),
+      },
+    });
+  } else if (isSimulated) {
+    result.steps.push({
+      step: "simulation_guard",
+      title: "گارد شبیه‌سازی (Simulated Run)",
+      message: "این تصمیم با داده‌های شبیه‌سازی/دستی ساخته شده و از استخراج کالیبراسیون و پوش خودکار مستثنی است",
+      level: "warn",
+      data: {
+        runMode: "simulate",
+        validationSource: "simulated",
+        isSimulated: true,
+      },
+    });
   }
 
   let campaignType = "none";
@@ -765,14 +976,33 @@ async function priceOneProduct(
       netProfitToman: safeInt(result.position.netProfitToman),
       netMarginPct: safeReal(result.position.netMarginPct),
       confidence: safeReal(result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence),
-      engineVersion: config.engine?.version ?? "4.1.1",
+      engineVersion: config.engine?.version ?? "4.2.0",
       marketConflict: result.marketConflict ?? false,
       referenceKind: result.discountReferenceKind ?? "none",
       floorConfirmed: result.floorConfirmed ?? false,
+      pushStatus: status === "pending_sync" ? "pending" : null,
+      pushAttempts: 0,
+      isSimulated,
+      validationSource,
       status,
       steps: result.steps,
     })
     .returning();
+
+  const idempotencyKey = buildIdempotencyKey({
+    productId: product.id,
+    sku: product.sku,
+    basePrice: safeInt(result.basePrice) ?? 0,
+    finalPrice: safeInt(result.finalPrice) ?? 0,
+    discountPct: safeReal(result.discountPct),
+    campaignType,
+    decisionId: decision.id,
+    confidence: decision.confidence,
+  });
+  await db
+    .update(priceDecisions)
+    .set({ idempotencyKey })
+    .where(eq(priceDecisions.id, decision.id));
 
   if (result.offers.length) {
     await db.insert(competitorOffers).values(
@@ -832,10 +1062,10 @@ async function priceOneProduct(
 
   // برگشت خروجی به‌همنه با فاز ۴ runner — applyDecision پس از تخصیص صندلی منتخب‌ها صدا زده می‌شود
   const deferred: DeferredApply | undefined =
-    status === "applied" ? { decisionId: decision.id, campaignEndsAt } : undefined;
+    status === "pending_sync" ? { decisionId: decision.id, campaignEndsAt } : undefined;
 
   const featuredCandidate: FeaturedCandidate | undefined =
-    status === "applied" &&
+    status === "pending_sync" &&
     campaignId != null &&
     campaignType !== "none" &&
     (result.position.projectedLocalRank === 1 ||
@@ -869,65 +1099,132 @@ export function isSupervisorRejected(d: {
   return false;
 }
 
+function resolveApplyOptions(
+  campaignEndsAtOrOpts?: Date | null | ApplyDecisionOptions,
+  opts?: ApplyDecisionOptions,
+): { campaignEndsAt: Date | null; opts: ApplyDecisionOptions } {
+  if (
+    campaignEndsAtOrOpts &&
+    typeof campaignEndsAtOrOpts === "object" &&
+    !(campaignEndsAtOrOpts instanceof Date)
+  ) {
+    return {
+      campaignEndsAt: campaignEndsAtOrOpts.campaignEndsAt ?? null,
+      opts: campaignEndsAtOrOpts,
+    };
+  }
+  return {
+    campaignEndsAt: (campaignEndsAtOrOpts as Date | null | undefined) ?? opts?.campaignEndsAt ?? null,
+    opts: opts ?? {},
+  };
+}
+
 export async function applyDecision(
   decisionId: number,
-  campaignEndsAt?: Date | null,
-  opts?: { force?: boolean },
-): Promise<{ ok: boolean; message: string }> {
+  campaignEndsAtOrOpts?: Date | null | ApplyDecisionOptions,
+  opts?: ApplyDecisionOptions,
+): Promise<ApplyDecisionResult> {
+  const { campaignEndsAt, opts: resolvedOpts } = resolveApplyOptions(campaignEndsAtOrOpts, opts);
+
   const [d] = await db.select().from(priceDecisions).where(eq(priceDecisions.id, decisionId)).limit(1);
-  if (!d || !d.finalPrice || !d.basePrice) return { ok: false, message: "تصمیم نامعتبر" };
+  if (!d || !d.finalPrice || !d.basePrice) {
+    return { ok: false, code: "INVALID_DECISION", message: "تصمیم نامعتبر" };
+  }
   const [p] = await db.select().from(products).where(eq(products.id, d.productId)).limit(1);
-  if (!p) return { ok: false, message: "محصول یافت نشد" };
+  if (!p) {
+    return { ok: false, code: "PRODUCT_NOT_FOUND", message: "محصول یافت نشد" };
+  }
+  if (d.isSimulated || d.validationSource === "simulated" || d.source === "simulate") {
+    return {
+      ok: false,
+      code: "SIMULATED_DECISION_BLOCKED",
+      message: "اعمال تصمیم شبیه‌سازی‌شده (simulated) روی فروشگاه واقعی ممنوع است",
+    };
+  }
   if (d.source !== "torob" && d.source !== "manual") {
-    return { ok: false, message: `اعمال تصمیم با منبع «${d.source}» ممنوع است؛ فقط تصمیم‌های مبتنی بر داده واقعی ترب یا ورود دستی مجاز به ارسال به فروشگاه‌اند` };
-  }
-  if (isSupervisorRejected({ status: d.status, steps: (d.steps ?? []) as { step: string; message?: string }[] }) && !opts?.force) {
     return {
       ok: false,
-      message: "این تصمیم توسط ناظر SystemOne رد شده (امتیاز زیر آستانه رد) و قابل اعمال نیست. برای بازبینی، محصول را با منبع/قیمت اصلاح و دوباره استعلام بگیرید.",
+      code: "INVALID_DECISION_SOURCE",
+      message: `اعمال تصمیم با منبع «${d.source}» ممنوع است؛ فقط تصمیم‌های مبتنی بر داده واقعی ترب یا ورود دستی مجاز به ارسال به فروشگاه‌اند`,
+    };
+  }
+  if (
+    isSupervisorRejected({ status: d.status, steps: (d.steps ?? []) as { step: string; message?: string }[] }) &&
+    !resolvedOpts.force
+  ) {
+    return {
+      ok: false,
+      code: "SUPERVISOR_REJECTED",
+      message:
+        "این تصمیم توسط ناظر SystemOne رد شده (امتیاز زیر آستانه رد) و قابل اعمال نیست. برای بازبینی، محصول را با منبع/قیمت اصلاح و دوباره استعلام بگیرید.",
     };
   }
 
-  const effectiveCost = d.effectiveCostPrice ?? p.costPrice ?? 0;
-  if (effectiveCost > 0 && d.finalPrice <= effectiveCost) {
-    return {
-      ok: false,
-      message: `خطای خط قرمز سود: قیمت فروش (${d.finalPrice.toLocaleString("fa-IR")}) نمی‌تواند کمتر یا مساوی قیمت خرید/تامین (${effectiveCost.toLocaleString("fa-IR")}) باشد`,
-    };
-  }
-
+  const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, p.costPrice ?? 0);
   const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p.currentHardFloorPrice ?? 0);
-  if (effectiveFloor > 0 && d.finalPrice < effectiveFloor && !opts?.force) {
+
+  // گارد کالاهای بدون قیمت خرید: بدون هزینه تمام‌شده و کف سود، اعمال بدون تایید صریح انسانی (force) ممنوع است
+  if (effectiveCost <= 0 && effectiveFloor <= 0 && !resolvedOpts.force) {
     return {
       ok: false,
-      message: `خط قرمز فروش بروزرسانی شده است: قیمت نهایی (${d.finalPrice.toLocaleString("fa-IR")}) از خط قرمز فعلی (${effectiveFloor.toLocaleString("fa-IR")}) کمتر است. ابتدا استعلام جدید بگیرید یا با تأیید اجباری (force) اعمال کنید.`,
+      code: "MISSING_COST_BASIS",
+      message:
+        "قیمت خرید/تامین و خط قرمز سود برای این محصول مشخص نیست؛ اعمال بدون تایید صریح انسانی (force) مجاز نیست.",
     };
   }
 
-  await db
-    .update(products)
-    .set({
-      currentBasePrice: d.basePrice,
-      currentFinalPrice: d.finalPrice,
-      currentDiscountPct: d.discountPct,
-      currentCampaign: d.campaignType,
-      currentCampaignName: d.campaignName,
-      currentBadgeTheme: d.badgeTheme ?? "green-orange",
-      currentShowInFeatured: d.showInFeatured ?? false,
-      // P0-3: تایمر کمپین روی خودِ محصول ذخیره می‌شود تا پیوستگی و گارد انقضا کار کند
-      currentCampaignEndsAt: campaignEndsAt ?? (p.currentCampaignEndsAt ?? null),
-      lastDecisionId: d.id,
-      status: "active",
-      updatedAt: new Date(),
-    })
-    .where(eq(products.id, p.id));
+  const belowCostReason = typeof resolvedOpts.belowCostReason === "string" ? resolvedOpts.belowCostReason.trim() : "";
+  const authorizedBy = typeof resolvedOpts.authorizedBy === "string" ? resolvedOpts.authorizedBy.trim() : "";
+  const hasExplicitBelowCostAuth = Boolean(
+    resolvedOpts.allowBelowCost === true && belowCostReason.length >= 5 && authorizedBy.length >= 2,
+  );
 
+  // خط قرمز اول سیستم: حتی با force=true عادی هرگز قیمت زیر قیمت خرید یا زیر کف سود اعمال نمی‌شود!
+  // تنها مسیر مجاز: allowBelowCost=true به همراه دلیل مکتوب (حداقل ۵ نویسه) و نام تاییدکننده (authorizedBy).
+  if (effectiveCost > 0 && d.finalPrice <= effectiveCost && !hasExplicitBelowCostAuth) {
+    return {
+      ok: false,
+      code: "BELOW_COST_PRICE",
+      message: `خطای خط قرمز سود: قیمت فروش (${d.finalPrice.toLocaleString("fa-IR")}) نمی‌تواند کمتر یا مساوی قیمت خرید/تامین (${effectiveCost.toLocaleString("fa-IR")}) باشد (اعمال زیر قیمت خرید نیازمند مجوز صریح allowBelowCost، دلیل مکتوب و نام تاییدکننده است)`,
+    };
+  }
+
+  if (effectiveFloor > 0 && d.finalPrice < effectiveFloor && !hasExplicitBelowCostAuth) {
+    return {
+      ok: false,
+      code: "BELOW_HARD_FLOOR",
+      message: `خط قرمز فروش: قیمت نهایی (${d.finalPrice.toLocaleString("fa-IR")}) از خط قرمز فعلی (${effectiveFloor.toLocaleString("fa-IR")}) کمتر است (اعمال زیر کف سود نیازمند مجوز صریح allowBelowCost، دلیل مکتوب و نام تاییدکننده است).`,
+    };
+  }
+
+  const belowCostOverride: BelowCostOverrideMeta | null = hasExplicitBelowCostAuth
+    ? {
+        allowBelowCost: true,
+        reason: belowCostReason,
+        authorizedBy,
+      }
+    : null;
+
+  const idempotencyKey =
+    d.idempotencyKey ||
+    buildIdempotencyKey({
+      productId: p.id,
+      sku: p.sku,
+      basePrice: d.basePrice,
+      finalPrice: d.finalPrice,
+      discountPct: d.discountPct ?? 0,
+      campaignType: d.campaignType ?? "none",
+      decisionId: d.id,
+      confidence: d.confidence,
+    });
+
+  const attemptTime = new Date();
   const push = await pushToStore({
     productId: p.id,
     sku: p.sku,
     storeExternalId: p.storeExternalId,
     effectiveCostPrice: effectiveCost,
-    hardFloorPrice: d.hardFloorPrice ?? p.currentHardFloorPrice ?? 0,
+    hardFloorPrice: effectiveFloor,
     monitoredMarketCeiling: d.monitoredMarketCeiling ?? d.basePrice,
     basePrice: d.basePrice,
     finalPrice: d.finalPrice,
@@ -938,34 +1235,280 @@ export async function applyDecision(
     showInFeatured: d.showInFeatured ?? false,
     campaignEndsAt: campaignEndsAt ? campaignEndsAt.toISOString() : null,
     decisionId: d.id,
+    idempotencyKey,
+    belowCostOverride,
     confidence: d.confidence,
     projectedNationalRank: d.projectedNationalRank,
     projectedLocalRank: d.projectedLocalRank,
     competitionTier: d.competitionTier,
   });
 
+  const nextAttempts = (d.pushAttempts ?? 0) + Math.max(1, push.attempts ?? 1);
+
+  // اگر ارسال به فروشگاه تایید نشد (یا کانکتور فعال نبود)، هرگز قیمت محصول در دیتابیس محلی
+  // به عنوان قیمت اعمال‌شده بازنویسی نمی‌شود و تصمیم برچسب applied نمی‌خورد!
+  if (!push.ok || push.skipped) {
+    const nextStatus = push.skipped ? "pending_sync" : "sync_failed";
+    const nextPushStatus = push.skipped ? "skipped" : "failed";
+
+    await db
+      .update(priceDecisions)
+      .set({
+        status: nextStatus,
+        pushStatus: nextPushStatus,
+        pushError: push.message,
+        pushAttempts: nextAttempts,
+        lastPushAttemptAt: attemptTime,
+        idempotencyKey,
+      })
+      .where(eq(priceDecisions.id, d.id));
+
+    await logActivity(
+      "apply",
+      `عدم اعمال قیمت ${p.sku} در فروشگاه (${nextStatus}): ${push.message}`,
+      {
+        decisionId: d.id,
+        productId: p.id,
+        status: nextStatus,
+        pushStatus: nextPushStatus,
+        attempts: nextAttempts,
+        code: push.code,
+      },
+      push.skipped ? "warn" : "error",
+    );
+
+    return {
+      ok: false,
+      code: push.code ?? (push.skipped ? "NO_ACTIVE_CONNECTOR" : "STORE_SYNC_FAILED"),
+      status: nextStatus,
+      pushStatus: nextPushStatus,
+      message: push.message,
+      push,
+      idempotencyKey,
+    };
+  }
+
+  const confirmedFinalPrice = push.confirmedPrice ?? d.finalPrice;
+  const updatedSteps = [...(d.steps ?? [])];
+  if (belowCostOverride) {
+    updatedSteps.push({
+      step: "below_cost_override",
+      title: "مجوز ممیزی‌شده فروش زیر قیمت خرید/کف سود",
+      message: `اعمال با مجوز صریح توسط «${belowCostOverride.authorizedBy}» — دلیل: ${belowCostOverride.reason}`,
+      level: "warn",
+      data: {
+        allowBelowCost: true,
+        authorizedBy: belowCostOverride.authorizedBy,
+        reason: belowCostOverride.reason,
+        effectiveCost,
+        effectiveFloor,
+        finalPrice: confirmedFinalPrice,
+        authorizedAt: attemptTime.toISOString(),
+      },
+    });
+  }
+
+  // فقط پس از تایید قطعی فروشگاه، قیمت‌های فعلی محصول و وضعیت applied بروزرسانی می‌شوند
+  await db
+    .update(products)
+    .set({
+      currentBasePrice: d.basePrice,
+      currentFinalPrice: confirmedFinalPrice,
+      currentDiscountPct: d.discountPct,
+      currentCampaign: d.campaignType,
+      currentCampaignName: d.campaignName,
+      currentBadgeTheme: d.badgeTheme ?? "green-orange",
+      currentShowInFeatured: d.showInFeatured ?? false,
+      // P0-3: تایمر کمپین روی خودِ محصول ذخیره می‌شود تا پیوستگی و گارد انقضا کار کند
+      currentCampaignEndsAt: campaignEndsAt ?? (p.currentCampaignEndsAt ?? null),
+      lastDecisionId: d.id,
+      needsRefresh: false,
+      status: "active",
+      updatedAt: new Date(),
+    })
+    .where(eq(products.id, p.id));
+
   await db
     .update(priceDecisions)
     .set({
       status: "applied",
-      pushStatus: push.skipped ? "skipped" : push.ok ? "pushed" : "failed",
-      pushError: push.ok ? null : push.message,
-      pushedAt: new Date(),
+      pushStatus: "pushed",
+      pushError: null,
+      pushedAt: attemptTime,
+      lastPushAttemptAt: attemptTime,
+      pushAttempts: nextAttempts,
+      storeConfirmedPrice: confirmedFinalPrice,
+      idempotencyKey,
+      steps: updatedSteps,
     })
     .where(eq(priceDecisions.id, d.id));
 
-  // S6: پوش موفق = سیگنال مغز خارجی (needsRefresh) برطرف شد
-  if (push.ok) {
-    await db.update(products).set({ needsRefresh: false, updatedAt: new Date() }).where(eq(products.id, p.id));
-  }
-
+  // ۴.۲.۱ (F5): در این ساختار، قیمت محصول فقط پس از تایید قطعی فروشگاه نوشته می‌شود (بالا)؛
+  // بنابراین در شکست push، «قیمت فعلی» موتور همان قیمت قبل از تصمیم می‌ماند و اجرای بعد دوباره تلاش می‌کند.
   await logActivity(
     "apply",
-    `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف نهایی ${d.finalPrice} | کمپین: ${d.campaignType}${campaignEndsAt ? ` تا ${campaignEndsAt.toISOString()}` : ""} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${opts?.force ? " (اعمال اجباری انسانی با force)" : ""}`,
-    { decisionId: d.id, forced: !!opts?.force },
-    push.ok ? "info" : "warn",
+    `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف تاییدشده ${confirmedFinalPrice} | کمپین: ${d.campaignType}${campaignEndsAt ? ` تا ${campaignEndsAt.toISOString()}` : ""} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${resolvedOpts.force ? " (اعمال دستی با force)" : ""}${belowCostOverride ? ` [مجوز زیر خرید توسط ${belowCostOverride.authorizedBy}]` : ""}`,
+    {
+      decisionId: d.id,
+      productId: p.id,
+      forced: !!resolvedOpts.force,
+      belowCostOverride: belowCostOverride ?? undefined,
+      idempotencyKey,
+      confirmedPrice: confirmedFinalPrice,
+      attempts: nextAttempts,
+    },
+    "info",
   );
-  return push;
+
+  return {
+    ok: true,
+    code: push.code ?? "STORE_SYNC_CONFIRMED",
+    status: "applied",
+    pushStatus: "pushed",
+    message: push.message,
+    push,
+    idempotencyKey,
+    confirmedPrice: confirmedFinalPrice,
+  };
+}
+
+export const applyDecisionToStore = applyDecision;
+
+export async function retryDecisionSync(
+  decisionId: number,
+  opts?: ApplyDecisionOptions,
+): Promise<ApplyDecisionResult> {
+  const [d] = await db.select().from(priceDecisions).where(eq(priceDecisions.id, decisionId)).limit(1);
+  if (!d) {
+    return { ok: false, code: "DECISION_NOT_FOUND", message: "تصمیم یافت نشد" };
+  }
+
+  const [newerPushed] = await db
+    .select({ id: priceDecisions.id })
+    .from(priceDecisions)
+    .where(
+      and(
+        eq(priceDecisions.productId, d.productId),
+        eq(priceDecisions.status, "applied"),
+        eq(priceDecisions.pushStatus, "pushed"),
+        gt(priceDecisions.id, d.id),
+      ),
+    )
+    .limit(1);
+
+  if (newerPushed) {
+    const msg = `تصمیم جدیدتر #${newerPushed.id} قبلاً روی فروشگاه اعمال شده است (superseded)`;
+    await db
+      .update(priceDecisions)
+      .set({
+        status: "superseded",
+        pushStatus: "superseded",
+        pushError: msg,
+        lastPushAttemptAt: new Date(),
+      })
+      .where(eq(priceDecisions.id, d.id));
+    return {
+      ok: false,
+      code: "DECISION_SUPERSEDED",
+      status: "superseded",
+      pushStatus: "superseded",
+      message: msg,
+    };
+  }
+
+  return applyDecision(decisionId, opts);
+}
+
+export async function reconcilePendingDecisions(opts?: {
+  limit?: number;
+  productId?: number;
+  force?: boolean;
+  maxAttempts?: number;
+}): Promise<{
+  checked: number;
+  synced: number;
+  failed: number;
+  skipped: number;
+  superseded: number;
+  results: Array<{ decisionId: number; productId: number; ok: boolean; status: string; message: string }>;
+}> {
+  const limit = Math.max(1, Math.min(200, opts?.limit ?? 50));
+  const maxAttempts = Math.max(1, opts?.maxAttempts ?? MAX_AUTO_SYNC_ATTEMPTS);
+
+  const conds = [
+    or(
+      inArray(priceDecisions.status, ["pending_sync", "sync_failed"]),
+      and(eq(priceDecisions.status, "applied"), ne(priceDecisions.pushStatus, "pushed")),
+      and(eq(priceDecisions.status, "applied"), isNull(priceDecisions.pushStatus)),
+    ),
+    lt(priceDecisions.pushAttempts, maxAttempts),
+  ];
+  if (opts?.productId) {
+    conds.push(eq(priceDecisions.productId, opts.productId));
+  }
+
+  const pendingRows = await db
+    .select()
+    .from(priceDecisions)
+    .where(and(...conds))
+    .orderBy(asc(priceDecisions.id))
+    .limit(limit);
+
+  // برای هر محصول فقط آخرین تصمیم در انتظار همگام‌سازی باید اعمال شود و قدیمی‌ترها superseded می‌شوند
+  const latestPendingByProduct = new Map<number, number>();
+  for (const row of pendingRows) {
+    const prev = latestPendingByProduct.get(row.productId) ?? 0;
+    if (row.id > prev) latestPendingByProduct.set(row.productId, row.id);
+  }
+
+  let synced = 0;
+  let failed = 0;
+  let skipped = 0;
+  let superseded = 0;
+  const results: Array<{ decisionId: number; productId: number; ok: boolean; status: string; message: string }> = [];
+
+  for (const row of pendingRows) {
+    const latestPendingId = latestPendingByProduct.get(row.productId) ?? row.id;
+    if (row.id < latestPendingId) {
+      const msg = `تصمیم جدیدتر #${latestPendingId} در صف همگام‌سازی همین محصول وجود دارد (superseded)`;
+      await db
+        .update(priceDecisions)
+        .set({
+          status: "superseded",
+          pushStatus: "superseded",
+          pushError: msg,
+          lastPushAttemptAt: new Date(),
+        })
+        .where(eq(priceDecisions.id, row.id));
+      superseded++;
+      results.push({ decisionId: row.id, productId: row.productId, ok: false, status: "superseded", message: msg });
+      continue;
+    }
+
+    const res = await retryDecisionSync(row.id, { force: opts?.force });
+    const status = res.status ?? (res.ok ? "applied" : "sync_failed");
+    if (res.ok) synced++;
+    else if (status === "superseded") superseded++;
+    else if (res.push?.skipped) skipped++;
+    else failed++;
+
+    results.push({
+      decisionId: row.id,
+      productId: row.productId,
+      ok: res.ok,
+      status,
+      message: res.message,
+    });
+  }
+
+  return {
+    checked: pendingRows.length,
+    synced,
+    failed,
+    skipped,
+    superseded,
+    results,
+  };
 }
 
 export async function rejectDecision(decisionId: number): Promise<void> {

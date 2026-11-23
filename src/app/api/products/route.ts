@@ -1,5 +1,6 @@
 import { db } from "@/db";
 import { products } from "@/db/schema";
+import { requireAdminAuth } from "@/lib/auth";
 import { parseColleaguePriceListText, resolveSupplyCost } from "@/lib/pricing/sourcing";
 import type { SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig } from "@/lib/services/bootstrap";
@@ -9,12 +10,18 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const rows = await db.select().from(products).orderBy(desc(products.updatedAt));
   return NextResponse.json(rows);
 }
 
 export async function POST(req: Request) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const body = await req.json().catch(() => null);
   if (!body?.sku || !body?.name) return NextResponse.json({ error: "sku و name الزامی است" }, { status: 400 });
   if (body.sourceType != null && body.sourceType !== "" && !isAllowedSourceType(String(body.sourceType))) {
@@ -61,6 +68,7 @@ export async function POST(req: Request) {
         minProfitAmount,
         preferredCampaignType: body.preferredCampaignType ? String(body.preferredCampaignType) : "auto",
         autoApply: body.autoApply !== false,
+        showInFeatured: Boolean(body.showInFeatured ?? false),
         profileId: body.profileId ? Number(body.profileId) : null,
       })
       .returning();

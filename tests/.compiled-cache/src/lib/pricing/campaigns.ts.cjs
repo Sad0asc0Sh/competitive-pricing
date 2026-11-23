@@ -55,6 +55,19 @@ function pickCampaign(campaigns, input) {
             reason: "کمپین تخفیف برای این کارت به صورت دستی غیرفعال شده است",
         };
     }
+    // بدون تخفیف مثبت (> 0%) هیچ کمپینی نباید فعال شود (حتی اگر صراحتاً هدف‌گذاری شده باشد)
+    if (!Number.isFinite(input.discountPct) || input.discountPct <= 0) {
+        return {
+            type: "none",
+            campaignId: null,
+            name: "بدون کمپین",
+            campaignName: null,
+            badgeTheme: "green-orange",
+            showInFeatured: false,
+            endsAt: null,
+            reason: "درصد تخفیف صفر است — کمپین تخفیف بدون تخفیف واقعی فعال نمی‌شود",
+        };
+    }
     // گیت واقعی بودنِ افت قیمت برای flash: مرجع own_price_7d + افت ≥ ۸٪ نسبت به میانگین ۷ روزه خودی
     const ownAvg = Math.round(Number(input.ownAvg7d ?? 0));
     const realDropPct = ownAvg > 0 && price > 0 ? ((ownAvg - price) / ownAvg) * 100 : null;
@@ -70,6 +83,23 @@ function pickCampaign(campaigns, input) {
         .filter((c) => c.active)
         .sort((a, b) => explicitlyFor(b) - explicitlyFor(a) || b.priority - a.priority);
     const eligible = sortedCampaigns.filter((c) => {
+        // بررسی زمان شروع، انقضا و مدت‌زمان معتبر کمپین
+        const rawStartsAt = c.startsAt;
+        if (rawStartsAt) {
+            const startDate = rawStartsAt instanceof Date ? rawStartsAt : new Date(rawStartsAt);
+            if (!Number.isNaN(startDate.getTime()) && now.getTime() < startDate.getTime())
+                return false;
+        }
+        const rawEndsAt = c.endsAt ??
+            c.expiresAt;
+        if (rawEndsAt) {
+            const endDate = rawEndsAt instanceof Date ? rawEndsAt : new Date(rawEndsAt);
+            if (!Number.isNaN(endDate.getTime()) && now.getTime() >= endDate.getTime())
+                return false;
+        }
+        if (c.durationHours != null && Number.isFinite(Number(c.durationHours)) && Number(c.durationHours) <= 0) {
+            return false;
+        }
         const isExplicitlyTargeted = (Array.isArray(c.targetProductIds) &&
             input.productId != null &&
             c.targetProductIds.includes(input.productId)) ||
@@ -177,6 +207,16 @@ function pickCampaign(campaigns, input) {
                 ? "red-purple"
                 : "green-orange");
     const showInFeatured = input.preferredShowInFeatured ?? c.showInFeatured ?? true;
+    const safeDurationHours = c.durationHours != null && Number.isFinite(Number(c.durationHours)) && Number(c.durationHours) > 0
+        ? Number(c.durationHours)
+        : 24;
+    const explicitEnd = c.endsAt ??
+        c.expiresAt;
+    const parsedExplicitEnd = explicitEnd ? (explicitEnd instanceof Date ? explicitEnd : new Date(explicitEnd)) : null;
+    const computedEnd = new Date(now.getTime() + safeDurationHours * 3600 * 1000);
+    const endsAt = parsedExplicitEnd && !Number.isNaN(parsedExplicitEnd.getTime()) && parsedExplicitEnd.getTime() > now.getTime()
+        ? new Date(Math.min(parsedExplicitEnd.getTime(), computedEnd.getTime()))
+        : computedEnd;
     return {
         type: cType,
         campaignId: c.id,
@@ -184,7 +224,7 @@ function pickCampaign(campaigns, input) {
         campaignName: c.name,
         badgeTheme,
         showInFeatured,
-        endsAt: new Date(now.getTime() + c.durationHours * 3600 * 1000),
+        endsAt,
         reason: `کمپین «${c.name}» (${TYPE_TITLE[cType] ?? cType}` +
             `${cType === "timed_sale" ? ` · ${showInFeatured ? "نمایش در منتخب‌های صفحه اصلی" : "فقط تخفیف بدون شلوغی صفحه اصلی"}` : ""}) ` +
             `با تخفیف ${input.discountPct}% روی سقف و ردیف کارت #${cardIdxLabel}` +

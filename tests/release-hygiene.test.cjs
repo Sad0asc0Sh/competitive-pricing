@@ -24,6 +24,21 @@ test('H1. کش کامپایل تست با منبع فعلی همگام است (�
   assert.ok(res.ok, res.problems.slice(0, 8).join('\n'))
 })
 
+test('H1b. v4.2.1: هش کش مستقل از پایان‌خط است (چک‌اوت ویندوزی CRLF و لینوکسی LF هر دو تازه می‌مانند)', () => {
+  const { sha256 } = require(path.join(root, 'scripts', 'build-test-cache.cjs'))
+  assert.equal(sha256('const a = 1\r\nconst b = 2\r\n'), sha256('const a = 1\nconst b = 2\n'))
+  assert.notEqual(sha256('const a = 1\n'), sha256('const a = 2\n'))
+})
+
+test('H1c. v4.2.1: require کردن scripts/build-test-cache.cjs اثر جانبی ندارد (کش/manifest را بازسازی نمی‌کند)', () => {
+  const crypto = require('node:crypto')
+  const manifest = path.join(root, 'tests', '.compiled-cache', 'manifest.json')
+  const digest = () => crypto.createHash('sha256').update(fs.readFileSync(manifest)).digest('hex')
+  const before = digest()
+  require('node:child_process').execFileSync(process.execPath, ['-e', "require('./scripts/build-test-cache.cjs')"], { cwd: root, stdio: 'pipe' })
+  assert.equal(digest(), before, 'require باید فقط توابع را صادر کند؛ ساخت کش فقط با اجرای مستقیم اسکریپت انجام شود')
+})
+
 test('H2. هر فایل tests/*.test.cjs در اسکریپت test و در verify-release (که از package.json می‌خواند) ثبت است', () => {
   const pkg = JSON.parse(read('package.json'))
   const listed = new Set(String(pkg.scripts.test).split(/\s+/).filter((t) => /^tests\/.+\.test\.cjs$/.test(t)))

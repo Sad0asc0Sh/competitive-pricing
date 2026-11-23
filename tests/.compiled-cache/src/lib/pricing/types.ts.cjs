@@ -32,7 +32,9 @@ exports.DEFAULT_PROFILE_CONFIG = {
         includeInPersonSellers: true,
         minShopScore: 0,
         shopBlacklist: [],
-        ownShopNames: ["sgeooole", "ekgkala", "ای کا جی کالا", "ای‌کا‌جی کالا"],
+        // ۴.۲.۱: املاهای رایج دیگر (ای کی جی کالا، ایکاجی…) همیشه در own-shop.ts افزوده می‌شوند؛ این فهرست برای نام‌های اضافهٔ خاص شماست.
+        ownShopNames: ["sgeooole", "ekgkala", "ای کا جی کالا", "ای‌کا‌جی کالا", "ای کی جی کالا"],
+        ownShopIds: [],
     },
     outliers: {
         method: "iqr",
@@ -135,7 +137,7 @@ exports.DEFAULT_PROFILE_CONFIG = {
         autoApply: false,
     },
     engine: {
-        version: "4.2.0",
+        version: "4.2.1",
     },
     estimator: {
         mode: "v2",

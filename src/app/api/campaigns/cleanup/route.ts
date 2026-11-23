@@ -1,9 +1,13 @@
+import { requireAdminAuth } from "@/lib/auth";
 import { cleanupWrongTimedSaleCards } from "@/lib/services/runner";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   try {
     const body = (await req.json().catch(() => ({}))) as { productId?: number };
     const out = await cleanupWrongTimedSaleCards({

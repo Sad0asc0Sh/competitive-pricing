@@ -380,3 +380,56 @@ test('K14. CLI export (pg جعلی): فقط SELECT می‌زند، ممیزی (�
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('K15. تصمیم‌های شبیه‌سازی‌شده (isSimulated / manual / simulation_guard) هرگز وارد ردیف‌های کالیبراسیون نمی‌شوند', () => {
+  const rob = { step: 'robustness', data: { pRight: 0.94, pNoneValid: 0.02 } }
+  const dec = { step: 'decision', data: { needsReview: true }, message: '' }
+  const decisions = [
+    {
+      id: 201,
+      source: 'torob',
+      isSimulated: false,
+      validationSource: 'shadow_torob',
+      status: 'applied',
+      finalPrice: 1500000,
+      confidence: 0.91,
+      steps: [rob, dec],
+      createdAt: '2026-10-15T10:00:00Z',
+    },
+    {
+      id: 202,
+      source: 'torob',
+      isSimulated: true,
+      validationSource: 'simulated',
+      status: 'applied',
+      finalPrice: 1500000,
+      confidence: 0.91,
+      steps: [rob, dec],
+      createdAt: '2026-10-15T11:00:00Z',
+    },
+    {
+      id: 203,
+      source: 'manual',
+      isSimulated: false,
+      status: 'applied',
+      finalPrice: 1500000,
+      confidence: 0.91,
+      steps: [rob, dec],
+      createdAt: '2026-10-15T12:00:00Z',
+    },
+    {
+      id: 204,
+      source: 'torob',
+      status: 'applied',
+      finalPrice: 1500000,
+      confidence: 0.91,
+      steps: [rob, dec, { step: 'simulation_guard', data: { isSimulated: true } }],
+      createdAt: '2026-10-15T13:00:00Z',
+    },
+  ]
+
+  const built = rows.buildRows(decisions)
+  assert.equal(built.rows.length, 1)
+  assert.equal(built.rows[0].decisionId, 201)
+  assert.equal(built.skipped.simulated, 3)
+})

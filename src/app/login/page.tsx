@@ -8,6 +8,7 @@ function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
   const next = search.get("next") || "/";
+  const authNotConfigured = search.get("error") === "auth_not_configured";
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -44,6 +45,11 @@ function LoginForm() {
             این بخش فقط برای مدیر سیستم است
           </p>
         </div>
+        {authNotConfigured && (
+          <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            ⚠️ احراز هویت در حالت Fail-Closed قفل است: لطفاً متغیرهای <code dir="ltr">ADMIN_PASSWORD</code> و <code dir="ltr">SESSION_SECRET</code> را روی سرور تنظیم کنید.
+          </p>
+        )}
         <label className="label" htmlFor="admin-password">
           رمز عبور مدیر
         </label>

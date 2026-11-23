@@ -3,19 +3,26 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.GET = GET;
 exports.POST = POST;
-const db_1 = require("@/db");
+const index_ts_1 = require("../../../db/index.ts");
 const schema_1 = require("../../../db/schema");
+const auth_1 = require("../../../lib/auth");
 const sourcing_1 = require("../../../lib/pricing/sourcing");
 const bootstrap_1 = require("../../../lib/services/bootstrap");
 const registry_1 = require("../../../lib/sources/registry");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
-async function GET() {
-    const rows = await db_1.db.select().from(schema_1.products).orderBy((0, drizzle_orm_1.desc)(schema_1.products.updatedAt));
+async function GET(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
+    const rows = await index_ts_1.db.select().from(schema_1.products).orderBy((0, drizzle_orm_1.desc)(schema_1.products.updatedAt));
     return server_1.NextResponse.json(rows);
 }
 async function POST(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const body = await req.json().catch(() => null);
     if (!body?.sku || !body?.name)
         return server_1.NextResponse.json({ error: "sku و name الزامی است" }, { status: 400 });
@@ -39,7 +46,7 @@ async function POST(req) {
             minProfitAmountOverride: minProfitAmount,
             config,
         });
-        const [row] = await db_1.db
+        const [row] = await index_ts_1.db
             .insert(schema_1.products)
             .values({
             sku: String(body.sku).trim(),
@@ -58,6 +65,7 @@ async function POST(req) {
             minProfitAmount,
             preferredCampaignType: body.preferredCampaignType ? String(body.preferredCampaignType) : "auto",
             autoApply: body.autoApply !== false,
+            showInFeatured: Boolean(body.showInFeatured ?? false),
             profileId: body.profileId ? Number(body.profileId) : null,
         })
             .returning();

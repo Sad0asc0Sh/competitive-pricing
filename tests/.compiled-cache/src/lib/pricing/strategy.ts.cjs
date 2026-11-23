@@ -4,25 +4,50 @@ exports.computeUndercutDelta = computeUndercutDelta;
 exports.decideTargetPrice = decideTargetPrice;
 exports.evaluateCompetitivePosition = evaluateCompetitivePosition;
 const fa = (n) => (n == null ? "—" : Math.round(n).toLocaleString("fa-IR"));
+function isDefaultUndercutTiers(tiers) {
+    if (!Array.isArray(tiers) || tiers.length !== 4)
+        return false;
+    return (tiers[0]?.upTo === 2_000_000 &&
+        tiers[0]?.amount === 1_000 &&
+        tiers[1]?.upTo === 10_000_000 &&
+        tiers[1]?.amount === 2_000 &&
+        tiers[2]?.upTo === 30_000_000 &&
+        tiers[2]?.amount === 5_000 &&
+        tiers[3]?.upTo === null &&
+        tiers[3]?.amount === 10_000);
+}
 /**
  * محاسبه مقدار کاهش زیر قیمت رقیب (Undercut) برای قرارگیری در رتبه اول.
- * نسخه ۴.۱: اگر پله‌های undercut (undercutTiers) پیکربندی شده باشند، فقط مبلغ پله‌ی متناسب با سطح انکر استفاده می‌شود
- * (مثلاً کالاهای زیر ۲ میلیون → ۱ هزار، زیر ۱۰ میلیون → ۲ هزار، زیر ۳۰ میلیون → ۵ هزار، بالاتر → ۱۰ هزار تومان)؛
- * پیکربندی قدیمی (undercutAmount + undercutPct) فقط وقتی پله‌ای تعریف نشده به‌کار می‌رود.
+ * نسخه ۴.۱ / ۴.۲: اگر پله‌های undercut (undercutTiers) پیکربندی شده باشند، مبلغ پله‌ی متناسب با سطح انکر محاسبه می‌شود؛
+ * و اگر اپراتور صریحاً `undercutAmount` (متفاوت از پیش‌فرض ۱,۰۰۰) یا `undercutPct` (> 0) را تنظیم کرده باشد،
+ * تنظیم کاربر در محاسبهٔ نهایی اعمال می‌گردد تا هیچ فیلد پیکربندی بی‌اثر نماند.
  */
 function computeUndercutDelta(competitorPrice, cfg) {
+    const safePrice = Number.isFinite(competitorPrice) && competitorPrice > 0 ? competitorPrice : 0;
+    const pctDelta = cfg.undercutPct != null && Number.isFinite(cfg.undercutPct) && cfg.undercutPct > 0
+        ? Math.round((safePrice * Math.max(0, cfg.undercutPct)) / 100)
+        : 0;
+    const customAmount = cfg.undercutAmount != null && Number.isFinite(cfg.undercutAmount) && cfg.undercutAmount > 0 && cfg.undercutAmount !== 1000
+        ? Math.round(cfg.undercutAmount)
+        : 0;
     const tiers = cfg.undercutTiers ?? [];
     if (tiers.length) {
+        let tierAmount = Math.max(1, Math.round(tiers[tiers.length - 1].amount));
         for (const t of tiers) {
-            if (t.upTo == null || competitorPrice <= t.upTo) {
-                return Math.max(1, Math.round(t.amount));
+            if (t.upTo == null || safePrice <= t.upTo) {
+                tierAmount = Math.max(1, Math.round(t.amount));
+                break;
             }
         }
-        const last = tiers[tiers.length - 1];
-        return Math.max(1, Math.round(last.amount));
+        if (isDefaultUndercutTiers(tiers) && customAmount > 0) {
+            return Math.max(1, customAmount, pctDelta);
+        }
+        return Math.max(1, tierAmount, pctDelta, customAmount);
     }
-    const pctDelta = Math.round((competitorPrice * Math.max(0, cfg.undercutPct)) / 100);
-    return Math.max(cfg.undercutAmount, pctDelta, 1000);
+    const fallbackAmount = cfg.undercutAmount != null && Number.isFinite(cfg.undercutAmount) && cfg.undercutAmount > 0
+        ? Math.round(cfg.undercutAmount)
+        : 1000;
+    return Math.max(fallbackAmount, pctDelta, 1);
 }
 function decideTargetPrice(market, cfg, supply, opts) {
     if (market.reference == null || market.lowest == null) {
@@ -124,10 +149,53 @@ function decideTargetPrice(market, cfg, supply, opts) {
         }
     }
     // =========================================================================
-    // (نسخه ۴.۱) رژیم «قیمت‌گذار معیار بازار (Market-Maker Consensus)» حذف شد:
-    // مسیر بی‌هزینه دیگر اجماع ترب را به کف شما نگیرِ خودکار تبدیل نمی‌کند؛ به جایش در موتور
-    // قیمت Provisional (صدک پایین پول به‌روز و معتبر) می‌سازد و به رِیویو می‌فرستد (P2-3).
+    // الف) رژیم «قیمت‌گذار معیار بازار (Market-Maker Consensus)»
+    // فقط زمانی فعال می‌شود که محصول فاقد قیمت خرید است و deriveSafeMarketConsensusSupply
+    // کف امن اجماع بازار (usedMarketConsensusFloor=true) را ساخته باشد.
     // =========================================================================
+    if (supply?.usedMarketConsensusFloor) {
+        const safeFloor = hardFloor;
+        const upperCap = market.upperBenchmarkPrice ?? Math.round(safeFloor * 1.08);
+        // ۱) آیا در شهر پیش‌فرض (مشهد) فروشنده‌ای در باند امن (بالای کف امن بازار) داریم تا سرگروه مشهد در باند امن شویم؟
+        const safeLocalSeller = market.localCity.offers.find((o) => o.price >= safeFloor && o.price <= upperCap);
+        if (cfg.competeInDefaultCity && safeLocalSeller) {
+            const undercut = computeUndercutDelta(safeLocalSeller.price, cfg);
+            const target = Math.max(safeFloor, safeLocalSeller.price - undercut);
+            return {
+                strategy: "market_maker_consensus",
+                competitionTier: "market_maker_consensus",
+                targetPrice: target,
+                explanation: `قیمت‌گذار معیار بازار (بدون لیست خرید — صدر باند امن ${defaultCity}): پس از حذف قیمت‌های قدیمی/پرت، ` +
+                    `کف امن بازار ${fa(safeFloor)} تومان تعیین شد و با قرارگیری زیر فروشنده به‌روز ${defaultCity} («${safeLocalSeller.shopName}»: ${fa(safeLocalSeller.price)})، ` +
+                    `قیمت قطعی ${fa(target)} تومان انتخاب گردید`,
+            };
+        }
+        // ۲) آیا در کل ترب فروشنده‌ای در باند امنِ هسته بازار (بالای safeFloor) داریم تا سرگروه فروشندگان به‌روز شویم؟
+        const safeNationalSeller = market.clusters
+            .flatMap((c) => c.offers)
+            .sort((a, b) => a.price - b.price)
+            .find((o) => o.price > safeFloor && o.price <= upperCap);
+        if (safeNationalSeller) {
+            const undercut = computeUndercutDelta(safeNationalSeller.price, cfg);
+            const target = Math.max(safeFloor, safeNationalSeller.price - undercut);
+            return {
+                strategy: "market_maker_consensus",
+                competitionTier: "market_maker_consensus",
+                targetPrice: target,
+                explanation: `قیمت‌گذار معیار بازار (بدون لیست خرید — سرگروه فروشندگان به‌روز ترب): با حذف ارزان‌فروشان مشکوک به عدم آپدیت، ` +
+                    `هسته چگال بازار ${fa(market.modalConsensus)} تومان و کف امن ${fa(safeFloor)} تومان است → ` +
+                    `قیمت قطعی ${fa(target)} تومان (در صدر خوشه فروشندگان به‌روز، جلوی «${safeNationalSeller.shopName}» با ${fa(safeNationalSeller.price)}) تعیین شد`,
+            };
+        }
+        // ۳) قرارگیری مستقیم روی قیمت معیار امن بازار
+        return {
+            strategy: "market_maker_consensus",
+            competitionTier: "market_maker_consensus",
+            targetPrice: safeFloor,
+            explanation: `قیمت‌گذار معیار بازار (بدون لیست خرید): بر اساس اجماع فروشندگان به‌روز ترب (مد بازار ${fa(market.modalConsensus)} و میانگین وزنی بریده ${fa(market.trimmedWeightedMean)})، ` +
+                `قیمت معیار امن ${fa(safeFloor)} تومان تعیین شد`,
+        };
+    }
     if (!cfg.enabled) {
         const refTarget = Math.max(hardFloor, ref);
         return {

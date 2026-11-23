@@ -1,7 +1,8 @@
+import { resolveSubqRuntime } from "@/lib/ai/config";
+import { requireAdminAuth } from "@/lib/auth";
 import { runPricingPipeline } from "@/lib/pricing/engine";
 import { parseColleaguePriceListText } from "@/lib/pricing/sourcing";
 import { enrichSupervisorWithSubqApi } from "@/lib/pricing/systemone-supervisor";
-import { resolveSubqRuntime } from "@/lib/ai/config";
 import type { RawOffer, SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig, mergeConfig } from "@/lib/services/bootstrap";
 import { NextResponse } from "next/server";
@@ -9,6 +10,9 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const b = (await req.json().catch(() => null)) as {
     productName?: string;
     torobTitle?: string;
@@ -34,11 +38,13 @@ export async function POST(req: Request) {
     }[];
   } | null;
 
-  // سیستم واقعی بدون داده ساختگی: نام محصول و حداقل ۲ پیشنهاد معتبر الزامی است؛
-  // هیچ مقدار پیش‌فرض نمونه‌ای (مثل دوربین داهوا) برنمی‌گردانیم.
-  if (!b?.productName?.trim()) return NextResponse.json({ error: "نام محصول (productName) الزامی است" }, { status: 400 });
+  if (!b?.productName?.trim())
+    return NextResponse.json({ error: "نام محصول (productName) الزامی است" }, { status: 400 });
   if (!Array.isArray(b?.offers) || b.offers.length < 2)
-    return NextResponse.json({ error: "حداقل ۲ پیشنهاد رقیب (offers) برای شبیه‌سازی واقعی لازم است" }, { status: 400 });
+    return NextResponse.json(
+      { error: "حداقل ۲ پیشنهاد رقیب (offers) برای شبیه‌سازی واقعی لازم است" },
+      { status: 400 }
+    );
 
   let baseCfg;
   try {
@@ -83,7 +89,8 @@ export async function POST(req: Request) {
       source: "manual",
       productTitle: simTorobTitle,
       offers,
-      totalSellerCount: b.totalSellerCount && b.totalSellerCount >= offers.length ? b.totalSellerCount : offers.length,
+      totalSellerCount:
+        b.totalSellerCount && b.totalSellerCount >= offers.length ? b.totalSellerCount : offers.length,
       fetchedAt: now,
       ok: true,
     },
@@ -108,7 +115,6 @@ export async function POST(req: Request) {
       baseUrl: subqRuntime.baseUrl,
       model: subqRuntime.model,
     });
-    // همگام‌سازی پرچم‌های رد/ریویو با حکم واقعی API ناظر (اگر توکن ثبت شده باشد)
     result.rejectedBySupervisor = result.supervisor.verdict === "reject";
     if (result.rejectedBySupervisor) {
       if (!result.reviewReasons.some((r) => r.startsWith("رد توسط ناظر بالاسر SystemOne"))) {

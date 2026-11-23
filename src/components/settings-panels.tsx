@@ -20,7 +20,8 @@ const labels: Record<string, string> = {
   staleSafetyBufferPct: "ضریب احتیاط روی لیست قدیمی همکاران ٪",
   neverBelowManualCost: "هرگز کمتر از قیمت خرید ثبت‌شده انبار نباشد (سازگاری قدیمی)",
   costPolicy: "سیاست تقاطع هزینه انبار و قیمت ریپلیس (replacement_floor | max_inventory_replacement | legacy_never_below_manual)",
-  allowAutoApplyWithoutCost: "اعمال خودکار قیمت معیار بازار حتی در نبود لیست/قیمت خرید (Provisional همیشه ریویو است)",
+  allowAutoApplyWithoutCost: "اعمال خودکار قیمت معیار بازار حتی در نبود لیست/قیمت خرید (پیش‌فرض غیرفعال = همیشه ریویو)",
+  allowMarketMakerWithoutCost: "مجوز صریح سیاست تجاری Market-Maker در نبود قیمت خرید (پیش‌فرض غیرفعال)",
   costlessSafePercentile: "صدک امن بازار در نبود لیست خرید (حذف نیمه ارزان مشکوک)",
   costlessSafetyMarginPct: "حاشیه ایمنی ضدضرر روی هسته بازار در نبود لیست خرید ٪",
   impliedCostBackoffPct: "فاصله تخمینی قیمت خرید از کف امن بازار در نبود لیست ٪",
@@ -33,14 +34,19 @@ const labels: Record<string, string> = {
   includeInPersonSellers: "لحاظ کردن فروشندگان حضوری مشهد در رقابت محلی",
   minShopScore: "حداقل امتیاز فروشگاه رقیب در ترب (۰ تا ۵)",
   shopBlacklist: "لیست سیاه فروشگاه‌ها (کاما)",
-  ownShopNames: "نام فروشگاه خودمان در ترب (کاما)",
+  ownShopNames: "نام فروشگاه خودمان در ترب (کاما)؛ املاهای رایج برند همیشه خودکار شناخته می‌شوند",
+  ownShopIds: "شناسهٔ فروشندهٔ خودمان در ترب (shop_id، کاما) — دقیق‌ترین راه؛ پس از دیدن پیام «پژواک قیمت خودی» از گزارش تصمیم بردارید",
   outliers: "۲) حذف داده‌های پرت و فروشندگان غیربه‌روز",
-  method: "روش آماری حذف پرت",
+  method: "روش آماری/تجمیع",
   iqrK: "ضریب IQR",
   madK: "ضریب MAD",
   hardBandPct: "باند سخت بالای میانه بازار ٪ (حذف گران‌فروشان پرت)",
   lowerStaleBandPct: "باند سخت پایین حول میانه فروشندگان تازه ٪ (حذف ارزان‌فروشان آپدیت‌نشده)",
   minSamples: "حداقل نمونه برای روش آماری",
+  classifyClusterPct: "حداکثر فاصله گروه خرید هم‌قیمت ٪ (تشخیص هسته تاییدشده R0)",
+  suspectLowBandPct: "باند بدگمانی پایین R1 زیر مرجع ٪ (تشخیص دام قیمتی)",
+  freshCutoffDays: "آستانه تازگی «به‌روز» برای طبقه‌بندی R0/R1 (روز)",
+  minClusterMembers: "حداقل اعضای خوشه برای تایید هسته R0",
   aggregation: "۳) تجمیع و کشف قیمت معیار بازار",
   trimPct: "درصد برش دو سر بازار (trimmed mean)",
   recencyHalfLifeDays: "نیمه‌عمر وزن تازگی (روز)",
@@ -57,6 +63,8 @@ const labels: Record<string, string> = {
   highTrustScoreThreshold: "حداقل امتیاز فروشگاه‌های خوش‌نام (High-Trust)",
   undercutAmount: "کاهش زیر قیمت رقیب هدف (تومان)",
   undercutPct: "کاهش زیر قیمت رقیب هدف ٪",
+  leaderGapPct: "حداکثر فاصله مجاز از رهبر منفرد در حالت پریمیوم ٪",
+  leaderMinMarginPct: "حداقل حاشیه سود برای دنبال‌کردن رهبر منفرد ٪",
   leaderPremiumMode: "حالت premium رهبر منفرد: نشستن بالای رهبر (پیش‌فرض false: رتبه ۱ زیر رهبر یا زیر بدنه بازار)",
   localMonopolyDiscountFromRefPct: "تخفیف زیر مرجع کشوری در زمان تک‌فروشندگی در مشهد ٪",
   fallbackToReference: "در اختلاف زیاد، روی مرجع بمان",
@@ -68,19 +76,25 @@ const labels: Record<string, string> = {
   strictAboveCost: "تضمین مطلق قیمت فروش > قیمت خرید و تامین",
   guards: "۶) محافظ‌ها و پایداری",
   maxChangePctPerRun: "حداکثر تغییر قیمت در هر اجرا ٪",
+  maxIncreasePct: "سقف مجاز افزایش قیمت در هر اجرا ٪",
+  maxDecreasePct: "سقف مجاز کاهش قیمت در هر اجرا ٪",
+  maxDailyChangePct: "سقف مجاز تغییرات تجمعی ۲۴ ساعته ٪",
   minConfidenceAutoApply: "حداقل اعتماد برای اعمال خودکار (0-1)",
   minValidOffers: "حداقل پیشنهاد معتبر",
   hysteresisPct: "آستانه هیسترزیس (جلوگیری از نوسان جزئی) ٪",
+  minFreshRatio: "حداقل نسبت پیشنهادهای به‌روز از کل معتبرها (0-1)",
   profitApproveMarginPct: "حداقل حاشیه سود برای اعمال خودکار ٪ (۰ = هر قیمت بالای کف سود؛ بیشتر = ریویو)",
   discount: "۷) کشف سقف واقعی بازار (معیار تخفیف) و اعمال درصد تخفیف روی کف",
   mode: "روش کشف سقف قیمت بازار (معیار تخفیف)",
-  basePriceMode: "روش پایه سنتی (سازگاری)",
+  basePriceMode: "روش پایه کشف سقف (basePriceMode)",
   marketUpperPercentile: "صدک سقف بازار تحت رصد (مثلاً ۸۵ یعنی صدک ۸۵ فروشندگان معتبر بدون پرت)",
   maxCeilingAboveMedianPct: "حداکثر فاصله مجاز سقف از میانه بازار ٪ (سپر ضد قیمت پرت)",
   calibrateCeilingForExactFloor: "کالیبراسیون دقیق سقف تا با درصد تخفیف صحیح دقیقاً به کف هدف برسد",
   markupPct: "درصد افزایش روی کف (در حالت markup یا نبود داده)",
   minDiscountPct: "حداقل درصد تخفیف روی سقف ٪",
   maxDiscountPct: "حداکثر درصد تخفیف روی سقف ٪",
+  ownPriceWindowDays: "پنجره تاریخی قیمت خودی برای مرجع تخفیف (روز)",
+  ownPriceMinHoldHours: "حداقل دوام قیمت خودی برای تبدیل به مرجع تخفیف (ساعت)",
   rounding: "۸) گرد کردن قیمت‌ها",
   finalStep: "گام گرد کردن قیمت کف (نهایی)",
   baseStep: "گام گرد کردن قیمت سقف (معیار)",
@@ -91,8 +105,28 @@ const labels: Record<string, string> = {
   rejectBelowPct: "آستانه رد کامل ٪ (زیر این درصد = رد فوری و عدم ورود به سیستم)",
   approveAbovePct: "آستانه تایید خودکار ٪ (بین رد تا این عدد = ریویو | بالای این عدد = تایید و ادامه خودکار)",
   strictGateVeto: "قانون وتوی سخت‌گیرانه (اگر حتی ۱ مقیاس رد شود، کل تصمیم متوقف شود)",
+  shareCostWithApi: "ارسال اعداد خام هزینه/کف سود به API خارجی SubQ (پیش‌فرض false = محرمانگی کامل)",
   ai: "۱۰) هوش مصنوعی مکمل",
   reviewBelowConfidence: "بازبینی AI وقتی اعتماد کمتر از",
+  costless: "۱۱) مسیر کالاهای بدون قیمت خرید (Provisional)",
+  provisionalPercentile: "صدک استخراج قیمت موقت بازار در نبود قیمت خرید",
+  minCredibleFresh: "حداقل فروشندگان معتبر و به‌روز برای فعال‌شدن قیمت موقت",
+  autoApply: "اجازه اعمال خودکار قیمت موقت بدون قیمت خرید (پیش‌فرض false = همیشه ریویو)",
+  engine: "۱۲) نسخه موتور",
+  version: "نسخه موتور قیمت‌گذاری",
+  estimator: "۱۳) تخمین‌گر احتمالی نسخه ۲ (Estimator v2)",
+  validityModel: "مدل احتمالی اعتبار پیشنهادها (Validity Model)",
+  softStaleness: "کاهش نرم وزن قدمت به‌جای حذف سخت سنی",
+  hardMaxOfferAgeDays: "سقف مطلق سن پیشنهاد در حالت نرم (روز)",
+  guaranteeFix: "اصلاح تشخیص گارانتی معتبر در برابر disabled",
+  competitivenessCostRatio: "نسبت وزن رقابت به حفظ حاشیه سود",
+  marketConflictByProbability: "تشخیص تعارض بازار بر اساس احتمال اعتبار",
+  conflictMinProb: "حداقل احتمال اعتبار برای ثبت تعارض بازار (0-1)",
+  truncationAware: "لحاظ کردن برش لیست فروشندگان ترب (Truncation-Aware)",
+  confirmedAnchorOverridesGap: "اولویت لنگر تاییدشده با احتمال بالا بر سقف فاصله مرجع",
+  anchorOverrideMinProb: "حداقل احتمال اعتبار لنگر برای عبور از سقف فاصله (0-1)",
+  anchorOverrideMaxGapPct: "حداکثر فاصله مجاز لنگر تاییدشده از مرجع ٪",
+  adaptiveClusterRadius: "شعاع خوشه‌بندی تطبیقی بر اساس پراکندگی بازار",
 };
 
 const gateTitles: Record<string, string> = {
@@ -103,36 +137,50 @@ const gateTitles: Record<string, string> = {
 };
 
 const selectOptions: Record<string, { value: string; label: string }[]> = {
-  selectionMode: [
+  "sourcing.selectionMode": [
     { value: "priority_then_lowest", label: "اولویت همکار مشهد/معتبر، سپس ارزان‌ترین" },
     { value: "lowest_valid", label: "ارزان‌ترین همکار معتبر" },
     { value: "conservative_high", label: "محافظه‌کارانه (بالاترین همکار معتبر)" },
     { value: "weighted_priority", label: "میانگین وزنی اولویت همکاران" },
   ],
-  costPolicy: [
+  "sourcing.costPolicy": [
     { value: "replacement_floor", label: "کف از قیمت ریپلیس (هشدار در صورت عبور از هزینه انبار)" },
     { value: "max_inventory_replacement", label: "کف از بیشینه هزینه انبار و ریپلیس (محافظه‌کارانه)" },
     { value: "legacy_never_below_manual", label: "سازگاری ۳.۶: هرگز کمتر از هزینه انبار" },
   ],
-  method: [
+  "outliers.method": [
     { value: "iqr", label: "ترکیبی IQR + MAD + باند فروشندگان تازه (پیشنهادی)" },
     { value: "mad", label: "انحراف مطلق از میانه (MAD)" },
     { value: "band", label: "باند درصدی حول میانه" },
   ],
-  mode: [
+  "aggregation.method": [
+    { value: "trimmed_weighted_mean", label: "میانگین وزنی بریده (trimmed_weighted_mean — پیشنهادی)" },
+    { value: "median", label: "میانه (median)" },
+    { value: "weighted_mean", label: "میانگین وزنی (weighted_mean)" },
+    { value: "modal_consensus", label: "هسته چگال بازار (modal_consensus)" },
+  ],
+  "discount.mode": [
     { value: "market_percentile_ceiling", label: "صدک بالای بازار تحت رصد (حذف کامل پرت‌ها — پیشنهادی)" },
     { value: "highest_valid_seller", label: "بالاترین فروشنده معتبر بازار (محصور در سپر ضدپرت)" },
     { value: "trimmed_upper_cluster", label: "میانگین نیمه بالایی فروشندگان معتبر بازار" },
     { value: "markup", label: "افزایش درصدی ثابت روی کف هدف (Markup)" },
+  ],
+  "discount.basePriceMode": [
+    { value: "market_ceiling", label: "سقف اصولی بازار (market_ceiling)" },
+    { value: "market_upper", label: "صدک بالای بازار (market_upper)" },
+    { value: "cluster_ceiling", label: "سقف خوشه بالایی (cluster_ceiling)" },
+    { value: "markup", label: "افزایش درصدی روی کف (markup)" },
+  ],
+  "supervisor.mode": [
     { value: "hybrid_subq_and_local", label: "ترکیبی SubQ SystemOne API + موتور آنی محلی (پیشنهادی)" },
     { value: "subq_api_only", label: "فقط API رسمی SubQ SystemOne (نیازمند SUBQ_API_KEY)" },
     { value: "local_instant_only", label: "فقط موتور آنی محلی SystemOne (بدون نیاز به اینترنت خارجی)" },
   ],
-  basePriceMode: [
-    { value: "market_upper", label: "سقف بازار تحت رصد (market_upper)" },
-    { value: "markup", label: "افزایش درصدی (markup)" },
+  "estimator.mode": [
+    { value: "v2", label: "نسخه ۲ — مدل احتمالی اعتبار و بهینه‌سازی انتظار سود/رقابت (v2)" },
+    { value: "legacy", label: "نسخه کلاسیک ۴.۱.۲ (legacy)" },
   ],
-  psychological: [
+  "rounding.psychological": [
     { value: "none", label: "بدون رُند روانی (دقیق روی ضریب گام)" },
     { value: "x900", label: "ختم به ۹۰۰" },
     { value: "x000", label: "ختم به ۰۰۰" },
@@ -437,58 +485,69 @@ export function ProfileEditor({ profiles }: { profiles: PricingProfile[] }) {
               </div>
             ) : (
               <div className="space-y-2.5">
-                {Object.entries(cfg[sec]).map(([k, v]) => (
-                  <div key={k}>
-                    <label className="label">{labels[k] ?? k}</label>
-                    {typeof v === "boolean" ? (
-                      <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                {Object.entries(cfg[sec] ?? {}).map(([k, v]) => {
+                  // Skip nested complex objects/tier arrays that are managed programmatically
+                  if (
+                    v != null &&
+                    typeof v === "object" &&
+                    (!Array.isArray(v) || (v.length > 0 && typeof v[0] === "object"))
+                  ) {
+                    return null;
+                  }
+                  const opts = selectOptions[`${sec}.${k}`] ?? selectOptions[k];
+                  return (
+                    <div key={k}>
+                      <label className="label">{labels[k] ?? k}</label>
+                      {typeof v === "boolean" ? (
+                        <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={v}
+                            onChange={(e) => setField(sec, k, e.target.checked)}
+                          />
+                          <span>{v ? "فعال" : "غیرفعال"}</span>
+                        </label>
+                      ) : Array.isArray(v) ? (
                         <input
-                          type="checkbox"
-                          checked={v}
-                          onChange={(e) => setField(sec, k, e.target.checked)}
+                          className="input"
+                          value={v.join(",")}
+                          onChange={(e) =>
+                            setField(
+                              sec,
+                              k,
+                              e.target.value
+                                .split(",")
+                                .map((s) => s.trim())
+                                .filter(Boolean),
+                            )
+                          }
                         />
-                        <span>{v ? "فعال" : "غیرفعال"}</span>
-                      </label>
-                    ) : Array.isArray(v) ? (
-                      <input
-                        className="input"
-                        value={v.join(",")}
-                        onChange={(e) =>
-                          setField(
-                            sec,
-                            k,
-                            e.target.value
-                              .split(",")
-                              .map((s) => s.trim())
-                              .filter(Boolean),
-                          )
-                        }
-                      />
-                    ) : selectOptions[k] ? (
-                      <select
-                        className="input"
-                        value={String(v)}
-                        onChange={(e) => setField(sec, k, e.target.value)}
-                      >
-                        {selectOptions[k].map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : typeof v === "string" ? (
-                      <input className="input" value={v} onChange={(e) => setField(sec, k, e.target.value)} />
-                    ) : (
-                      <input
-                        className="input num"
-                        type="number"
-                        step="any"
-                        value={v as number}
-                        onChange={(e) => setField(sec, k, Number(e.target.value))}
-                      />
-                    )}
-                  </div>
-                ))}
+                      ) : opts ? (
+                        <select
+                          className="input"
+                          value={String(v)}
+                          onChange={(e) => setField(sec, k, e.target.value)}
+                        >
+                          {opts.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : typeof v === "string" ? (
+                        <input className="input" value={v} onChange={(e) => setField(sec, k, e.target.value)} />
+                      ) : (
+                        <input
+                          className="input num"
+                          type="number"
+                          step="any"
+                          value={v as number}
+                          onChange={(e) => setField(sec, k, Number(e.target.value))}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -693,7 +752,7 @@ export function AISettingsPanel({ initial }: { initial: AIStatus }) {
 export function ScheduleEditor({ items }: { items: Schedule[] }) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [draft, setDraft] = useState({ name: "", intervalMinutes: 180, category: "" });
+  const [draft, setDraft] = useState({ name: "", intervalMinutes: 180, category: "", productIds: "" });
   const call = (body: unknown, method = "POST") =>
     start(async () => {
       await fetch("/api/schedules", {
@@ -718,35 +777,41 @@ export function ScheduleEditor({ items }: { items: Schedule[] }) {
           </tr>
         </thead>
         <tbody>
-          {items.map((s) => (
-            <tr key={s.id}>
-              <td>{s.name}</td>
-              <td className="num">{s.intervalMinutes}</td>
-              <td className="text-xs">{s.filter?.category ? `دسته: ${s.filter.category}` : "همه محصولات"}</td>
-              <td className="text-xs">{s.lastRunAt ? new Date(s.lastRunAt).toLocaleString("fa-IR") : "—"}</td>
-              <td className="text-xs">{s.nextRunAt ? new Date(s.nextRunAt).toLocaleString("fa-IR") : "—"}</td>
-              <td>
-                <input
-                  type="checkbox"
-                  checked={s.active}
-                  onChange={(e) =>
-                    call({
-                      id: s.id,
-                      name: s.name,
-                      intervalMinutes: s.intervalMinutes,
-                      category: s.filter?.category,
-                      active: e.target.checked,
-                    })
-                  }
-                />
-              </td>
-              <td>
-                <button className="btn-danger" disabled={pending} onClick={() => call({ id: s.id }, "DELETE")}>
-                  حذف
-                </button>
-              </td>
-            </tr>
-          ))}
+          {items.map((s) => {
+            const filterParts: string[] = [];
+            if (s.filter?.category) filterParts.push(`دسته: ${s.filter.category}`);
+            if (s.filter?.productIds?.length) filterParts.push(`کالاها: ${s.filter.productIds.join(", ")}`);
+            return (
+              <tr key={s.id}>
+                <td>{s.name}</td>
+                <td className="num">{s.intervalMinutes}</td>
+                <td className="text-xs">{filterParts.length ? filterParts.join(" · ") : "همه محصولات"}</td>
+                <td className="text-xs">{s.lastRunAt ? new Date(s.lastRunAt).toLocaleString("fa-IR") : "—"}</td>
+                <td className="text-xs">{s.nextRunAt ? new Date(s.nextRunAt).toLocaleString("fa-IR") : "—"}</td>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={s.active}
+                    onChange={(e) =>
+                      call({
+                        id: s.id,
+                        name: s.name,
+                        intervalMinutes: s.intervalMinutes,
+                        category: s.filter?.category,
+                        productIds: s.filter?.productIds,
+                        active: e.target.checked,
+                      })
+                    }
+                  />
+                </td>
+                <td>
+                  <button className="btn-danger" disabled={pending} onClick={() => call({ id: s.id }, "DELETE")}>
+                    حذف
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div className="flex flex-wrap items-end gap-2">
@@ -766,6 +831,16 @@ export function ScheduleEditor({ items }: { items: Schedule[] }) {
         <div>
           <label className="label">فقط دسته (اختیاری)</label>
           <input className="input" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} />
+        </div>
+        <div>
+          <label className="label">شناسه کالاها (اختیاری، با کاما)</label>
+          <input
+            className="input"
+            dir="ltr"
+            placeholder="1, 2, 5"
+            value={draft.productIds}
+            onChange={(e) => setDraft({ ...draft, productIds: e.target.value })}
+          />
         </div>
         <button className="btn-primary" disabled={pending || !draft.name} onClick={() => call(draft)}>
           افزودن زمان‌بندی

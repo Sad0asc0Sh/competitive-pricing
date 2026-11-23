@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { priceDecisions, products } from "@/db/schema";
 import { DecisionActions } from "@/components/actions";
 import { campaignLabel, faDate, pct, toman } from "@/lib/format";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -10,10 +10,17 @@ export const dynamic = "force-dynamic";
 export default async function ReviewPage() {
   const [rows, rejectedRows] = await Promise.all([
     db
-      .select({ d: priceDecisions, name: products.name, sku: products.sku, cost: products.costPrice, current: products.currentFinalPrice })
+      .select({
+        d: priceDecisions,
+        name: products.name,
+        sku: products.sku,
+        cost: products.costPrice,
+        hardFloor: products.currentHardFloorPrice,
+        current: products.currentFinalPrice,
+      })
       .from(priceDecisions)
       .innerJoin(products, eq(products.id, priceDecisions.productId))
-      .where(eq(priceDecisions.status, "pending_review"))
+      .where(inArray(priceDecisions.status, ["pending_review", "sync_failed", "pending_sync"]))
       .orderBy(desc(priceDecisions.createdAt)),
     db
       .select({ d: priceDecisions, name: products.name, sku: products.sku })
@@ -32,19 +39,25 @@ export default async function ReviewPage() {
           تصمیم‌هایی که موتور به دلیل اعتماد پایین، کمبود داده، جهش قیمت یا برخورد با کف سود، برای تأیید نگه داشته است.
         </p>
       </div>
-      {rows.map(({ d, name, sku, cost, current }) => {
+      {rows.map(({ d, name, sku, cost, hardFloor, current }) => {
         const steps = Array.isArray(d.steps) ? d.steps : [];
         const reasons = steps.find((s) => s.step === "decision")?.message ?? "";
         const supMsg = steps.find((s) => s.step === "supervisor")?.message;
         const aiMsg = steps.find((s) => s.step === "ai_review")?.message;
-        // ۴.۱.۲ (N5): رتبه‌ی رسمی فقط روی فروشنده‌های قابل‌اتکاست؛ رتبه‌ی «با احتساب
-        // فروشنده‌های مشکوک/کهنه» کنارش نمایش داده می‌شود تا ریویوور بداند آیا ارزان‌فروش
-        // تازه‌ای زیر قیمت ما هست یا نه. برای تصمیم‌های قدیمی از steps می‌خوانیم.
         const positionStep = steps.find((s) => s.step === "position");
         const rankIncludingSuspect =
           d.rankIncludingSuspect ?? (Number(positionStep?.data?.rankIncludingSuspect) || null);
         const totalIncludingSuspect =
           d.totalSellersIncludingSuspect || Number(positionStep?.data?.totalSellersIncludingSuspect) || 0;
+        const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, cost ?? 0);
+        const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, hardFloor ?? 0, effectiveCost);
+        const finalPrice = d.finalPrice ?? 0;
+        const isBelowFloor =
+          finalPrice > 0 &&
+          ((effectiveCost > 0 && finalPrice <= effectiveCost) ||
+            (effectiveFloor > 0 && finalPrice < effectiveFloor));
+        const syncFailed =
+          d.status === "sync_failed" || d.status === "pending_sync" || d.pushStatus === "failed";
         return (
           <div key={d.id} className="card">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -56,7 +69,12 @@ export default async function ReviewPage() {
                   {sku} · تصمیم #{d.id} · {faDate(d.createdAt)}
                 </div>
               </div>
-              <DecisionActions decisionId={d.id} />
+              <DecisionActions
+                decisionId={d.id}
+                force
+                isBelowFloor={isBelowFloor}
+                syncFailed={syncFailed}
+              />
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-7">
               <Item k="تمام‌شده" v={toman(cost)} />

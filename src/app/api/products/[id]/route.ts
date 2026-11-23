@@ -1,5 +1,6 @@
 import { db } from "@/db";
 import { products } from "@/db/schema";
+import { requireAdminAuth } from "@/lib/auth";
 import { parseColleaguePriceListText, resolveSupplyCost } from "@/lib/pricing/sourcing";
 import type { SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig } from "@/lib/services/bootstrap";
@@ -11,7 +12,10 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function GET(_: Request, { params }: Ctx) {
+export async function GET(req: Request, { params }: Ctx) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const { id } = await params;
   const [row] = await db.select().from(products).where(eq(products.id, Number(id))).limit(1);
   if (!row) return NextResponse.json({ error: "یافت نشد" }, { status: 404 });
@@ -19,6 +23,9 @@ export async function GET(_: Request, { params }: Ctx) {
 }
 
 export async function PATCH(req: Request, { params }: Ctx) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const { id } = await params;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const [existing] = await db.select().from(products).where(eq(products.id, Number(id))).limit(1);
@@ -39,6 +46,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
     "minProfitAmount",
     "preferredCampaignType",
     "autoApply",
+    "showInFeatured",
     "profileId",
     "status",
   ] as const;
@@ -64,6 +72,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
       patch.minProfitAmount === "" || patch.minProfitAmount == null ? null : Number(patch.minProfitAmount);
   }
   if ("profileId" in patch) patch.profileId = patch.profileId ? Number(patch.profileId) : null;
+  if ("showInFeatured" in patch) patch.showInFeatured = Boolean(patch.showInFeatured);
 
   const { config } = await getProfileConfig((patch.profileId as number | null) ?? existing.profileId);
   const supplierQuotes = (patch.supplierQuotes as SupplierQuote[] | undefined) ?? existing.supplierQuotes ?? [];
@@ -94,7 +103,10 @@ export async function PATCH(req: Request, { params }: Ctx) {
   }
 }
 
-export async function DELETE(_: Request, { params }: Ctx) {
+export async function DELETE(req: Request, { params }: Ctx) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const { id } = await params;
   await db.delete(products).where(eq(products.id, Number(id)));
   return NextResponse.json({ ok: true });

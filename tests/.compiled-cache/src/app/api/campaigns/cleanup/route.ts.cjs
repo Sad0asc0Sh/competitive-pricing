@@ -2,10 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.POST = POST;
+const auth_1 = require("../../../../lib/auth");
 const runner_1 = require("../../../../lib/services/runner");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
 async function POST(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     try {
         const body = (await req.json().catch(() => ({})));
         const out = await (0, runner_1.cleanupWrongTimedSaleCards)({

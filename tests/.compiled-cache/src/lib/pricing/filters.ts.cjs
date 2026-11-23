@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.parsePersianRelativeDate = parsePersianRelativeDate;
 exports.applyValidityFilters = applyValidityFilters;
 exports.applyRecencyWeights = applyRecencyWeights;
+const own_shop_1 = require("./own-shop");
 const sourcing_1 = require("./sourcing");
 const DIGIT_MAP = {
     "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4",
@@ -78,7 +79,8 @@ ageOpts) {
         : cfg.maxOfferAgeDays;
     const maxAgeMs = effectiveMaxAgeDays * 24 * 3600 * 1000;
     const blacklist = new Set(cfg.shopBlacklist.map((s) => (0, sourcing_1.normalizeFaText)(s)).filter(Boolean));
-    const own = new Set(cfg.ownShopNames.map((s) => (0, sourcing_1.normalizeFaText)(s)).filter(Boolean));
+    // ۴.۲.۱: تشخیص مقاوم فروشگاه خودمان (کلید فشرده + املاهای داخلی + شناسهٔ فروشنده)؛ src/lib/pricing/own-shop.ts
+    const isOwnShop = (0, own_shop_1.makeOwnShopMatcher)(cfg.ownShopNames, cfg.ownShopIds);
     const defaultCity = rankCfg?.defaultCity ?? "مشهد";
     const cityAliases = rankCfg?.localCityAliases ?? ["مشهد", "mashhad"];
     return offers.map((o) => {
@@ -100,9 +102,7 @@ ageOpts) {
         if (!Number.isFinite(o.price) || o.price <= 0) {
             return exclude(ev, "قیمت نامعتبر/صفر");
         }
-        if (own.has(nameKey) ||
-            (idKey && own.has(idKey)) ||
-            [...own].some((ownName) => ownName.length >= 3 && nameKey.includes(ownName))) {
+        if (isOwnShop({ shopName: o.shopName, shopId: o.shopId })) {
             return exclude(ev, "فروشگاه خودمان");
         }
         if (blacklist.has(nameKey) || (idKey && blacklist.has(idKey))) {

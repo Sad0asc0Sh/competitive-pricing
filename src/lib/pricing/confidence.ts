@@ -1,5 +1,24 @@
 import type { MarketSummary } from "./aggregate";
+import {
+  aurocFromPairs,
+  calibratedConfidence,
+  type CalibrationBin,
+  type CalibrationMetrics,
+  type CalibrationRowInput,
+  computeCalibrationMetrics,
+  computeECE,
+} from "./robustness";
 import type { PricingProfileConfig } from "./types";
+
+export {
+  aurocFromPairs,
+  calibratedConfidence,
+  type CalibrationBin,
+  type CalibrationMetrics,
+  type CalibrationRowInput,
+  computeCalibrationMetrics,
+  computeECE,
+};
 
 /**
  * امتیاز اعتماد (0..1) — ترکیب چند سیگنال:

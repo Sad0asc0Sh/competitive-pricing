@@ -136,14 +136,14 @@ export function computeModalConsensusPrice(
   if (!bestWindowOffers.length) {
     return weightedMean(
       offers.map((o) => o.price),
-      offers.map((o) => o.weight),
+      offers.map((o) => (typeof o.weight === "number" && Number.isFinite(o.weight) ? Math.max(0.02, o.weight) : 0.1)),
     );
   }
 
   return Math.round(
     weightedMean(
       bestWindowOffers.map((o) => o.price),
-      bestWindowOffers.map((o) => o.weight),
+      bestWindowOffers.map((o) => (typeof o.weight === "number" && Number.isFinite(o.weight) ? Math.max(0.02, o.weight) : 0.1)),
     ),
   );
 }
@@ -253,7 +253,9 @@ export function summarizeMarket(
   const safePercentile = opts?.safePercentile ?? 55;
   const upperPercentile = opts?.upperPercentile ?? 82;
 
-  const used = offers.filter((o) => o.included).sort((a, b) => a.price - b.price);
+  const used = offers
+    .filter((o) => o.included && typeof o.price === "number" && Number.isFinite(o.price) && o.price > 0)
+    .sort((a, b) => a.price - b.price);
   const localUsed = used.filter((o) => o.isLocalCity);
 
   const computeRef = (list: OfferEvaluation[]): number | null => {

@@ -1,7 +1,20 @@
+import crypto from "node:crypto";
 import { db } from "@/db";
 import { storeConnectors, type StoreConnector } from "@/db/schema";
 import type { SgeoooleBadgeTheme, SgeoooleCampaignType } from "@/lib/pricing/types";
+import {
+  interpretSgeoooleAck,
+  interpretSgeoooleDryRun,
+  type SgeoooleDryRunResponse,
+  type SgeoooleSyncAck,
+} from "@/lib/store/sgeooole-ack";
 import { eq } from "drizzle-orm";
+
+export interface BelowCostOverrideMeta {
+  allowBelowCost: boolean;
+  reason: string;
+  authorizedBy: string;
+}
 
 /** payload استاندارد که به فروشگاه ارسال می‌شود */
 export interface PricePushPayload {
@@ -23,15 +36,102 @@ export interface PricePushPayload {
   showInFeatured?: boolean | null;
   campaignEndsAt?: string | null;
   decisionId: number;
+  idempotencyKey?: string | null;
+  belowCostOverride?: BelowCostOverrideMeta | null;
   confidence: number;
   projectedNationalRank?: number | null;
   projectedLocalRank?: number | null;
   competitionTier?: string | null;
 }
 
+export interface PushResult {
+  ok: boolean;
+  message: string;
+  code?: string;
+  stage?: "precheck" | "dry_run" | "live_push" | "reconcile" | "config";
+  skipped?: boolean;
+  retryable?: boolean;
+  attempts?: number;
+  confirmedPrice?: number;
+  idempotencyKey?: string;
+  idempotentReplay?: boolean;
+}
+
+export interface PushOptions {
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  timeoutMs?: number;
+}
+
 export interface StoreConnectorAdapter {
   type: string;
-  push(cfg: Record<string, string>, payload: PricePushPayload): Promise<{ ok: boolean; message: string }>;
+  push(cfg: Record<string, string>, payload: PricePushPayload, opts?: PushOptions): Promise<PushResult>;
+}
+
+const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAY_MS = 150;
+
+export function buildIdempotencyKey(p: PricePushPayload): string {
+  const explicit = p.idempotencyKey?.trim();
+  if (explicit) return explicit;
+  return `decision-${p.decisionId}-p${p.productId}-${Math.round(p.finalPrice)}`;
+}
+
+export function canonicalizePricingSyncPayload(payload: Record<string, unknown>): string {
+  const pricingMeta = (payload.pricingMeta as Record<string, unknown> | undefined) ?? {};
+  const timedSale = (payload.timedSale as Record<string, unknown> | undefined) ?? {};
+  const decisionId = payload.decisionId ?? pricingMeta.decisionId ?? null;
+  const idempotencyKey = payload.idempotencyKey ?? pricingMeta.idempotencyKey ?? null;
+  const canonical = {
+    sku: String(payload.sku ?? "").trim(),
+    productCode: String(payload.productCode ?? "").trim().toUpperCase(),
+    productId: String(payload.productId ?? "").trim(),
+    finalPrice: Number(payload.finalPrice ?? payload.price ?? 0),
+    basePrice: Number(payload.basePrice ?? payload.compareAtPrice ?? payload.finalPrice ?? payload.price ?? 0),
+    costPrice: Number(payload.costPrice ?? 0),
+    hardFloorPrice: Number(payload.hardFloorPrice ?? 0),
+    campaignType: String(payload.campaignType ?? "none"),
+    discount: Number(payload.discount ?? timedSale.discountPercentage ?? 0),
+    decisionId: decisionId != null ? String(decisionId) : "",
+    idempotencyKey: idempotencyKey != null ? String(idempotencyKey) : "",
+  };
+  return JSON.stringify(canonical);
+}
+
+export function computePricingSyncSignature(
+  secret: string,
+  timestamp: string,
+  payload: Record<string, unknown>,
+): string {
+  const canonical = canonicalizePricingSyncPayload(payload);
+  return crypto.createHmac("sha256", String(secret)).update(`${timestamp}.${canonical}`, "utf8").digest("hex");
+}
+
+function hasValidBelowCostOverride(override?: BelowCostOverrideMeta | null): boolean {
+  return Boolean(
+    override &&
+      override.allowBelowCost === true &&
+      typeof override.reason === "string" &&
+      override.reason.trim().length >= 5 &&
+      typeof override.authorizedBy === "string" &&
+      override.authorizedBy.trim().length >= 2,
+  );
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Store request timeout after ${timeoutMs}ms`)), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -65,10 +165,22 @@ export function buildSgeoooleRequestPayload(p: PricePushPayload) {
     (p.badgeTheme as SgeoooleBadgeTheme) ||
     (isFlash ? "gold-red" : isSpecial ? "red-purple" : "green-orange");
 
+  const idempotencyKey = buildIdempotencyKey(p);
+  const belowCostOverride = hasValidBelowCostOverride(p.belowCostOverride)
+    ? {
+        allowBelowCost: true,
+        reason: p.belowCostOverride!.reason.trim(),
+        authorizedBy: p.belowCostOverride!.authorizedBy.trim(),
+      }
+    : undefined;
+
   return {
     sku: p.sku,
     productCode: p.storeExternalId?.toUpperCase().startsWith("KY-") ? p.storeExternalId.toUpperCase() : undefined,
     productId: p.storeExternalId && !p.storeExternalId.toUpperCase().startsWith("KY-") ? p.storeExternalId : undefined,
+    decisionId: p.decisionId,
+    idempotencyKey,
+    ...(belowCostOverride ? { belowCostOverride } : {}),
     // فیلدهای استاندارد مدل Product در sgeooole:
     // نکته کلیدی: در timed_sale قیمت پایه روی Product برابر سقف معیار (basePrice) قرار می‌گیرد و تخفیف از طریق مدل Sale اعمال می‌شود
     price: hasAnyPromo ? p.basePrice : p.finalPrice,
@@ -100,6 +212,8 @@ export function buildSgeoooleRequestPayload(p: PricePushPayload) {
     hardFloorPrice: p.hardFloorPrice ?? 0,
     pricingMeta: {
       decisionId: p.decisionId,
+      idempotencyKey,
+      ...(belowCostOverride ? { belowCostOverride } : {}),
       confidence: p.confidence,
       projectedNationalRank: p.projectedNationalRank ?? null,
       projectedLocalRank: p.projectedLocalRank ?? null,
@@ -114,102 +228,355 @@ export function buildSgeoooleRequestPayload(p: PricePushPayload) {
   };
 }
 
+/**
+ * اعتبارسنجی سخت‌گیرانه (fail-closed) در برابر اندپوینت `?dryRun=1` فروشگاه:
+ * هرگونه خطای شبکه، تایم‌اوت، وضعیت HTTP غیر 2xx، بدنه خالی، JSON نامعتبر،
+ * یا نبود تایید صریح (`ok === true && valid === true`) مانع ارسال قیمت زنده می‌شود.
+ */
+export async function verifyStoreDryRun(
+  cfg: Record<string, string>,
+  p: PricePushPayload,
+  opts?: PushOptions,
+): Promise<PushResult> {
+  const baseUrl = (cfg.baseUrl ?? process.env.SGEOOOLE_API_URL ?? "").replace(/\/$/, "");
+  const apiKey = (cfg.apiKey ?? process.env.SGEOOOLE_PRICING_SECRET ?? process.env.STORE_WEBHOOK_SECRET ?? "").trim();
+  const bearerToken = (cfg.adminToken ?? process.env.SGEOOOLE_ADMIN_TOKEN ?? "").trim();
+  const timeoutMs = Number(cfg.timeoutMs ?? opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
+  if (!baseUrl) {
+    return {
+      ok: false,
+      code: "MISSING_BASE_URL",
+      stage: "config",
+      retryable: false,
+      message: "آدرس سرور sgeooole (baseUrl / SGEOOOLE_API_URL) تنظیم نشده است",
+    };
+  }
+
+  const bodyPayload = buildSgeoooleRequestPayload(p);
+  const timestamp = String(Date.now());
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Idempotency-Key": bodyPayload.idempotencyKey,
+    "X-Pricing-Timestamp": timestamp,
+    ...(apiKey
+      ? {
+          "X-Pricing-Secret": apiKey,
+          "X-Pricing-Signature": `sha256=${computePricingSyncSignature(apiKey, timestamp, bodyPayload)}`,
+        }
+      : {}),
+    ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+  };
+
+  const syncProbeUrl = `${baseUrl}/api/products/pricing-sync?dryRun=1`;
+  let dryRes: Response;
+  try {
+    dryRes = await fetchWithTimeout(
+      syncProbeUrl,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(bodyPayload),
+        cache: "no-store",
+      },
+      timeoutMs,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      code: "DRY_RUN_NETWORK_ERROR",
+      stage: "dry_run",
+      retryable: true,
+      idempotencyKey: bodyPayload.idempotencyKey,
+      message: `خطای شبکه/تایم‌اوت در dry-run فروشگاه (اعمال قیمت متوقف شد): ${msg}`,
+    };
+  }
+
+  const rawText = await dryRes.text().catch(() => "");
+  if (!rawText || !rawText.trim()) {
+    return {
+      ok: false,
+      code: dryRes.ok ? "DRY_RUN_EMPTY_RESPONSE" : `DRY_RUN_HTTP_${dryRes.status}`,
+      stage: "dry_run",
+      retryable: dryRes.status >= 500 || dryRes.status === 429,
+      idempotencyKey: bodyPayload.idempotencyKey,
+      message: `پاسخ خالی از dry-run فروشگاه (HTTP ${dryRes.status}) — اعمال قیمت متوقف شد`,
+    };
+  }
+
+  let dryJson: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(rawText);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      dryJson = parsed as Record<string, unknown>;
+    }
+  } catch {
+    dryJson = null;
+  }
+
+  if (!dryJson) {
+    return {
+      ok: false,
+      code: "DRY_RUN_INVALID_JSON",
+      stage: "dry_run",
+      retryable: dryRes.status >= 500,
+      idempotencyKey: bodyPayload.idempotencyKey,
+      message: `پاسخ غیر JSON یا نامعتبر از dry-run فروشگاه (HTTP ${dryRes.status}) — اعمال قیمت متوقف شد`,
+    };
+  }
+
+  if (!dryRes.ok) {
+    const errMsg = String(dryJson.message ?? dryJson.error ?? dryJson.reason ?? `HTTP ${dryRes.status}`);
+    const errCode = String(dryJson.code ?? `DRY_RUN_HTTP_${dryRes.status}`);
+    return {
+      ok: false,
+      code: errCode,
+      stage: "dry_run",
+      retryable: dryRes.status >= 500 || dryRes.status === 429,
+      idempotencyKey: bodyPayload.idempotencyKey,
+      message: `خطای HTTP ${dryRes.status} در dry-run فروشگاه: ${errMsg}`,
+    };
+  }
+
+  if (dryJson.ok !== true || dryJson.valid !== true) {
+    const errMsg = String(dryJson.message ?? dryJson.error ?? dryJson.reason ?? "تایید صریح ok/valid دریافت نشد");
+    const errCode = String(dryJson.code ?? "DRY_RUN_REJECTED");
+    return {
+      ok: false,
+      code: errCode,
+      stage: "dry_run",
+      retryable: false,
+      idempotencyKey: bodyPayload.idempotencyKey,
+      message: `dry-run فروشگاه رد کرد (${errCode}): ${errMsg}`,
+    };
+  }
+
+  return {
+    ok: true,
+    code: "DRY_RUN_OK",
+    stage: "dry_run",
+    idempotencyKey: bodyPayload.idempotencyKey,
+    message: "dry-run فروشگاه با موفقیت تایید شد",
+  };
+}
+
 const sgeooole: StoreConnectorAdapter = {
   type: "sgeooole",
-  async push(cfg, p) {
-    // حفاظت نهایی قبل از ارسال به سایت: هرگز قیمت فروش <= قیمت خرید نباشد
-    if (p.effectiveCostPrice && p.effectiveCostPrice > 0 && p.finalPrice <= p.effectiveCostPrice) {
+  async push(cfg, p, opts) {
+    const overrideAllowed = hasValidBelowCostOverride(p.belowCostOverride);
+
+    // حفاظت نهایی قبل از ارسال به سایت: هرگز قیمت فروش <= قیمت خرید نباشد (مگر با مجوز صریح ممیزی‌شده)
+    if (!overrideAllowed && p.effectiveCostPrice && p.effectiveCostPrice > 0 && p.finalPrice <= p.effectiveCostPrice) {
       return {
         ok: false,
+        code: "BELOW_COST_PRICE",
+        stage: "precheck",
+        retryable: false,
+        attempts: 1,
         message: `مسدود شد: قیمت نهایی (${p.finalPrice}) کمتر یا مساوی قیمت خرید/تامین (${p.effectiveCostPrice}) است!`,
       };
     }
 
-    const baseUrl = (cfg.baseUrl ?? process.env.SGEOOOLE_API_URL ?? "").replace(/\/$/, "");
-    const apiKey = cfg.apiKey ?? process.env.SGEOOOLE_PRICING_SECRET ?? process.env.STORE_WEBHOOK_SECRET ?? "";
-    const bearerToken = cfg.adminToken ?? process.env.SGEOOOLE_ADMIN_TOKEN ?? "";
-
-    if (!baseUrl) {
-      return { ok: false, message: "آدرس سرور sgeooole (baseUrl / SGEOOOLE_API_URL) تنظیم نشده است" };
-    }
-
-    const bodyPayload = buildSgeoooleRequestPayload(p);
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...(apiKey ? { "X-Pricing-Secret": apiKey } : {}),
-      ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
-    };
-
-    // ۰) کالیبره‌کردن (dry-run) قبل از push اصلی: فروشگاه با S3 و گارد کف قطعی اعتبارسنجی می‌کند و
-    // در صورت مخالفت صریح (ok:false یا valid:false) این push همین‌جا بسته می‌شود. نبود پاسخ/اندپروینت
-    // dry-run مشکل‌ساز نیست و جریان push اصلی ادامه می‌یابد.
-    {
-      const syncProbeUrl = `${baseUrl}/api/products/pricing-sync?dryRun=1`;
-      try {
-        const dryRes = await fetch(syncProbeUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(bodyPayload),
-          cache: "no-store",
-        });
-        if (dryRes.ok) {
-          const dryJson = (await dryRes.json().catch(() => null)) as
-            | { ok?: boolean; valid?: boolean; message?: string; reason?: string }
-            | null;
-          if (dryJson && dryJson.ok === false) {
-            return {
-              ok: false,
-              message: `dry-run فروشگاه رد کرد: ${dryJson.message ?? dryJson.reason ?? "دلیل نامشخص"}`,
-            };
-          }
-          if (dryJson && dryJson.valid === false) {
-            return {
-              ok: false,
-              message: `dry-run فروشگاه payload را نامعتبر دانست: ${dryJson.message ?? dryJson.reason ?? "دلیل نامشخص"}`,
-            };
-          }
-        }
-        // پاسخ غیر ok یا بدون بدنه معتبر → کالیبره سخت‌گیرانه نیست؛ push اصلی ادامه می‌یابد
-      } catch {
-        // خطای شبکه در کالیبره، جریان اصلی را نمی‌شکند
-      }
-    }
-
-    // ۱) تلاش برای ارسال به اندپوینت اختصاصی همگام‌سازی قیمت و هر ۳ سیستم تخفیف در sgeooole
-    const syncUrl = `${baseUrl}/api/products/pricing-sync`;
-    const res = await fetch(syncUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(bodyPayload),
-      cache: "no-store",
-    });
-
-    if (res.ok) {
+    if (!overrideAllowed && p.hardFloorPrice && p.hardFloorPrice > 0 && p.finalPrice < p.hardFloorPrice) {
       return {
-        ok: true,
-        message: `sgeooole: محصول ${p.sku} بروزرسانی شد (سقف معیار: ${p.basePrice.toLocaleString("fa-IR")} با ${p.discountPct}% تخفیف → کف قطعی: ${p.finalPrice.toLocaleString("fa-IR")} تومان | کمپین: ${p.campaignType})`,
+        ok: false,
+        code: "BELOW_HARD_FLOOR",
+        stage: "precheck",
+        retryable: false,
+        attempts: 1,
+        message: `مسدود شد: قیمت نهایی (${p.finalPrice}) کمتر از خط قرمز کف سود (${p.hardFloorPrice}) است!`,
       };
     }
 
-    // ۲) اگر اندپوینت اختصاصی نبود و storeExternalId (MongoDB _id) داشتیم، با PUT /api/products/:id بروزرسانی کن
-    if (res.status === 404 && p.storeExternalId && /^[a-fA-F0-9]{24}$/.test(p.storeExternalId)) {
-      const putRes = await fetch(`${baseUrl}/api/products/${p.storeExternalId}`, {
-        method: "PUT",
-        headers,
-        body: JSON.stringify(bodyPayload),
-        cache: "no-store",
-      });
-      if (putRes.ok) {
-        return {
-          ok: true,
-          message: `sgeooole (PUT): محصول ${p.storeExternalId} بروزرسانی شد`,
-        };
-      }
-      return { ok: false, message: `sgeooole PUT HTTP ${putRes.status}` };
+    const baseUrl = (cfg.baseUrl ?? process.env.SGEOOOLE_API_URL ?? "").replace(/\/$/, "");
+    const apiKey = (cfg.apiKey ?? process.env.SGEOOOLE_PRICING_SECRET ?? process.env.STORE_WEBHOOK_SECRET ?? "").trim();
+    const bearerToken = (cfg.adminToken ?? process.env.SGEOOOLE_ADMIN_TOKEN ?? "").trim();
+    const timeoutMs = Number(cfg.timeoutMs ?? opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const maxAttempts = Math.max(1, Math.min(5, Number(cfg.maxRetries ?? opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS)));
+    const baseDelayMs = Math.max(0, Number(cfg.retryDelayMs ?? opts?.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS));
+
+    if (!baseUrl) {
+      return {
+        ok: false,
+        code: "MISSING_BASE_URL",
+        stage: "config",
+        retryable: false,
+        attempts: 0,
+        message: "آدرس سرور sgeooole (baseUrl / SGEOOOLE_API_URL) تنظیم نشده است",
+      };
     }
 
-    const errText = await res.text().catch(() => "");
-    return { ok: false, message: `sgeooole HTTP ${res.status}${errText ? ` — ${errText.slice(0, 300)}` : ""}` };
+    const idempotencyKey = buildIdempotencyKey(p);
+    let lastFailure: PushResult | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1) {
+        await sleep(baseDelayMs * Math.pow(2, attempt - 2));
+      }
+
+      // ۰) اعتبارسنجی fail-closed از طریق dry-run قبل از هر ارسال زنده
+      const dryCheck = await verifyStoreDryRun(cfg, { ...p, idempotencyKey }, { timeoutMs });
+      if (!dryCheck.ok) {
+        lastFailure = { ...dryCheck, attempts: attempt };
+        if (dryCheck.retryable && attempt < maxAttempts) {
+          continue;
+        }
+        return lastFailure;
+      }
+
+      const bodyPayload = buildSgeoooleRequestPayload({ ...p, idempotencyKey });
+      const timestamp = String(Date.now());
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": bodyPayload.idempotencyKey,
+        "X-Pricing-Timestamp": timestamp,
+        ...(apiKey
+          ? {
+              "X-Pricing-Secret": apiKey,
+              "X-Pricing-Signature": `sha256=${computePricingSyncSignature(apiKey, timestamp, bodyPayload)}`,
+            }
+          : {}),
+        ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+      };
+
+      // ۱) ارسال به اندپوینت اختصاصی همگام‌سازی قیمت در sgeooole
+      const syncUrl = `${baseUrl}/api/products/pricing-sync`;
+      let res: Response;
+      try {
+        res = await fetchWithTimeout(
+          syncUrl,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify(bodyPayload),
+            cache: "no-store",
+          },
+          timeoutMs,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        lastFailure = {
+          ok: false,
+          code: "LIVE_PUSH_NETWORK_ERROR",
+          stage: "live_push",
+          retryable: true,
+          attempts: attempt,
+          idempotencyKey,
+          message: `خطای شبکه/تایم‌اوت هنگام ارسال قیمت به sgeooole: ${msg}`,
+        };
+        if (attempt < maxAttempts) continue;
+        return lastFailure;
+      }
+
+      const rawBody = await res.text().catch(() => "");
+      let liveJson: Record<string, unknown> | null = null;
+      if (rawBody && rawBody.trim()) {
+        try {
+          const parsed = JSON.parse(rawBody);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            liveJson = parsed as Record<string, unknown>;
+          }
+        } catch {
+          liveJson = null;
+        }
+      }
+
+      if (!res.ok) {
+        const errMsg = liveJson
+          ? String(liveJson.message ?? liveJson.error ?? `HTTP ${res.status}`)
+          : rawBody.slice(0, 300) || `HTTP ${res.status}`;
+        const errCode = liveJson && liveJson.code ? String(liveJson.code) : `LIVE_PUSH_HTTP_${res.status}`;
+        const retryable = res.status >= 500 || res.status === 429;
+        lastFailure = {
+          ok: false,
+          code: errCode,
+          stage: "live_push",
+          retryable,
+          attempts: attempt,
+          idempotencyKey,
+          message: `sgeooole HTTP ${res.status} — ${errMsg}`,
+        };
+        if (retryable && attempt < maxAttempts) continue;
+        return lastFailure;
+      }
+
+      if (!liveJson || (liveJson.success !== true && liveJson.ok !== true)) {
+        const errMsg = liveJson
+          ? String(liveJson.message ?? liveJson.error ?? "پاسخ فروشگاه فاقد تایید موفقیت بود")
+          : "پاسخ فروشگاه JSON معتبر نبود";
+        lastFailure = {
+          ok: false,
+          code: liveJson && liveJson.code ? String(liveJson.code) : "LIVE_PUSH_UNCONFIRMED",
+          stage: "reconcile",
+          retryable: false,
+          attempts: attempt,
+          idempotencyKey,
+          message: `عدم تایید اعمال قیمت توسط sgeooole: ${errMsg}`,
+        };
+        return lastFailure;
+      }
+
+      // ۲) تطبیق قیمت تاییدشده فروشگاه با قیمت ارسالی (Store Reconciliation)
+      const dataObj =
+        liveJson.data && typeof liveJson.data === "object" && !Array.isArray(liveJson.data)
+          ? (liveJson.data as Record<string, unknown>)
+          : null;
+      const confirmedFinalPrice =
+        dataObj && dataObj.finalPrice !== undefined && dataObj.finalPrice !== null
+          ? Number(dataObj.finalPrice)
+          : Math.round(p.finalPrice);
+
+      if (!Number.isFinite(confirmedFinalPrice) || Math.abs(confirmedFinalPrice - Math.round(p.finalPrice)) > 1) {
+        return {
+          ok: false,
+          code: "STORE_RECONCILIATION_MISMATCH",
+          stage: "reconcile",
+          retryable: false,
+          attempts: attempt,
+          idempotencyKey,
+          message: `عدم تطابق قیمت تاییدشده فروشگاه (${confirmedFinalPrice}) با قیمت تصمیم (${Math.round(p.finalPrice)})`,
+        };
+      }
+
+      // ۴.۲.۱ — تأیید حلقه‌بسته (F4): فروشگاه «قیمت مؤثر» (همان که مشتری و فید ترب می‌بینند) را برمی‌گرداند.
+      // اگر با قیمت تصمیم فرق داشته باشد (کمپین/Sale دستی، گارد کف، محصول متغیر…) «اعمال موفق» گزارش نمی‌شود.
+      // فروشگاه قدیمی که effective* نمی‌فرستد ⇒ interpretSgeoooleAck برابر null است و رفتار قبلی حفظ می‌شود.
+      const ackFailure = interpretSgeoooleAck(liveJson as SgeoooleSyncAck | null, p.finalPrice);
+      if (ackFailure) {
+        return {
+          ok: false,
+          code: "STORE_EFFECTIVE_MISMATCH",
+          stage: "reconcile",
+          retryable: false,
+          attempts: attempt,
+          idempotencyKey,
+          message: ackFailure.message,
+        };
+      }
+
+      return {
+        ok: true,
+        code: liveJson.idempotentReplay ? "STORE_SYNC_IDEMPOTENT_REPLAY" : "STORE_SYNC_CONFIRMED",
+        stage: "reconcile",
+        attempts: attempt,
+        confirmedPrice: confirmedFinalPrice,
+        idempotencyKey,
+        idempotentReplay: Boolean(liveJson.idempotentReplay),
+        message: `sgeooole: محصول ${p.sku} بروزرسانی شد (سقف معیار: ${p.basePrice.toLocaleString("fa-IR")} با ${p.discountPct}% تخفیف → کف قطعی: ${confirmedFinalPrice.toLocaleString("fa-IR")} تومان | کمپین: ${p.campaignType})`,
+      };
+    }
+
+    return (
+      lastFailure ?? {
+        ok: false,
+        code: "STORE_SYNC_EXHAUSTED",
+        stage: "live_push",
+        attempts: maxAttempts,
+        idempotencyKey,
+        message: "ارسال قیمت به فروشگاه پس از حداکثر تلاش‌ها ناموفق ماند",
+      }
+    );
   },
 };
 
@@ -260,7 +627,8 @@ const webhook: StoreConnectorAdapter = {
   },
 };
 
-const adapters: Record<string, StoreConnectorAdapter> = { sgeooole, woocommerce, webhook };
+export const adapters: Record<string, StoreConnectorAdapter> = { sgeooole, woocommerce, webhook };
+export const sgeoooleAdapter = sgeooole;
 
 export async function getActiveConnector(): Promise<StoreConnector | null> {
   const rows = await db.select().from(storeConnectors).where(eq(storeConnectors.active, true)).limit(1);
@@ -300,22 +668,45 @@ export async function getStoreStatus(): Promise<{
   };
 }
 
-export async function pushToStore(payload: PricePushPayload): Promise<{ ok: boolean; message: string; skipped?: boolean }> {
+export async function pushToStore(payload: PricePushPayload, opts?: PushOptions): Promise<PushResult> {
+  const idempotencyKey = buildIdempotencyKey(payload);
+  const enrichedPayload: PricePushPayload = { ...payload, idempotencyKey };
   const connector = await getActiveConnector();
   if (connector && connector.type !== "none") {
     const adapter = adapters[connector.type];
-    if (!adapter) return { ok: false, message: `کانکتور ناشناخته: ${connector.type}` };
+    if (!adapter) {
+      return {
+        ok: false,
+        code: "UNKNOWN_CONNECTOR_TYPE",
+        stage: "config",
+        attempts: 0,
+        idempotencyKey,
+        message: `کانکتور ناشناخته: ${connector.type}`,
+      };
+    }
     try {
-      const r = await adapter.push(connector.config, payload);
+      const r = await adapter.push(connector.config, enrichedPayload, opts);
       await db
         .update(storeConnectors)
         .set({ lastPushAt: new Date(), lastError: r.ok ? null : r.message })
         .where(eq(storeConnectors.id, connector.id));
-      return r;
+      return {
+        ...r,
+        attempts: r.attempts ?? 1,
+        confirmedPrice: r.confirmedPrice ?? (r.ok ? Math.round(payload.finalPrice) : undefined),
+        idempotencyKey: r.idempotencyKey ?? idempotencyKey,
+      };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await db.update(storeConnectors).set({ lastError: msg }).where(eq(storeConnectors.id, connector.id));
-      return { ok: false, message: msg };
+      return {
+        ok: false,
+        code: "CONNECTOR_EXCEPTION",
+        stage: "live_push",
+        attempts: 1,
+        idempotencyKey,
+        message: msg,
+      };
     }
   }
   // سیستم واقعی بدون داده ساختگی: اگر کانکتوری در دیتابیس فعال نیست ولی
@@ -325,13 +716,33 @@ export async function pushToStore(payload: PricePushPayload): Promise<{ ok: bool
   const envKey = (process.env.SGEOOOLE_PRICING_SECRET ?? process.env.STORE_WEBHOOK_SECRET ?? "").trim();
   if (envBase && envKey) {
     try {
-      const r = await sgeooole.push({ baseUrl: envBase, apiKey: envKey }, payload);
+      const r = await sgeooole.push({ baseUrl: envBase, apiKey: envKey }, enrichedPayload, opts);
       return r.ok
-        ? { ...r, message: `${r.message} (via env fallback)` }
-        : r;
+        ? {
+            ...r,
+            confirmedPrice: r.confirmedPrice ?? Math.round(payload.finalPrice),
+            idempotencyKey: r.idempotencyKey ?? idempotencyKey,
+            message: `${r.message} (via env fallback)`,
+          }
+        : { ...r, idempotencyKey: r.idempotencyKey ?? idempotencyKey };
     } catch (e) {
-      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      return {
+        ok: false,
+        code: "ENV_CONNECTOR_EXCEPTION",
+        stage: "live_push",
+        attempts: 1,
+        idempotencyKey,
+        message: e instanceof Error ? e.message : String(e),
+      };
     }
   }
-  return { ok: true, skipped: true, message: "کانکتور فروشگاه فعال نیست و SGEOOOLE_API_URL تنظیم نشده (فقط ثبت داخلی)" };
+  return {
+    ok: false,
+    skipped: true,
+    code: "NO_ACTIVE_CONNECTOR",
+    stage: "config",
+    attempts: 0,
+    idempotencyKey,
+    message: "کانکتور فروشگاه فعال نیست و SGEOOOLE_API_URL تنظیم نشده (در انتظار اتصال فروشگاه)",
+  };
 }

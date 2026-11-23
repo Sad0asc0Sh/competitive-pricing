@@ -1,11 +1,15 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.applyDecisionToStore = void 0;
+exports.recoverStuckAppliedDecisions = recoverStuckAppliedDecisions;
 exports.runPricing = runPricing;
 exports.isSupervisorRejected = isSupervisorRejected;
 exports.applyDecision = applyDecision;
+exports.retryDecisionSync = retryDecisionSync;
+exports.reconcilePendingDecisions = reconcilePendingDecisions;
 exports.rejectDecision = rejectDecision;
 exports.cleanupWrongTimedSaleCards = cleanupWrongTimedSaleCards;
-const db_1 = require("@/db");
+const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
 const client_1 = require("../ai/client");
 const config_1 = require("../ai/config");
@@ -22,13 +26,14 @@ const bootstrap_1 = require("./bootstrap");
 const safeInt = (v) => v == null || !Number.isFinite(v) ? null : Math.round(v);
 const safeReal = (v, fallback = 0) => v == null || !Number.isFinite(v) ? fallback : v;
 const DEFAULT_INTERVAL_MINUTES = 180;
+const MAX_AUTO_SYNC_ATTEMPTS = 5;
 /**
  * قفل نرم تک‌محصولی (P0-5): با یک UPDATE اتمی قفل «۵ دقیقه‌ای» گرفته می‌شود؛
  * اجرای موازی/کلاسترِ هم‌زمان هر محصول را حداکثر یک‌بار استعلام می‌کند.
  */
 async function tryLockProduct(productId) {
     try {
-        const res = await db_1.db.execute((0, drizzle_orm_1.sql) `update products set locked_until = now() + interval '5 minutes' where id = ${productId} and (locked_until is null or locked_until <= now()) returning id`);
+        const res = await index_ts_1.db.execute((0, drizzle_orm_1.sql) `update products set locked_until = now() + interval '5 minutes' where id = ${productId} and (locked_until is null or locked_until <= now()) returning id`);
         return (res.rows?.length ?? 0) > 0;
     }
     catch {
@@ -39,7 +44,7 @@ async function tryLockProduct(productId) {
 }
 async function unlockProduct(productId) {
     try {
-        await db_1.db.execute((0, drizzle_orm_1.sql) `update products set locked_until = null where id = ${productId}`);
+        await index_ts_1.db.execute((0, drizzle_orm_1.sql) `update products set locked_until = null where id = ${productId}`);
     }
     catch {
         // unlock نباید جریان را بشکند؛ قفل TTL خودش آزاد می‌شود
@@ -54,7 +59,7 @@ async function computeOwnDiscountContext(productId, windowDays, holdHours) {
     const now = new Date();
     const since = new Date(now.getTime() - Math.max(1, windowDays) * 86_400_000);
     try {
-        const rows = await db_1.db
+        const rows = await index_ts_1.db
             .select({
             finalPrice: schema_1.priceDecisions.finalPrice,
             createdAt: schema_1.priceDecisions.createdAt,
@@ -70,48 +75,80 @@ async function computeOwnDiscountContext(productId, windowDays, holdHours) {
     }
 }
 /**
- * بازیابی تصمیم‌های «applied»ی که push آن‌ها (به‌دلیل کرش وسط اجرا) ثبت نشده است.
- * ۴.۱.۱: در شروع هر اجرا، ردیف‌های applied با push_status IS NULL و قدیمی‌تر از ۱۰ دقیقه
- * دوباره push می‌شوند؛ اگر تصمیم دیگر معتبر نباشد، صریحاً failed علامت می‌خورند.
+ * ۴.۲.۱: قیمت‌هایی که خودمان اخیراً داشته‌ایم (برای گارد «پژواک قیمت خودی» در موتور): قیمت فعلی + قیمت نهایی
+ * تصمیم‌های applied با push موفق در `days` روز اخیر. پنجره بلند است چون ترب قیمت فروشگاه را با تأخیر می‌خواند
+ * (ساعت‌ها تا روزها) و پیشنهاد خودیِ ناشناخته ممکن است هنوز قیمت چند push قبل را نشان دهد.
  */
-async function recoverStuckAppliedDecisions() {
+async function loadOwnRecentPrices(productId, currentPrice, days = 14) {
+    const out = new Set();
+    const add = (v) => {
+        const n = Math.round(Number(v));
+        if (Number.isFinite(n) && n > 0)
+            out.add(n);
+    };
+    add(currentPrice);
+    try {
+        const since = new Date(Date.now() - Math.max(1, days) * 86_400_000);
+        const rows = await index_ts_1.db
+            .select({ finalPrice: schema_1.priceDecisions.finalPrice })
+            .from(schema_1.priceDecisions)
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.productId, productId), (0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "applied"), (0, drizzle_orm_1.eq)(schema_1.priceDecisions.pushStatus, "pushed"), (0, drizzle_orm_1.gte)(schema_1.priceDecisions.createdAt, since)));
+        for (const r of rows)
+            add(r.finalPrice);
+    }
+    catch {
+        // گارد کمکی است؛ خطای دیتابیس جریان قیمت‌گذاری را نمی‌شکند
+    }
+    return Array.from(out);
+}
+/**
+ * بازیابی و همگام‌سازی مجدد تصمیم‌های در انتظار پوش (`pending_sync` / `sync_failed`)
+ * و تصمیم‌های قدیمی `applied` که `push_status` آن‌ها هنوز `pushed` نشده است.
+ */
+async function recoverStuckAppliedDecisions(limit = 50) {
     const cutoff = new Date(Date.now() - 10 * 60_000);
     try {
-        const stuck = await db_1.db
+        const stuck = await index_ts_1.db
             .select()
             .from(schema_1.priceDecisions)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "applied"), (0, drizzle_orm_1.isNull)(schema_1.priceDecisions.pushStatus), (0, drizzle_orm_1.lt)(schema_1.priceDecisions.createdAt, cutoff)))
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.or)((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "applied"), (0, drizzle_orm_1.isNull)(schema_1.priceDecisions.pushStatus), (0, drizzle_orm_1.lt)(schema_1.priceDecisions.createdAt, cutoff)), (0, drizzle_orm_1.and)((0, drizzle_orm_1.inArray)(schema_1.priceDecisions.status, ["pending_sync", "sync_failed"]), (0, drizzle_orm_1.lt)(schema_1.priceDecisions.pushAttempts, MAX_AUTO_SYNC_ATTEMPTS), (0, drizzle_orm_1.lt)(schema_1.priceDecisions.createdAt, cutoff)))))
             .orderBy((0, drizzle_orm_1.asc)(schema_1.priceDecisions.id))
-            .limit(50);
+            .limit(limit);
         for (const d of stuck) {
             // اگر تصمیم جدیدتری برای همین محصول با موفقیت push شده، بازپخش تصمیم قدیمی
-            // قیمت فروشگاه را عقب می‌برد؛ قدیمی را failed (superseded) علامت می‌زنیم.
-            const [newerPushed] = await db_1.db
+            // قیمت فروشگاه را عقب می‌برد؛ قدیمی را superseded علامت می‌زنیم.
+            const [newerPushed] = await index_ts_1.db
                 .select({ id: schema_1.priceDecisions.id })
                 .from(schema_1.priceDecisions)
                 .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.productId, d.productId), (0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "applied"), (0, drizzle_orm_1.eq)(schema_1.priceDecisions.pushStatus, "pushed"), (0, drizzle_orm_1.gt)(schema_1.priceDecisions.id, d.id)))
                 .limit(1);
             if (newerPushed) {
-                await db_1.db
+                await index_ts_1.db
                     .update(schema_1.priceDecisions)
                     .set({
-                    pushStatus: "failed",
+                    status: "superseded",
+                    pushStatus: "superseded",
                     pushError: `تصمیم جدیدتر #${newerPushed.id} قبلاً push شده است (recovery superseded)`,
-                    pushedAt: new Date(),
+                    lastPushAttemptAt: new Date(),
                 })
                     .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
                 continue;
             }
             const res = await applyDecision(d.id, null);
             if (!res.ok) {
-                await db_1.db
+                await index_ts_1.db
                     .update(schema_1.priceDecisions)
-                    .set({ pushStatus: "failed", pushError: res.message, pushedAt: new Date() })
+                    .set({
+                    status: res.push?.skipped ? "pending_sync" : "sync_failed",
+                    pushStatus: res.push?.skipped ? "skipped" : "failed",
+                    pushError: res.message,
+                    lastPushAttemptAt: new Date(),
+                })
                     .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
             }
         }
         if (stuck.length) {
-            await (0, bootstrap_1.logActivity)("runner", `بازیابی ${stuck.length} تصمیم appliedِ بدون push_status انجام شد`, {
+            await (0, bootstrap_1.logActivity)("runner", `بازیابی ${stuck.length} تصمیم همگام‌نشده با فروشگاه انجام شد`, {
                 decisionIds: stuck.map((d) => d.id),
             });
         }
@@ -121,37 +158,58 @@ async function recoverStuckAppliedDecisions() {
         return 0;
     }
 }
-async function runPricing(opts) {
+async function runPricing(opts = {}) {
     await (0, bootstrap_1.ensureDefaults)();
     await recoverStuckAppliedDecisions();
+    const rawTrigger = opts.trigger ?? opts.triggeredBy ?? "manual";
+    const normalizedTrigger = rawTrigger === "scheduled" ? "schedule" : rawTrigger;
+    const hasManualOffers = Array.isArray(opts.manualOffers)
+        ? opts.manualOffers.length > 0
+        : Boolean(opts.manualOffers && Object.keys(opts.manualOffers).length > 0);
+    const isSimulated = Boolean(opts.isSimulated || opts.runMode === "simulate" || hasManualOffers);
+    const runMode = isSimulated
+        ? "simulate"
+        : opts.runMode === "shadow" || normalizedTrigger === "shadow"
+            ? "shadow"
+            : "live";
     const conds = [(0, drizzle_orm_1.eq)(schema_1.products.status, "active")];
     if (opts.productIds?.length)
         conds.push((0, drizzle_orm_1.inArray)(schema_1.products.id, opts.productIds));
     if (opts.category)
         conds.push((0, drizzle_orm_1.eq)(schema_1.products.category, opts.category));
-    let targets = opts.productIds?.length && opts.trigger !== "schedule"
-        ? await db_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.inArray)(schema_1.products.id, opts.productIds)).orderBy((0, drizzle_orm_1.asc)(schema_1.products.id))
-        : await db_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.and)(...conds)).orderBy((0, drizzle_orm_1.asc)(schema_1.products.id));
+    let targets = opts.productIds?.length && normalizedTrigger !== "schedule"
+        ? await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.inArray)(schema_1.products.id, opts.productIds)).orderBy((0, drizzle_orm_1.asc)(schema_1.products.id))
+        : await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.and)(...conds)).orderBy((0, drizzle_orm_1.asc)(schema_1.products.id));
     targets = targets.filter((p) => p.status !== "paused");
     if (opts.cardRangeFrom || opts.cardRangeTo) {
         const startIdx = Math.max(0, (opts.cardRangeFrom ?? 1) - 1);
         const endIdx = opts.cardRangeTo && opts.cardRangeTo > 0 ? opts.cardRangeTo : targets.length;
         targets = targets.slice(startIdx, endIdx);
     }
-    const [run] = await db_1.db
+    const [run] = await index_ts_1.db
         .insert(schema_1.priceRuns)
-        .values({ trigger: opts.trigger, scheduleId: opts.scheduleId, totalProducts: targets.length })
+        .values({
+        trigger: normalizedTrigger,
+        runMode,
+        isSimulated,
+        scheduleId: opts.scheduleId,
+        totalProducts: targets.length,
+    })
         .returning();
     const summary = {
         runId: run.id,
+        runMode,
+        isSimulated,
         total: targets.length,
         applied: 0,
         pendingReview: 0,
         failed: 0,
+        pendingSync: 0,
+        syncFailed: 0,
         decisionIds: [],
         lastError: null,
     };
-    const campaigns = await db_1.db.select().from(schema_1.discountCampaigns);
+    const campaigns = await index_ts_1.db.select().from(schema_1.discountCampaigns);
     const outcomes = [];
     let skippedLocked = 0;
     const concurrency = Math.max(1, Math.min(8, Number(process.env.PRICING_RUN_CONCURRENCY ?? 3) || 3));
@@ -170,16 +228,24 @@ async function runPricing(opts) {
                 continue;
             }
             try {
+                const productManualOffers = Array.isArray(opts.manualOffers)
+                    ? opts.manualOffers
+                    : opts.manualOffers?.[product.id];
                 const outcome = await priceOneProduct(product, run.id, campaigns, cardIndex, {
-                    manualOffers: opts.manualOffers,
+                    manualOffers: productManualOffers,
                     manualSupplierQuotes: opts.manualSupplierQuotes,
+                    runMode,
+                    isSimulated,
+                    profileIdOverride: opts.profileId,
                 });
                 outcomes.push(outcome);
                 summary.decisionIds.push(outcome.id);
-                if (outcome.status === "applied")
-                    summary.applied++;
-                else if (outcome.status === "pending_review")
+                if (outcome.status === "pending_sync") {
+                    // شمارش نهایی applied در فاز ۴ پس از تایید واقعی فروشگاه انجام می‌شود
+                }
+                else if (outcome.status === "pending_review") {
                     summary.pendingReview++;
+                }
                 else {
                     summary.failed++;
                     if (outcome.errorHint && !summary.lastError) {
@@ -213,54 +279,77 @@ async function runPricing(opts) {
             const maxCards = campaigns.find((x) => x.id === c.campaignId)?.maxCards ?? 0;
             if (maxCards > 0 && (perCampaignSeats[c.campaignId] ?? 0) >= maxCards) {
                 // صندلی تمام شد — showInFeatured تصمیمِ فاز ۱ (false) می‌ماند
-                await db_1.db.update(schema_1.priceDecisions).set({ showInFeatured: false }).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, c.decisionId));
+                await index_ts_1.db.update(schema_1.priceDecisions).set({ showInFeatured: false }).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, c.decisionId));
                 continue;
             }
             perCampaignSeats[c.campaignId] = (perCampaignSeats[c.campaignId] ?? 0) + 1;
-            await db_1.db.update(schema_1.priceDecisions).set({ showInFeatured: true }).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, c.decisionId));
+            await index_ts_1.db.update(schema_1.priceDecisions).set({ showInFeatured: true }).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, c.decisionId));
         }
     }
-    // ---------- فاز ۴: اعمال و push به فروشگاه (بعد از قطعیت صندلی‌ها)
+    // ---------- فاز ۴: اعمال و push به فروشگاه (فقط در اجرای live و پس از تایید واقعی فروشگاه)
     for (const o of outcomes) {
-        if (o.status === "applied" && o.deferred) {
-            await applyDecision(o.deferred.decisionId, o.deferred.campaignEndsAt);
+        if (o.status === "pending_sync" && o.deferred && runMode === "live" && !isSimulated) {
+            const pushRes = await applyDecision(o.deferred.decisionId, o.deferred.campaignEndsAt);
+            if (pushRes.ok) {
+                o.status = "applied";
+                summary.applied++;
+            }
+            else if (pushRes.push?.skipped) {
+                o.status = "pending_sync";
+                summary.pendingSync = (summary.pendingSync ?? 0) + 1;
+                summary.failed++;
+                if (!summary.lastError)
+                    summary.lastError = pushRes.message;
+            }
+            else {
+                o.status = "sync_failed";
+                summary.syncFailed = (summary.syncFailed ?? 0) + 1;
+                summary.failed++;
+                if (!summary.lastError)
+                    summary.lastError = pushRes.message;
+            }
         }
     }
-    // ---------- فاز ۵: گارد انقضا کمپین زمان‌دار (P0-6) — اگر کمپین فعلی به‌زودی منقضی شود و این
-    // اجرا جایگزین فعالِ آنرا اعمال نکرد، با قیمت فعلی «بدون کمپین» به فروشگاه ارسال می‌شود تا کمپین
-    // در سمت فروشگاه منقضی (نه رهاشده) نمایش داده شود.
-    let intervalMinutes = DEFAULT_INTERVAL_MINUTES;
-    try {
-        if (opts.scheduleId) {
-            const s = await db_1.db.select({ v: schema_1.schedules.intervalMinutes }).from(schema_1.schedules).where((0, drizzle_orm_1.eq)(schema_1.schedules.id, opts.scheduleId)).limit(1);
-            intervalMinutes = s[0]?.v ?? intervalMinutes;
+    // ---------- فاز ۵: گارد انقضا کمپین زمان‌دار (P0-6) — فقط در اجرای live
+    if (runMode === "live" && !isSimulated) {
+        let intervalMinutes = DEFAULT_INTERVAL_MINUTES;
+        try {
+            if (opts.scheduleId) {
+                const s = await index_ts_1.db
+                    .select({ v: schema_1.schedules.intervalMinutes })
+                    .from(schema_1.schedules)
+                    .where((0, drizzle_orm_1.eq)(schema_1.schedules.id, opts.scheduleId))
+                    .limit(1);
+                intervalMinutes = s[0]?.v ?? intervalMinutes;
+            }
+            else {
+                const s = await index_ts_1.db
+                    .select({ v: schema_1.schedules.intervalMinutes })
+                    .from(schema_1.schedules)
+                    .where((0, drizzle_orm_1.eq)(schema_1.schedules.active, true))
+                    .orderBy((0, drizzle_orm_1.asc)(schema_1.schedules.id))
+                    .limit(1);
+                intervalMinutes = s[0]?.v ?? intervalMinutes;
+            }
         }
-        else {
-            const s = await db_1.db
-                .select({ v: schema_1.schedules.intervalMinutes })
-                .from(schema_1.schedules)
-                .where((0, drizzle_orm_1.eq)(schema_1.schedules.active, true))
-                .orderBy((0, drizzle_orm_1.asc)(schema_1.schedules.id))
-                .limit(1);
-            intervalMinutes = s[0]?.v ?? intervalMinutes;
+        catch {
+            intervalMinutes = DEFAULT_INTERVAL_MINUTES;
         }
+        const appliedProductIds = new Set(outcomes.filter((o) => o.status === "applied").map((o) => o.productId));
+        await runExpiryGuard(targets, appliedProductIds, intervalMinutes, run.id);
     }
-    catch {
-        intervalMinutes = DEFAULT_INTERVAL_MINUTES;
-    }
-    const appliedProductIds = new Set(outcomes.filter((o) => o.status === "applied").map((o) => o.productId));
-    await runExpiryGuard(targets, appliedProductIds, intervalMinutes, run.id);
-    await db_1.db
+    await index_ts_1.db
         .update(schema_1.priceRuns)
         .set({
         status: "done",
         applied: summary.applied,
         pendingReview: summary.pendingReview,
         failed: summary.failed,
+        error: summary.lastError,
         finishedAt: new Date(),
     })
         .where((0, drizzle_orm_1.eq)(schema_1.priceRuns.id, run.id));
-    await (0, bootstrap_1.logActivity)("runner", `اجرای #${run.id} پایان یافت: ${summary.applied} اعمال، ${summary.pendingReview} بازبینی، ${summary.failed} رد/خطا${skippedLocked ? `، ${skippedLocked} قفل‌دار رد شد` : ""}`, { ...summary, skippedLocked });
+    await (0, bootstrap_1.logActivity)("runner", `اجرای #${run.id} (${runMode}) پایان یافت: ${summary.applied} اعمال تاییدشده، ${summary.pendingReview} بازبینی، ${summary.failed} رد/خطا${skippedLocked ? `، ${skippedLocked} قفل‌دار رد شد` : ""}`, { ...summary, skippedLocked });
     return summary;
 }
 async function runExpiryGuard(targets, appliedProductIds, intervalMinutes, runId) {
@@ -310,7 +399,7 @@ const SUPERVISOR_REASON_PREFIXES = [
     "رد توسط ناظر بالاسر SystemOne",
     "ناظر بالاسر SystemOne تصمیم را در بازه ریویو قرار داد",
 ];
-function syncSupervisorAfterEnrichment(result, sourceOk) {
+function syncSupervisorAfterEnrichment(result, sourceOk, allowCostlessAutoApply = false) {
     const sup = result.supervisor;
     result.reviewReasons = result.reviewReasons.filter((r) => !SUPERVISOR_REASON_PREFIXES.some((p) => r.startsWith(p)));
     if (sup.verdict === "reject") {
@@ -323,7 +412,7 @@ function syncSupervisorAfterEnrichment(result, sourceOk) {
     result.needsReview =
         result.reviewReasons.length > 0 ||
             !sourceOk ||
-            result.supply.effectiveCostPrice <= 0 ||
+            (result.supply.effectiveCostPrice <= 0 && !allowCostlessAutoApply) ||
             result.rejectedBySupervisor ||
             sup.verdict !== "approve";
     const level = sup.verdict === "reject" ? "error" : sup.verdict === "review" ? "warn" : "info";
@@ -360,10 +449,17 @@ function syncSupervisorAfterEnrichment(result, sourceOk) {
 async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     const manualOffers = opts?.manualOffers;
     const manualSupplierQuotes = opts?.manualSupplierQuotes;
+    const runMode = opts?.runMode ?? (manualOffers?.length ? "simulate" : "live");
+    const isSimulated = Boolean(opts?.isSimulated || runMode === "simulate" || (manualOffers && manualOffers.length > 0));
+    const validationSource = isSimulated
+        ? "simulated"
+        : runMode === "shadow"
+            ? "shadow_torob"
+            : "live_torob";
     if (!manualOffers?.length && !(0, registry_1.isAllowedSourceType)(product.sourceType)) {
         throw new Error(`منبع «${product.sourceType}» برای محصول ${product.sku} مجاز نیست؛ فقط منبع واقعی «ترب» پشتیبانی می‌شود. منبع محصول را از صفحه محصولات اصلاح کنید.`);
     }
-    const { config } = await (0, bootstrap_1.getProfileConfig)(product.profileId);
+    const { config } = await (0, bootstrap_1.getProfileConfig)(opts?.profileIdOverride ?? product.profileId);
     const supplierQuotes = manualSupplierQuotes ?? product.supplierQuotes ?? [];
     // مرجع تخفیف own_price_7d (P3): تاریخچه قیمت خودی دوام‌یافته در پنجره ۷ روزی
     const discountContext = await computeOwnDiscountContext(product.id, config.discount.ownPriceWindowDays ?? 7, config.discount.ownPriceMinHoldHours ?? 48);
@@ -379,6 +475,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         supplierQuotes,
         currentFinalPrice: product.currentFinalPrice,
     }, manualOffers);
+    const ownRecentPrices = await loadOwnRecentPrices(product.id, product.currentFinalPrice);
     const result = (0, engine_1.runPricingPipeline)(source, {
         productId: product.id,
         productName: product.name,
@@ -388,6 +485,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         minMarginPctOverride: product.minMarginPct,
         minProfitAmountOverride: product.minProfitAmount,
         currentFinalPrice: product.currentFinalPrice,
+        ownRecentPrices,
         category: product.category,
         config,
         discountContext,
@@ -400,7 +498,23 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             baseUrl: subqRuntime.baseUrl,
             model: subqRuntime.model,
         });
-        syncSupervisorAfterEnrichment(result, source.ok);
+        const allowCostless = Boolean(config.sourcing?.allowAutoApplyWithoutCost && config.costless?.autoApply);
+        syncSupervisorAfterEnrichment(result, source.ok, allowCostless);
+    }
+    const sourceExt = source;
+    const sourceDegradedOrChallenged = Boolean(sourceExt.isChallenged ||
+        sourceExt.degraded ||
+        source.meta?.challenged ||
+        source.meta?.degraded ||
+        sourceExt.sourceStatus === "challenged" ||
+        sourceExt.sourceStatus === "degraded" ||
+        sourceExt.sourceStatus === "error");
+    if (sourceDegradedOrChallenged) {
+        result.needsReview = true;
+        const reason = "منبع استعلام ترب در وضعیت چالش ضدربات یا داده ناقص (degraded/challenged) قرار دارد — نیازمند بازبینی انسانی";
+        if (!result.reviewReasons.includes(reason)) {
+            result.reviewReasons.push(reason);
+        }
     }
     if (config.ai.enabled && result.finalPrice && result.confidence < config.ai.reviewBelowConfidence) {
         // محرمانگی (۴.۲.۰): قیمت خرید/تمام‌شده/کف سود هرگز به LLM بیرونی فرستاده نمی‌شود؛ آن‌ها فقط برای
@@ -483,6 +597,10 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         if (marginGate.reason)
             result.reviewReasons.push(marginGate.reason);
     }
+    const costlessPolicyAuthorized = Boolean(config.sourcing?.allowAutoApplyWithoutCost === true &&
+        config.costless?.autoApply === true &&
+        (product.torobPrk || product.torobUrl) &&
+        result.confidence >= Math.max(0.9, config.costless?.minConfidence ?? 0.9));
     let status;
     if (result.rejectedBySupervisor) {
         status = "rejected";
@@ -490,15 +608,50 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     else if (!result.finalPrice) {
         status = "failed";
     }
-    else if (result.isProvisional) {
-        // P2-3: مسیر Provisional هرگز خودکار اعمال نمی‌شود
+    else if (runMode === "shadow" || isSimulated) {
+        // در حالت shadow یا simulate هرگز پوش خودکار به فروشگاه انجام نمی‌شود
         status = "pending_review";
     }
+    else if (result.isProvisional) {
+        // به صورت پیش‌فرض کالاهای بدون قیمت خرید نیازمند بازبینی انسانی‌اند مگر هر دو سیاست صریح فعال باشند
+        status =
+            costlessPolicyAuthorized && !result.needsReview && product.autoApply
+                ? "pending_sync"
+                : "pending_review";
+    }
     else if (strictlyAboveCost && !result.needsReview && product.autoApply) {
-        status = "applied";
+        // تصمیم تا قبل از تایید واقعی فروشگاه در وضعیت pending_sync قرار می‌گیرد (نه applied!)
+        status = "pending_sync";
     }
     else {
         status = "pending_review";
+    }
+    if (runMode === "shadow") {
+        result.steps.push({
+            step: "shadow_validation",
+            title: "اجرای آزمایشی در سایه (Shadow Validation — داده واقعی ترب)",
+            message: "تصمیم بر اساس مشاهدات واقعی ترب محاسبه و برای ممیزی/کالیبراسیون ثبت شد (بدون ارسال به فروشگاه)",
+            level: "info",
+            data: {
+                runMode: "shadow",
+                validationSource: "shadow_torob",
+                isSimulated: false,
+                wouldAutoApply: Boolean(strictlyAboveCost && !result.needsReview && product.autoApply && !result.isProvisional),
+            },
+        });
+    }
+    else if (isSimulated) {
+        result.steps.push({
+            step: "simulation_guard",
+            title: "گارد شبیه‌سازی (Simulated Run)",
+            message: "این تصمیم با داده‌های شبیه‌سازی/دستی ساخته شده و از استخراج کالیبراسیون و پوش خودکار مستثنی است",
+            level: "warn",
+            data: {
+                runMode: "simulate",
+                validationSource: "simulated",
+                isSimulated: true,
+            },
+        });
     }
     let campaignType = "none";
     let campaignName = null;
@@ -553,7 +706,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             },
         });
     }
-    const [decision] = await db_1.db
+    const [decision] = await index_ts_1.db
         .insert(schema_1.priceDecisions)
         .values({
         runId,
@@ -588,16 +741,34 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         netProfitToman: safeInt(result.position.netProfitToman),
         netMarginPct: safeReal(result.position.netMarginPct),
         confidence: safeReal(result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence),
-        engineVersion: config.engine?.version ?? "4.1.1",
+        engineVersion: config.engine?.version ?? "4.2.0",
         marketConflict: result.marketConflict ?? false,
         referenceKind: result.discountReferenceKind ?? "none",
         floorConfirmed: result.floorConfirmed ?? false,
+        pushStatus: status === "pending_sync" ? "pending" : null,
+        pushAttempts: 0,
+        isSimulated,
+        validationSource,
         status,
         steps: result.steps,
     })
         .returning();
+    const idempotencyKey = (0, connectors_1.buildIdempotencyKey)({
+        productId: product.id,
+        sku: product.sku,
+        basePrice: safeInt(result.basePrice) ?? 0,
+        finalPrice: safeInt(result.finalPrice) ?? 0,
+        discountPct: safeReal(result.discountPct),
+        campaignType,
+        decisionId: decision.id,
+        confidence: decision.confidence,
+    });
+    await index_ts_1.db
+        .update(schema_1.priceDecisions)
+        .set({ idempotencyKey })
+        .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decision.id));
     if (result.offers.length) {
-        await db_1.db.insert(schema_1.competitorOffers).values(result.offers.map((o) => ({
+        await index_ts_1.db.insert(schema_1.competitorOffers).values(result.offers.map((o) => ({
             decisionId: decision.id,
             productId: product.id,
             shopName: o.shopName,
@@ -624,7 +795,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     const lowestQuoteCost = result.supply.lowestQuoteCost;
     const shouldStoreReplacement = (lowestQuoteCost ?? 0) > 0 &&
         (product.costPrice <= 0 || lowestQuoteCost > product.costPrice);
-    await db_1.db
+    await index_ts_1.db
         .update(schema_1.products)
         .set({
         lastCheckedAt: new Date(),
@@ -646,8 +817,8 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     })
         .where((0, drizzle_orm_1.eq)(schema_1.products.id, product.id));
     // برگشت خروجی به‌همنه با فاز ۴ runner — applyDecision پس از تخصیص صندلی منتخب‌ها صدا زده می‌شود
-    const deferred = status === "applied" ? { decisionId: decision.id, campaignEndsAt } : undefined;
-    const featuredCandidate = status === "applied" &&
+    const deferred = status === "pending_sync" ? { decisionId: decision.id, campaignEndsAt } : undefined;
+    const featuredCandidate = status === "pending_sync" &&
         campaignId != null &&
         campaignType !== "none" &&
         (result.position.projectedLocalRank === 1 ||
@@ -678,59 +849,106 @@ function isSupervisorRejected(d) {
         return true;
     return false;
 }
-async function applyDecision(decisionId, campaignEndsAt, opts) {
-    const [d] = await db_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
-    if (!d || !d.finalPrice || !d.basePrice)
-        return { ok: false, message: "تصمیم نامعتبر" };
-    const [p] = await db_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId)).limit(1);
-    if (!p)
-        return { ok: false, message: "محصول یافت نشد" };
-    if (d.source !== "torob" && d.source !== "manual") {
-        return { ok: false, message: `اعمال تصمیم با منبع «${d.source}» ممنوع است؛ فقط تصمیم‌های مبتنی بر داده واقعی ترب یا ورود دستی مجاز به ارسال به فروشگاه‌اند` };
+function resolveApplyOptions(campaignEndsAtOrOpts, opts) {
+    if (campaignEndsAtOrOpts &&
+        typeof campaignEndsAtOrOpts === "object" &&
+        !(campaignEndsAtOrOpts instanceof Date)) {
+        return {
+            campaignEndsAt: campaignEndsAtOrOpts.campaignEndsAt ?? null,
+            opts: campaignEndsAtOrOpts,
+        };
     }
-    if (isSupervisorRejected({ status: d.status, steps: (d.steps ?? []) }) && !opts?.force) {
+    return {
+        campaignEndsAt: campaignEndsAtOrOpts ?? opts?.campaignEndsAt ?? null,
+        opts: opts ?? {},
+    };
+}
+async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
+    const { campaignEndsAt, opts: resolvedOpts } = resolveApplyOptions(campaignEndsAtOrOpts, opts);
+    const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
+    if (!d || !d.finalPrice || !d.basePrice) {
+        return { ok: false, code: "INVALID_DECISION", message: "تصمیم نامعتبر" };
+    }
+    const [p] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId)).limit(1);
+    if (!p) {
+        return { ok: false, code: "PRODUCT_NOT_FOUND", message: "محصول یافت نشد" };
+    }
+    if (d.isSimulated || d.validationSource === "simulated" || d.source === "simulate") {
         return {
             ok: false,
+            code: "SIMULATED_DECISION_BLOCKED",
+            message: "اعمال تصمیم شبیه‌سازی‌شده (simulated) روی فروشگاه واقعی ممنوع است",
+        };
+    }
+    if (d.source !== "torob" && d.source !== "manual") {
+        return {
+            ok: false,
+            code: "INVALID_DECISION_SOURCE",
+            message: `اعمال تصمیم با منبع «${d.source}» ممنوع است؛ فقط تصمیم‌های مبتنی بر داده واقعی ترب یا ورود دستی مجاز به ارسال به فروشگاه‌اند`,
+        };
+    }
+    if (isSupervisorRejected({ status: d.status, steps: (d.steps ?? []) }) &&
+        !resolvedOpts.force) {
+        return {
+            ok: false,
+            code: "SUPERVISOR_REJECTED",
             message: "این تصمیم توسط ناظر SystemOne رد شده (امتیاز زیر آستانه رد) و قابل اعمال نیست. برای بازبینی، محصول را با منبع/قیمت اصلاح و دوباره استعلام بگیرید.",
         };
     }
-    const effectiveCost = d.effectiveCostPrice ?? p.costPrice ?? 0;
-    if (effectiveCost > 0 && d.finalPrice <= effectiveCost) {
-        return {
-            ok: false,
-            message: `خطای خط قرمز سود: قیمت فروش (${d.finalPrice.toLocaleString("fa-IR")}) نمی‌تواند کمتر یا مساوی قیمت خرید/تامین (${effectiveCost.toLocaleString("fa-IR")}) باشد`,
-        };
-    }
+    const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, p.costPrice ?? 0);
     const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p.currentHardFloorPrice ?? 0);
-    if (effectiveFloor > 0 && d.finalPrice < effectiveFloor && !opts?.force) {
+    // گارد کالاهای بدون قیمت خرید: بدون هزینه تمام‌شده و کف سود، اعمال بدون تایید صریح انسانی (force) ممنوع است
+    if (effectiveCost <= 0 && effectiveFloor <= 0 && !resolvedOpts.force) {
         return {
             ok: false,
-            message: `خط قرمز فروش بروزرسانی شده است: قیمت نهایی (${d.finalPrice.toLocaleString("fa-IR")}) از خط قرمز فعلی (${effectiveFloor.toLocaleString("fa-IR")}) کمتر است. ابتدا استعلام جدید بگیرید یا با تأیید اجباری (force) اعمال کنید.`,
+            code: "MISSING_COST_BASIS",
+            message: "قیمت خرید/تامین و خط قرمز سود برای این محصول مشخص نیست؛ اعمال بدون تایید صریح انسانی (force) مجاز نیست.",
         };
     }
-    await db_1.db
-        .update(schema_1.products)
-        .set({
-        currentBasePrice: d.basePrice,
-        currentFinalPrice: d.finalPrice,
-        currentDiscountPct: d.discountPct,
-        currentCampaign: d.campaignType,
-        currentCampaignName: d.campaignName,
-        currentBadgeTheme: d.badgeTheme ?? "green-orange",
-        currentShowInFeatured: d.showInFeatured ?? false,
-        // P0-3: تایمر کمپین روی خودِ محصول ذخیره می‌شود تا پیوستگی و گارد انقضا کار کند
-        currentCampaignEndsAt: campaignEndsAt ?? (p.currentCampaignEndsAt ?? null),
-        lastDecisionId: d.id,
-        status: "active",
-        updatedAt: new Date(),
-    })
-        .where((0, drizzle_orm_1.eq)(schema_1.products.id, p.id));
+    const belowCostReason = typeof resolvedOpts.belowCostReason === "string" ? resolvedOpts.belowCostReason.trim() : "";
+    const authorizedBy = typeof resolvedOpts.authorizedBy === "string" ? resolvedOpts.authorizedBy.trim() : "";
+    const hasExplicitBelowCostAuth = Boolean(resolvedOpts.allowBelowCost === true && belowCostReason.length >= 5 && authorizedBy.length >= 2);
+    // خط قرمز اول سیستم: حتی با force=true عادی هرگز قیمت زیر قیمت خرید یا زیر کف سود اعمال نمی‌شود!
+    // تنها مسیر مجاز: allowBelowCost=true به همراه دلیل مکتوب (حداقل ۵ نویسه) و نام تاییدکننده (authorizedBy).
+    if (effectiveCost > 0 && d.finalPrice <= effectiveCost && !hasExplicitBelowCostAuth) {
+        return {
+            ok: false,
+            code: "BELOW_COST_PRICE",
+            message: `خطای خط قرمز سود: قیمت فروش (${d.finalPrice.toLocaleString("fa-IR")}) نمی‌تواند کمتر یا مساوی قیمت خرید/تامین (${effectiveCost.toLocaleString("fa-IR")}) باشد (اعمال زیر قیمت خرید نیازمند مجوز صریح allowBelowCost، دلیل مکتوب و نام تاییدکننده است)`,
+        };
+    }
+    if (effectiveFloor > 0 && d.finalPrice < effectiveFloor && !hasExplicitBelowCostAuth) {
+        return {
+            ok: false,
+            code: "BELOW_HARD_FLOOR",
+            message: `خط قرمز فروش: قیمت نهایی (${d.finalPrice.toLocaleString("fa-IR")}) از خط قرمز فعلی (${effectiveFloor.toLocaleString("fa-IR")}) کمتر است (اعمال زیر کف سود نیازمند مجوز صریح allowBelowCost، دلیل مکتوب و نام تاییدکننده است).`,
+        };
+    }
+    const belowCostOverride = hasExplicitBelowCostAuth
+        ? {
+            allowBelowCost: true,
+            reason: belowCostReason,
+            authorizedBy,
+        }
+        : null;
+    const idempotencyKey = d.idempotencyKey ||
+        (0, connectors_1.buildIdempotencyKey)({
+            productId: p.id,
+            sku: p.sku,
+            basePrice: d.basePrice,
+            finalPrice: d.finalPrice,
+            discountPct: d.discountPct ?? 0,
+            campaignType: d.campaignType ?? "none",
+            decisionId: d.id,
+            confidence: d.confidence,
+        });
+    const attemptTime = new Date();
     const push = await (0, connectors_1.pushToStore)({
         productId: p.id,
         sku: p.sku,
         storeExternalId: p.storeExternalId,
         effectiveCostPrice: effectiveCost,
-        hardFloorPrice: d.hardFloorPrice ?? p.currentHardFloorPrice ?? 0,
+        hardFloorPrice: effectiveFloor,
         monitoredMarketCeiling: d.monitoredMarketCeiling ?? d.basePrice,
         basePrice: d.basePrice,
         finalPrice: d.finalPrice,
@@ -741,36 +959,235 @@ async function applyDecision(decisionId, campaignEndsAt, opts) {
         showInFeatured: d.showInFeatured ?? false,
         campaignEndsAt: campaignEndsAt ? campaignEndsAt.toISOString() : null,
         decisionId: d.id,
+        idempotencyKey,
+        belowCostOverride,
         confidence: d.confidence,
         projectedNationalRank: d.projectedNationalRank,
         projectedLocalRank: d.projectedLocalRank,
         competitionTier: d.competitionTier,
     });
-    await db_1.db
+    const nextAttempts = (d.pushAttempts ?? 0) + Math.max(1, push.attempts ?? 1);
+    // اگر ارسال به فروشگاه تایید نشد (یا کانکتور فعال نبود)، هرگز قیمت محصول در دیتابیس محلی
+    // به عنوان قیمت اعمال‌شده بازنویسی نمی‌شود و تصمیم برچسب applied نمی‌خورد!
+    if (!push.ok || push.skipped) {
+        const nextStatus = push.skipped ? "pending_sync" : "sync_failed";
+        const nextPushStatus = push.skipped ? "skipped" : "failed";
+        await index_ts_1.db
+            .update(schema_1.priceDecisions)
+            .set({
+            status: nextStatus,
+            pushStatus: nextPushStatus,
+            pushError: push.message,
+            pushAttempts: nextAttempts,
+            lastPushAttemptAt: attemptTime,
+            idempotencyKey,
+        })
+            .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
+        await (0, bootstrap_1.logActivity)("apply", `عدم اعمال قیمت ${p.sku} در فروشگاه (${nextStatus}): ${push.message}`, {
+            decisionId: d.id,
+            productId: p.id,
+            status: nextStatus,
+            pushStatus: nextPushStatus,
+            attempts: nextAttempts,
+            code: push.code,
+        }, push.skipped ? "warn" : "error");
+        return {
+            ok: false,
+            code: push.code ?? (push.skipped ? "NO_ACTIVE_CONNECTOR" : "STORE_SYNC_FAILED"),
+            status: nextStatus,
+            pushStatus: nextPushStatus,
+            message: push.message,
+            push,
+            idempotencyKey,
+        };
+    }
+    const confirmedFinalPrice = push.confirmedPrice ?? d.finalPrice;
+    const updatedSteps = [...(d.steps ?? [])];
+    if (belowCostOverride) {
+        updatedSteps.push({
+            step: "below_cost_override",
+            title: "مجوز ممیزی‌شده فروش زیر قیمت خرید/کف سود",
+            message: `اعمال با مجوز صریح توسط «${belowCostOverride.authorizedBy}» — دلیل: ${belowCostOverride.reason}`,
+            level: "warn",
+            data: {
+                allowBelowCost: true,
+                authorizedBy: belowCostOverride.authorizedBy,
+                reason: belowCostOverride.reason,
+                effectiveCost,
+                effectiveFloor,
+                finalPrice: confirmedFinalPrice,
+                authorizedAt: attemptTime.toISOString(),
+            },
+        });
+    }
+    // فقط پس از تایید قطعی فروشگاه، قیمت‌های فعلی محصول و وضعیت applied بروزرسانی می‌شوند
+    await index_ts_1.db
+        .update(schema_1.products)
+        .set({
+        currentBasePrice: d.basePrice,
+        currentFinalPrice: confirmedFinalPrice,
+        currentDiscountPct: d.discountPct,
+        currentCampaign: d.campaignType,
+        currentCampaignName: d.campaignName,
+        currentBadgeTheme: d.badgeTheme ?? "green-orange",
+        currentShowInFeatured: d.showInFeatured ?? false,
+        // P0-3: تایمر کمپین روی خودِ محصول ذخیره می‌شود تا پیوستگی و گارد انقضا کار کند
+        currentCampaignEndsAt: campaignEndsAt ?? (p.currentCampaignEndsAt ?? null),
+        lastDecisionId: d.id,
+        needsRefresh: false,
+        status: "active",
+        updatedAt: new Date(),
+    })
+        .where((0, drizzle_orm_1.eq)(schema_1.products.id, p.id));
+    await index_ts_1.db
         .update(schema_1.priceDecisions)
         .set({
         status: "applied",
-        pushStatus: push.skipped ? "skipped" : push.ok ? "pushed" : "failed",
-        pushError: push.ok ? null : push.message,
-        pushedAt: new Date(),
+        pushStatus: "pushed",
+        pushError: null,
+        pushedAt: attemptTime,
+        lastPushAttemptAt: attemptTime,
+        pushAttempts: nextAttempts,
+        storeConfirmedPrice: confirmedFinalPrice,
+        idempotencyKey,
+        steps: updatedSteps,
     })
         .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
-    // S6: پوش موفق = سیگنال مغز خارجی (needsRefresh) برطرف شد
-    if (push.ok) {
-        await db_1.db.update(schema_1.products).set({ needsRefresh: false, updatedAt: new Date() }).where((0, drizzle_orm_1.eq)(schema_1.products.id, p.id));
+    // ۴.۲.۱ (F5): در این ساختار، قیمت محصول فقط پس از تایید قطعی فروشگاه نوشته می‌شود (بالا)؛
+    // بنابراین در شکست push، «قیمت فعلی» موتور همان قیمت قبل از تصمیم می‌ماند و اجرای بعد دوباره تلاش می‌کند.
+    await (0, bootstrap_1.logActivity)("apply", `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف تاییدشده ${confirmedFinalPrice} | کمپین: ${d.campaignType}${campaignEndsAt ? ` تا ${campaignEndsAt.toISOString()}` : ""} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${resolvedOpts.force ? " (اعمال دستی با force)" : ""}${belowCostOverride ? ` [مجوز زیر خرید توسط ${belowCostOverride.authorizedBy}]` : ""}`, {
+        decisionId: d.id,
+        productId: p.id,
+        forced: !!resolvedOpts.force,
+        belowCostOverride: belowCostOverride ?? undefined,
+        idempotencyKey,
+        confirmedPrice: confirmedFinalPrice,
+        attempts: nextAttempts,
+    }, "info");
+    return {
+        ok: true,
+        code: push.code ?? "STORE_SYNC_CONFIRMED",
+        status: "applied",
+        pushStatus: "pushed",
+        message: push.message,
+        push,
+        idempotencyKey,
+        confirmedPrice: confirmedFinalPrice,
+    };
+}
+exports.applyDecisionToStore = applyDecision;
+async function retryDecisionSync(decisionId, opts) {
+    const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
+    if (!d) {
+        return { ok: false, code: "DECISION_NOT_FOUND", message: "تصمیم یافت نشد" };
     }
-    await (0, bootstrap_1.logActivity)("apply", `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف نهایی ${d.finalPrice} | کمپین: ${d.campaignType}${campaignEndsAt ? ` تا ${campaignEndsAt.toISOString()}` : ""} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${opts?.force ? " (اعمال اجباری انسانی با force)" : ""}`, { decisionId: d.id, forced: !!opts?.force }, push.ok ? "info" : "warn");
-    return push;
+    const [newerPushed] = await index_ts_1.db
+        .select({ id: schema_1.priceDecisions.id })
+        .from(schema_1.priceDecisions)
+        .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.productId, d.productId), (0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "applied"), (0, drizzle_orm_1.eq)(schema_1.priceDecisions.pushStatus, "pushed"), (0, drizzle_orm_1.gt)(schema_1.priceDecisions.id, d.id)))
+        .limit(1);
+    if (newerPushed) {
+        const msg = `تصمیم جدیدتر #${newerPushed.id} قبلاً روی فروشگاه اعمال شده است (superseded)`;
+        await index_ts_1.db
+            .update(schema_1.priceDecisions)
+            .set({
+            status: "superseded",
+            pushStatus: "superseded",
+            pushError: msg,
+            lastPushAttemptAt: new Date(),
+        })
+            .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
+        return {
+            ok: false,
+            code: "DECISION_SUPERSEDED",
+            status: "superseded",
+            pushStatus: "superseded",
+            message: msg,
+        };
+    }
+    return applyDecision(decisionId, opts);
+}
+async function reconcilePendingDecisions(opts) {
+    const limit = Math.max(1, Math.min(200, opts?.limit ?? 50));
+    const maxAttempts = Math.max(1, opts?.maxAttempts ?? MAX_AUTO_SYNC_ATTEMPTS);
+    const conds = [
+        (0, drizzle_orm_1.or)((0, drizzle_orm_1.inArray)(schema_1.priceDecisions.status, ["pending_sync", "sync_failed"]), (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "applied"), (0, drizzle_orm_1.ne)(schema_1.priceDecisions.pushStatus, "pushed")), (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "applied"), (0, drizzle_orm_1.isNull)(schema_1.priceDecisions.pushStatus))),
+        (0, drizzle_orm_1.lt)(schema_1.priceDecisions.pushAttempts, maxAttempts),
+    ];
+    if (opts?.productId) {
+        conds.push((0, drizzle_orm_1.eq)(schema_1.priceDecisions.productId, opts.productId));
+    }
+    const pendingRows = await index_ts_1.db
+        .select()
+        .from(schema_1.priceDecisions)
+        .where((0, drizzle_orm_1.and)(...conds))
+        .orderBy((0, drizzle_orm_1.asc)(schema_1.priceDecisions.id))
+        .limit(limit);
+    // برای هر محصول فقط آخرین تصمیم در انتظار همگام‌سازی باید اعمال شود و قدیمی‌ترها superseded می‌شوند
+    const latestPendingByProduct = new Map();
+    for (const row of pendingRows) {
+        const prev = latestPendingByProduct.get(row.productId) ?? 0;
+        if (row.id > prev)
+            latestPendingByProduct.set(row.productId, row.id);
+    }
+    let synced = 0;
+    let failed = 0;
+    let skipped = 0;
+    let superseded = 0;
+    const results = [];
+    for (const row of pendingRows) {
+        const latestPendingId = latestPendingByProduct.get(row.productId) ?? row.id;
+        if (row.id < latestPendingId) {
+            const msg = `تصمیم جدیدتر #${latestPendingId} در صف همگام‌سازی همین محصول وجود دارد (superseded)`;
+            await index_ts_1.db
+                .update(schema_1.priceDecisions)
+                .set({
+                status: "superseded",
+                pushStatus: "superseded",
+                pushError: msg,
+                lastPushAttemptAt: new Date(),
+            })
+                .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, row.id));
+            superseded++;
+            results.push({ decisionId: row.id, productId: row.productId, ok: false, status: "superseded", message: msg });
+            continue;
+        }
+        const res = await retryDecisionSync(row.id, { force: opts?.force });
+        const status = res.status ?? (res.ok ? "applied" : "sync_failed");
+        if (res.ok)
+            synced++;
+        else if (status === "superseded")
+            superseded++;
+        else if (res.push?.skipped)
+            skipped++;
+        else
+            failed++;
+        results.push({
+            decisionId: row.id,
+            productId: row.productId,
+            ok: res.ok,
+            status,
+            message: res.message,
+        });
+    }
+    return {
+        checked: pendingRows.length,
+        synced,
+        failed,
+        skipped,
+        superseded,
+        results,
+    };
 }
 async function rejectDecision(decisionId) {
-    const [d] = await db_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
+    const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
     if (!d)
         return;
-    await db_1.db
+    await index_ts_1.db
         .update(schema_1.priceDecisions)
         .set({ status: "rejected", campaignType: "none", campaignName: null, showInFeatured: false })
         .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId));
-    await db_1.db.update(schema_1.products).set({ status: "active", updatedAt: new Date() }).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId));
+    await index_ts_1.db.update(schema_1.products).set({ status: "active", updatedAt: new Date() }).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId));
     await (0, bootstrap_1.logActivity)("apply", `تصمیم #${decisionId} رد شد`, { decisionId });
 }
 /**
@@ -779,13 +1196,13 @@ async function rejectDecision(decisionId) {
  */
 async function cleanupWrongTimedSaleCards(opts) {
     const targetRows = opts?.productId
-        ? await db_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, opts.productId))
-        : await db_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.currentCampaign, "timed_sale"));
+        ? await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, opts.productId))
+        : await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.currentCampaign, "timed_sale"));
     const cleanedProducts = [];
     const storeResetResults = [];
     for (const p of targetRows) {
         const safePrice = p.currentFinalPrice || p.currentBasePrice || 0;
-        await db_1.db
+        await index_ts_1.db
             .update(schema_1.products)
             .set({
             currentCampaign: "none",
@@ -800,7 +1217,7 @@ async function cleanupWrongTimedSaleCards(opts) {
             updatedAt: new Date(),
         })
             .where((0, drizzle_orm_1.eq)(schema_1.products.id, p.id));
-        await db_1.db
+        await index_ts_1.db
             .update(schema_1.priceDecisions)
             .set({
             campaignType: "none",
@@ -833,7 +1250,7 @@ async function cleanupWrongTimedSaleCards(opts) {
         }
     }
     // غیرفعال کردن کمپین پیش‌فرض timed_sale اگر به صورت خودکار همه کارت‌های ۱ تا ۱۰۰ را با ۳٪ تخفیف می‌گرفت
-    await db_1.db
+    await index_ts_1.db
         .update(schema_1.discountCampaigns)
         .set({ active: false, minDiscountPct: 10, cardRangeFrom: 21, cardRangeTo: 50 })
         .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.discountCampaigns.type, "timed_sale"), (0, drizzle_orm_1.eq)(schema_1.discountCampaigns.minDiscountPct, 3)));

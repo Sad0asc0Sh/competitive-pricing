@@ -161,8 +161,9 @@ export function AppShell({ children, authEnabled }: { children: ReactNode; authE
             <span className="ml-1 inline-flex translate-y-0.5 items-center">
               <IconShield className="h-4 w-4" />
             </span>
-            ورود مدیر تنظیم نشده است — برای واقعی و امن‌کردن پنل، متغیر <code dir="ltr" className="rounded bg-amber-100 px-1">ADMIN_PASSWORD</code> را
-            در فایل <code dir="ltr" className="rounded bg-amber-100 px-1">.env</code> سرور تنظیم و سرویس را ری‌استارت کنید.
+            حالت توسعه بدون رمز (<code dir="ltr" className="rounded bg-amber-100 px-1">ALLOW_INSECURE_DEV_AUTH=true</code>) فعال است — برای فعال‌سازی قفل Fail-Closed، متغیرهای{" "}
+            <code dir="ltr" className="rounded bg-amber-100 px-1">ADMIN_PASSWORD</code> و{" "}
+            <code dir="ltr" className="rounded bg-amber-100 px-1">SESSION_SECRET</code> را در فایل <code dir="ltr" className="rounded bg-amber-100 px-1">.env</code> تنظیم کنید.
           </div>
         )}
 

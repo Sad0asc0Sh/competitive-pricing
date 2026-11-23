@@ -4,6 +4,7 @@ exports.dynamic = void 0;
 exports.GET = GET;
 exports.POST = POST;
 const config_1 = require("../../../lib/ai/config");
+const auth_1 = require("../../../lib/auth");
 const systemone_supervisor_1 = require("../../../lib/pricing/systemone-supervisor");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
@@ -15,7 +16,10 @@ function settingsKeyFor(provider) {
     return null;
 }
 /** GET: وضعیت ماسک‌شده هر دو سرویس (بدون افشای توکن) */
-async function GET() {
+async function GET(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const status = await (0, config_1.getAIStatus)();
     return server_1.NextResponse.json(status);
 }
@@ -91,6 +95,9 @@ async function testSubqConnection() {
 }
 /** POST body: { provider: "ai"|"subq", action?: "save"|"test", enabled?, apiKey?, clearApiKey?, baseUrl?, model? } */
 async function POST(req) {
+    const denied = await (0, auth_1.requireAdminAuth)(req);
+    if (denied)
+        return denied;
     const body = (await req.json().catch(() => null));
     const settingsKey = settingsKeyFor(body?.provider);
     if (!body || !settingsKey) {

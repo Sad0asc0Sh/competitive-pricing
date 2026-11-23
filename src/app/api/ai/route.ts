@@ -8,6 +8,7 @@ import {
   type ProviderStatus,
   type SaveProviderInput,
 } from "@/lib/ai/config";
+import { requireAdminAuth } from "@/lib/auth";
 import { callSubqSystemOneApi } from "@/lib/pricing/systemone-supervisor";
 import type { SystemOneQuestionSpec } from "@/lib/pricing/types";
 import { NextResponse } from "next/server";
@@ -23,7 +24,10 @@ function settingsKeyFor(provider: unknown): string | null {
 }
 
 /** GET: وضعیت ماسک‌شده هر دو سرویس (بدون افشای توکن) */
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const status = await getAIStatus();
   return NextResponse.json(status);
 }
@@ -98,6 +102,9 @@ async function testSubqConnection(): Promise<{ ok: boolean; message: string }> {
 
 /** POST body: { provider: "ai"|"subq", action?: "save"|"test", enabled?, apiKey?, clearApiKey?, baseUrl?, model? } */
 export async function POST(req: Request) {
+  const denied = await requireAdminAuth(req);
+  if (denied) return denied;
+
   const body = (await req.json().catch(() => null)) as
     | (SaveProviderInput & { provider?: ProviderKey; action?: "save" | "test" })
     | null;

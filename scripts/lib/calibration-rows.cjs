@@ -29,6 +29,21 @@ const positive = (x) => {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
+/** آیا تصمیم حاصل شبیه‌سازی یا دادهٔ دستی/مصنوعی است؟ تصمیم‌های شبیه‌سازی هرگز نباید وارد کالیبراسیون شوند */
+function isSimulatedDecision(decision) {
+  if (!decision || typeof decision !== 'object') return false
+  if (decision.isSimulated === true || decision.is_simulated === true) return true
+  const valSrc = String(decision.validationSource ?? decision.validation_source ?? '').trim().toLowerCase()
+  if (valSrc === 'simulated' || valSrc === 'synthetic') return true
+  const src = decision.source != null ? String(decision.source).trim().toLowerCase() : ''
+  if (src && src !== 'torob') return true
+  const steps = Array.isArray(decision.steps) ? decision.steps : []
+  if (stepOf(steps, 'simulation_guard')) return true
+  const srcStep = stepOf(steps, 'source')
+  if (srcStep && srcStep.data && (srcStep.data.isSimulated === true || srcStep.data.simulated === true)) return true
+  return false
+}
+
 /** ویژگی‌های مدل اعتماد از steps؛ برای تصمیم‌های قدیمی (بدون گام robustness) null */
 function featuresFromSteps(steps) {
   const rob = stepOf(steps, 'robustness')
@@ -144,7 +159,12 @@ function buildRows(decisions, opts = {}) {
   const tol = opts.tolerance ?? TOLERANCE
   const rows = []
   const skipped = { noFeatures: 0, noLabel: 0 }
+  let simulatedCount = 0
   for (const d of decisions) {
+    if (isSimulatedDecision(d)) {
+      simulatedCount++
+      continue
+    }
     const f = featuresFromSteps(d.steps)
     if (!f) {
       skipped.noFeatures++
@@ -176,7 +196,21 @@ function buildRows(decisions, opts = {}) {
       labelSource,
     })
   }
+  if (simulatedCount > 0) {
+    skipped.simulated = simulatedCount
+  }
   return { rows, skipped }
 }
 
-module.exports = { TOLERANCE, WRONG, featuresFromSteps, needsReviewFromSteps, labelFromReview, labelFromAudit, parseAuditCsv, toNumber, buildRows }
+module.exports = {
+  TOLERANCE,
+  WRONG,
+  isSimulatedDecision,
+  featuresFromSteps,
+  needsReviewFromSteps,
+  labelFromReview,
+  labelFromAudit,
+  parseAuditCsv,
+  toNumber,
+  buildRows,
+}

@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.default = DashboardPage;
 const jsx_runtime_1 = require("react/jsx-runtime");
-const db_1 = require("@/db");
+const index_ts_1 = require("../db/index.ts");
 const schema_1 = require("../db/schema");
 const actions_1 = require("@/components/actions");
 const format_1 = require("../lib/format");
@@ -19,19 +19,19 @@ exports.dynamic = "force-dynamic";
 async function DashboardPage() {
     await (0, bootstrap_1.ensureDefaults)();
     const [[{ total }], [{ needsReview }], [{ pending }], recentDecisions, recentRuns, logs, sch, campaignStats] = await Promise.all([
-        db_1.db.select({ total: (0, drizzle_orm_1.count)() }).from(schema_1.products),
-        db_1.db.select({ needsReview: (0, drizzle_orm_1.count)() }).from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.status, "needs_review")),
-        db_1.db.select({ pending: (0, drizzle_orm_1.count)() }).from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "pending_review")),
-        db_1.db
+        index_ts_1.db.select({ total: (0, drizzle_orm_1.count)() }).from(schema_1.products),
+        index_ts_1.db.select({ needsReview: (0, drizzle_orm_1.count)() }).from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.status, "needs_review")),
+        index_ts_1.db.select({ pending: (0, drizzle_orm_1.count)() }).from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "pending_review")),
+        index_ts_1.db
             .select({ d: schema_1.priceDecisions, name: schema_1.products.name, sku: schema_1.products.sku })
             .from(schema_1.priceDecisions)
             .innerJoin(schema_1.products, (0, drizzle_orm_1.eq)(schema_1.products.id, schema_1.priceDecisions.productId))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.priceDecisions.createdAt))
             .limit(10),
-        db_1.db.select().from(schema_1.priceRuns).orderBy((0, drizzle_orm_1.desc)(schema_1.priceRuns.startedAt)).limit(5),
-        db_1.db.select().from(schema_1.activityLogs).orderBy((0, drizzle_orm_1.desc)(schema_1.activityLogs.createdAt)).limit(8),
-        db_1.db.select().from(schema_1.schedules).where((0, drizzle_orm_1.eq)(schema_1.schedules.active, true)),
-        db_1.db
+        index_ts_1.db.select().from(schema_1.priceRuns).orderBy((0, drizzle_orm_1.desc)(schema_1.priceRuns.startedAt)).limit(5),
+        index_ts_1.db.select().from(schema_1.activityLogs).orderBy((0, drizzle_orm_1.desc)(schema_1.activityLogs.createdAt)).limit(8),
+        index_ts_1.db.select().from(schema_1.schedules).where((0, drizzle_orm_1.eq)(schema_1.schedules.active, true)),
+        index_ts_1.db
             .select({ campaign: schema_1.products.currentCampaign, c: (0, drizzle_orm_1.count)(), avg: (0, drizzle_orm_1.sql) `avg(${schema_1.products.currentDiscountPct})` })
             .from(schema_1.products)
             .groupBy(schema_1.products.currentCampaign),

@@ -67,6 +67,11 @@ const ACRONYM_RULES: Array<[RegExp, string]> = [
   [/(^|\s)ار\s*جی\s*(45)(?=\s|$)/g, "$1rj$2"],
   [/(^|\s)ار\s*جی\s*(\d{1,2})(?=\s|$)/g, "$1rg$2"],
   [/(^|\s)ای\s*پی(?!\s*سی)(?=\s|$)/g, "$1ip"],
+  [/(^|\s)ام\s*سی\s*بی(?=\s|$)/g, "$1mcb"],
+  [/(^|\s)ام\s*سی\s*سی\s*بی(?=\s|$)/g, "$1mccb"],
+  [/(^|\s)ار\s*سی\s*سی\s*بی(?=\s|$)/g, "$1rccb"],
+  [/(^|\s)ار\s*سی\s*دی(?=\s|$)/g, "$1rcd"],
+  [/(^|\s)پی\s*ال\s*سی(?=\s|$)/g, "$1plc"],
 ];
 
 export function normalizeText(input: string | null | undefined): string {
@@ -81,6 +86,9 @@ export function normalizeText(input: string | null | undefined): string {
   s = toAsciiDigits(s)
     .replace(/٫/g, ".")
     .replace(/٬/g, "")
+    .replace(/[µμ]\s*[fF]\b/g, "uf")
+    .replace(/Ω/g, " ohm ")
+    .replace(/mm²/gi, "mm2")
     .replace(/[يى]/g, "ی")
     .replace(/[كک]/g, "ک")
     .replace(/[ةۀ]/g, "ه")
@@ -126,7 +134,29 @@ export function normalizeText(input: string | null | undefined): string {
     .replace(/مدار\s+بسته/g, "مداربسته")
     .replace(/سو[ئیی]*چ/g, "سوییچ")
     .replace(/هارد\s+دیسک/g, "هارددیسک")
-    .replace(/\bhard\s+disk\b/g, "harddisk");
+    .replace(/\bhard\s+disk\b/g, "harddisk")
+    .replace(/رک\s+مونت/g, "رکمونت")
+    .replace(/\brack\s+mount(?:able)?\b/g, "rackmount")
+    .replace(/تک\s+فاز/g, "تکفاز")
+    .replace(/سه\s+فاز/g, "سهفاز")
+    .replace(/تک\s+پل/g, "تکپل")
+    .replace(/دو\s+پل/g, "دوپل")
+    .replace(/سه\s+پل/g, "سهپل")
+    .replace(/چهار\s+پل/g, "چهارپل")
+    .replace(/امپر\s+ساعت/g, "امپرساعت")
+    .replace(/کیلو\s+ولت\s+امپر/g, "کیلوولتامپر")
+    .replace(/کیلوولت\s+امپر/g, "کیلوولتامپر")
+    .replace(/ولت\s+امپر/g, "ولتامپر")
+    .replace(/کیلو\s+وات/g, "کیلووات")
+    .replace(/کیلو\s+امپر/g, "کیلوامپر")
+    .replace(/کیلو\s+وار/g, "کیلووار")
+    .replace(/میکرو\s+فاراد/g, "میکروفاراد")
+    .replace(/سانتی\s+متر/g, "سانتیمتر")
+    .replace(/میلی\s*متر\s+مربع/g, "میلیمترمربع")
+    .replace(/وارم\s+لایت/g, "وارملایت")
+    .replace(/\bwarm\s+light\b/g, "warmlight")
+    .replace(/های\s+کپی/g, "هایکپی")
+    .replace(/\bhigh\s+copy\b/g, "highcopy");
 
   return s.replace(/\s+/g, " ").trim();
 }

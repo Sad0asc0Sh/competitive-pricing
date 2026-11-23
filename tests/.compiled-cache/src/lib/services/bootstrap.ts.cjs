@@ -5,7 +5,7 @@ exports.getProfileConfig = getProfileConfig;
 exports.findConfigConflicts = findConfigConflicts;
 exports.mergeConfig = mergeConfig;
 exports.logActivity = logActivity;
-const db_1 = require("@/db");
+const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
 const types_1 = require("../pricing/types");
 const drizzle_orm_1 = require("drizzle-orm");
@@ -14,17 +14,17 @@ let bootstrapped = false;
 async function ensureDefaults() {
     if (bootstrapped)
         return;
-    const profiles = await db_1.db.select().from(schema_1.pricingProfiles).limit(1);
+    const profiles = await index_ts_1.db.select().from(schema_1.pricingProfiles).limit(1);
     if (!profiles.length) {
-        await db_1.db.insert(schema_1.pricingProfiles).values({
+        await index_ts_1.db.insert(schema_1.pricingProfiles).values({
             name: "پروفایل پیش‌فرض (سود کم، فروش زیاد — ترب و مشهد)",
             isDefault: true,
             config: types_1.DEFAULT_PROFILE_CONFIG,
         });
     }
-    const camps = await db_1.db.select().from(schema_1.discountCampaigns).limit(1);
+    const camps = await index_ts_1.db.select().from(schema_1.discountCampaigns).limit(1);
     if (!camps.length) {
-        await db_1.db.insert(schema_1.discountCampaigns).values([
+        await index_ts_1.db.insert(schema_1.discountCampaigns).values([
             {
                 name: "پیشنهاد لحظه‌ای (صفحه اصلی)",
                 type: "flash",
@@ -92,9 +92,9 @@ async function ensureDefaults() {
             },
         ]);
     }
-    const sch = await db_1.db.select().from(schema_1.schedules).limit(1);
+    const sch = await index_ts_1.db.select().from(schema_1.schedules).limit(1);
     if (!sch.length) {
-        await db_1.db.insert(schema_1.schedules).values({
+        await index_ts_1.db.insert(schema_1.schedules).values({
             name: "استعلام خودکار هر ۳ ساعت (ترب و مشهد)",
             intervalMinutes: 180,
             active: true,
@@ -102,9 +102,9 @@ async function ensureDefaults() {
             nextRunAt: new Date(Date.now() + 180 * 60000),
         });
     }
-    const conn = await db_1.db.select().from(schema_1.storeConnectors).limit(1);
+    const conn = await index_ts_1.db.select().from(schema_1.storeConnectors).limit(1);
     if (!conn.length) {
-        await db_1.db.insert(schema_1.storeConnectors).values([
+        await index_ts_1.db.insert(schema_1.storeConnectors).values([
             {
                 name: "فروشگاه sgeooole (ekgkala-backend)",
                 type: "sgeooole",
@@ -120,14 +120,14 @@ async function ensureDefaults() {
 async function getProfileConfig(profileId) {
     await ensureDefaults();
     if (profileId) {
-        const r = await db_1.db.select().from(schema_1.pricingProfiles).where((0, drizzle_orm_1.eq)(schema_1.pricingProfiles.id, profileId)).limit(1);
+        const r = await index_ts_1.db.select().from(schema_1.pricingProfiles).where((0, drizzle_orm_1.eq)(schema_1.pricingProfiles.id, profileId)).limit(1);
         if (r[0])
             return withProfileAudit(r[0].id, r[0].config);
     }
-    const d = await db_1.db.select().from(schema_1.pricingProfiles).where((0, drizzle_orm_1.eq)(schema_1.pricingProfiles.isDefault, true)).limit(1);
+    const d = await index_ts_1.db.select().from(schema_1.pricingProfiles).where((0, drizzle_orm_1.eq)(schema_1.pricingProfiles.isDefault, true)).limit(1);
     if (d[0])
         return withProfileAudit(d[0].id, d[0].config);
-    const any = await db_1.db.select().from(schema_1.pricingProfiles).limit(1);
+    const any = await index_ts_1.db.select().from(schema_1.pricingProfiles).limit(1);
     return withProfileAudit(any[0].id, any[0].config);
 }
 const auditedProfileIds = new Set();
@@ -216,7 +216,7 @@ function mergeConfig(partial) {
 }
 async function logActivity(scope, message, meta = {}, level = "info") {
     try {
-        await db_1.db.insert(schema_1.activityLogs).values({ scope, message, meta, level });
+        await index_ts_1.db.insert(schema_1.activityLogs).values({ scope, message, meta, level });
     }
     catch {
         // لاگ نباید جریان اصلی را بشکند

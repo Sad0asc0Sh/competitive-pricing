@@ -249,3 +249,29 @@ test('C11. CLI (pg جعلی): وصلهٔ نامعتبر پیش از اتصال �
     assert.equal(run('--preset', 'nope', '--default').status, 1, 'پروفایل ریسک ناشناخته')
   })
 })
+
+test('C12. گارد اصالت کالیبراسیون: ضرایب یا آستانه‌های حاصل از شبیه‌ساز (trainSeeds/isSimulated) روی پروفایل واقعی رد می‌شوند', () => {
+  const fromSimSeeds = {
+    estimator: { minCalibratedConfidence: 0.72 },
+    trainSeeds: [101, 102],
+    testSeeds: [103],
+  }
+  const r1 = lib.validateEstimatorPatch(fromSimSeeds)
+  assert.equal(r1.ok, false)
+  assert.match(r1.errors[0], /شبیه‌ساز/)
+
+  const fromSimMeta = {
+    estimator: { confidenceModel: { intercept: -0.2, wLogitRight: 0.9, wHeuristic: 0, wNoneValid: 0, wFloorBound: 0 } },
+    meta: { isSimulated: true, validationSource: 'simulated' },
+  }
+  const r2 = lib.validateEstimatorPatch(fromSimMeta)
+  assert.equal(r2.ok, false)
+  assert.match(r2.errors[0], /شبیه‌ساز/)
+
+  const fromRealShadow = {
+    estimator: { minCalibratedConfidence: 0.85 },
+    meta: { source: 'calibration-rows.json', validationSource: 'shadow_torob', isSimulated: false },
+  }
+  const r3 = lib.validateEstimatorPatch(fromRealShadow)
+  assert.equal(r3.ok, true, r3.errors.join(' | '))
+})

@@ -95,10 +95,14 @@ export const products = pgTable(
   (t) => [index("products_status_idx").on(t.status)],
 );
 
-/** هر بار اجرای موتور قیمت (دستی/زمان‌بندی/API) */
+/** هر بار اجرای موتور قیمت (دستی/زمان‌بندی/API/سایه) */
 export const priceRuns = pgTable("price_runs", {
   id: serial("id").primaryKey(),
-  trigger: varchar("trigger", { length: 30 }).notNull(), // manual | schedule | api
+  trigger: varchar("trigger", { length: 30 }).notNull(), // manual | schedule | api | shadow
+  /** حالت اجرا: live (اعمال واقعی) | shadow (مشاهده واقعی ترب بدون پوش به فروشگاه) | simulate (شبیه‌سازی/دستی) */
+  runMode: varchar("run_mode", { length: 30 }).default("live").notNull(),
+  /** آیا این اجرا با داده‌های شبیه‌سازی یا دستی انجام شده است؟ */
+  isSimulated: boolean("is_simulated").default(false).notNull(),
   status: varchar("status", { length: 30 }).default("running").notNull(), // running | done | failed
   scheduleId: integer("schedule_id"),
   totalProducts: integer("total_products").default(0).notNull(),
@@ -155,19 +159,28 @@ export const priceDecisions = pgTable(
     netProfitToman: integer("net_profit_toman"),
     netMarginPct: real("net_margin_pct"),
     confidence: real("confidence").default(0).notNull(),
-    status: varchar("status", { length: 30 }).notNull(), // applied | pending_review | rejected | failed | skipped
+    status: varchar("status", { length: 30 }).notNull(), // applied | pending_sync | sync_failed | pending_review | rejected | failed | skipped | superseded
     steps: jsonb("steps").$type<DecisionStep[]>().default([]).notNull(),
-    /** نسخه‌ی موتور ۴.۱.۱ که این تصمیم را ساخته (قابل‌ردیابی) */
-    engineVersion: varchar("engine_version", { length: 20 }).default("4.1.1").notNull(),
+    /** نسخه‌ی موتور ۴.۲.۰ که این تصمیم را ساخته (قابل‌ردیابی) */
+    engineVersion: varchar("engine_version", { length: 20 }).default("4.2.0").notNull(),
     /** فروشنده suspect_low زیر قیمت پیشنهادی ما (market_conflict → review) */
     marketConflict: boolean("market_conflict").default(false).notNull(),
     /** مرجع مقایسه تخفیف: none | own_price_7d | market_p75 */
     referenceKind: varchar("reference_kind", { length: 30 }),
     /** کف نهایی متناسب با مرجع/کف بازار و از روی کف دقیق اعمال شد (true) یا به‌قدر لازم کالیبره نشده (false) */
     floorConfirmed: boolean("floor_confirmed").default(false).notNull(),
-    pushStatus: varchar("push_status", { length: 30 }), // pushed | failed | skipped
+    /** کلید یکتا برای جلوگیری از اعمال تکراری تصمیم در فروشگاه */
+    idempotencyKey: varchar("idempotency_key", { length: 120 }),
+    pushStatus: varchar("push_status", { length: 30 }), // pushed | pending | failed | skipped | superseded
+    pushAttempts: integer("push_attempts").default(0).notNull(),
+    lastPushAttemptAt: timestamp("last_push_attempt_at"),
+    storeConfirmedPrice: integer("store_confirmed_price"),
     pushError: text("push_error"),
     pushedAt: timestamp("pushed_at"),
+    /** آیا این تصمیم حاصل داده شبیه‌سازی/دستی است؟ (نباید وارد کالیبراسیون شود) */
+    isSimulated: boolean("is_simulated").default(false).notNull(),
+    /** منبع اعتبارسنجی: live_torob | shadow_torob | simulated */
+    validationSource: varchar("validation_source", { length: 30 }).default("live_torob").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
@@ -175,6 +188,7 @@ export const priceDecisions = pgTable(
     index("decisions_run_idx").on(t.runId),
     // هم‌نام با ایندکس SQL مهاجرت؛ بدون این تعریف drizzle-kit push آن را drift می‌دید (N3).
     index("decisions_push_recovery_idx").on(t.status, t.pushStatus, t.createdAt),
+    index("decisions_idempotency_idx").on(t.idempotencyKey),
   ],
 );
 
@@ -256,7 +270,16 @@ export const schedules = pgTable("schedules", {
   name: text("name").notNull(),
   intervalMinutes: integer("interval_minutes").default(360).notNull(),
   active: boolean("active").default(true).notNull(),
-  filter: jsonb("filter").$type<{ category?: string; productIds?: number[] }>().default({}).notNull(),
+  filter: jsonb("filter")
+    .$type<{
+      category?: string;
+      productIds?: number[];
+      cardRangeFrom?: number;
+      cardRangeTo?: number;
+      profileId?: number;
+    }>()
+    .default({})
+    .notNull(),
   lastRunAt: timestamp("last_run_at"),
   nextRunAt: timestamp("next_run_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

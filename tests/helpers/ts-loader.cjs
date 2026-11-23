@@ -56,7 +56,8 @@ function assertCacheFresh(relPath, fullPath) {
   } catch {
     want = undefined
   }
-  const have = require('node:crypto').createHash('sha256').update(fs.readFileSync(fullPath, 'utf8'), 'utf8').digest('hex')
+  // مستقل از پایان‌خط (CRLF ⟷ LF) — هم‌سو با sha256 در scripts/build-test-cache.cjs
+  const have = require('node:crypto').createHash('sha256').update(fs.readFileSync(fullPath, 'utf8').replace(/\r\n/g, '\n'), 'utf8').digest('hex')
   if (want !== have) {
     throw new Error(
       `کش کامپایل تست برای ${key} با منبع فعلی هم‌خوان نیست (کهنه یا بدون manifest). ` +
@@ -115,6 +116,10 @@ function loadTsModule(relPath) {
   })
   code = code.replace(/from\s+["']@\/db\/([^"']+)["']/g, (_, p1) => {
     const target = path.resolve(pricingRoot, 'src/db', p1)
+    return `from "${toImportPath(fullPath, target)}"`
+  })
+  code = code.replace(/from\s+["']@\/db["']/g, () => {
+    const target = path.resolve(pricingRoot, 'src/db/index.ts')
     return `from "${toImportPath(fullPath, target)}"`
   })
 

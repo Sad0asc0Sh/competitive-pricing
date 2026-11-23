@@ -52,13 +52,47 @@ const NESTED_KEYS = ['validity', 'scenario', 'confidenceModel']
 const isPlain = (x) => x != null && typeof x === 'object' && !Array.isArray(x)
 
 /**
- * @param {unknown} input  فایل JSON: { estimator: {...} } (خروجی fit-confidence --write همین شکل را دارد؛ کلید meta نادیده گرفته می‌شود)
+ * بررسی منشأ کالیبراسیون: جلوگیری از اعمال ضرایب یا آستانه‌های حاصل از شبیه‌ساز (simulated/synthetic)
+ * روی پروفایل‌های واقعی تولیدی.
+ */
+function validateCalibrationProvenance(input) {
+  if (!isPlain(input)) return { ok: false, errors: ['ورودی معتبر نیست'] }
+  const errors = []
+  const meta = isPlain(input.meta) ? input.meta : {}
+  const hasSimSeeds = Array.isArray(input.trainSeeds) || Array.isArray(input.testSeeds) || Array.isArray(meta.trainSeeds) || Array.isArray(meta.testSeeds)
+  const flaggedSim =
+    input.isSimulated === true ||
+    input.simulated === true ||
+    meta.isSimulated === true ||
+    meta.simulated === true ||
+    String(meta.validationSource || '').toLowerCase() === 'simulated' ||
+    String(meta.runMode || '').toLowerCase() === 'simulate' ||
+    /^(sim|simulator|synthetic|mock)/i.test(String(meta.source || '').trim())
+
+  if (hasSimSeeds || flaggedSim) {
+    errors.push(
+      'اعمال ضرایب یا آستانهٔ حاصل از شبیه‌ساز (simulated/synthetic) روی پروفایل واقعی ممنوع است؛ کالیبراسیون باید فقط بر پایهٔ مشاهدات واقعی ترب (live_torob / shadow_torob) باشد',
+    )
+  }
+  return { ok: errors.length === 0, errors }
+}
+
+/**
+ * @param {unknown} input  فایل JSON: { estimator: {...} } (خروجی fit-confidence --write همین شکل را دارد؛ کلید meta برای اصالت‌سنجی بررسی می‌شود)
  * @returns {{ ok: boolean, errors: string[], patch: object }}
  */
 function validateEstimatorPatch(input, defaults = loadDefaults()) {
   const errors = []
-  if (!isPlain(input) || !isPlain(input.estimator)) {
+  if (!isPlain(input)) {
     return { ok: false, errors: ['ورودی باید شیء JSON با کلید «estimator» باشد'], patch: {} }
+  }
+  const prov = validateCalibrationProvenance(input)
+  if (!prov.ok) {
+    errors.push(...prov.errors)
+  }
+  if (!isPlain(input.estimator)) {
+    errors.push('ورودی باید شیء JSON با کلید «estimator» باشد')
+    return { ok: false, errors, patch: {} }
   }
   const src = input.estimator
   const patch = {}
@@ -176,4 +210,15 @@ function diffEstimator(storedEstimator, patch, defaults = loadDefaults()) {
   return rows
 }
 
-module.exports = { PRESETS, RANGES, NESTED_RANGES, loadDefaults, validateEstimatorPatch, effectiveEstimator, validateEffective, mergeEstimatorPatch, diffEstimator }
+module.exports = {
+  PRESETS,
+  RANGES,
+  NESTED_RANGES,
+  loadDefaults,
+  validateCalibrationProvenance,
+  validateEstimatorPatch,
+  effectiveEstimator,
+  validateEffective,
+  mergeEstimatorPatch,
+  diffEstimator,
+}

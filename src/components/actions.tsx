@@ -208,38 +208,150 @@ export function CardRangeRunner({ totalCards }: { totalCards: number }) {
   );
 }
 
-export function DecisionActions({ decisionId }: { decisionId: number }) {
+export function DecisionActions({
+  decisionId,
+  id,
+  force = false,
+  isBelowFloor = false,
+  syncFailed = false,
+}: {
+  decisionId?: number;
+  id?: number;
+  force?: boolean;
+  isBelowFloor?: boolean;
+  syncFailed?: boolean;
+}) {
+  const targetId = decisionId ?? id ?? 0;
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const act = (action: "approve" | "reject") =>
+  const [showOverrideForm, setShowOverrideForm] = useState(false);
+  const [authorizedBy, setAuthorizedBy] = useState("");
+  const [belowCostReason, setBelowCostReason] = useState("");
+
+  const act = (
+    action: "approve" | "reject" | "retry_sync",
+    overrideOpts?: { allowBelowCost: boolean; belowCostReason: string; authorizedBy: string }
+  ) => {
+    if (action === "approve" && isBelowFloor && !overrideOpts?.allowBelowCost) {
+      setShowOverrideForm(true);
+      setMsg({
+        ok: false,
+        text: "این تصمیم زیر کف هزینه/سود است؛ برای تایید، مجوز صریح مدیریت (Override) را ثبت کنید.",
+      });
+      return;
+    }
+
     start(async () => {
       setMsg(null);
-      const { ok, data } = await safeJsonFetch(`/api/decisions/${decisionId}`, {
+      const { ok, data } = await safeJsonFetch(`/api/decisions/${targetId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({
+          action,
+          force,
+          ...(overrideOpts?.allowBelowCost
+            ? {
+                allowBelowCost: true,
+                belowCostReason: overrideOpts.belowCostReason,
+                authorizedBy: overrideOpts.authorizedBy,
+              }
+            : {}),
+        }),
       });
+      if (
+        !ok &&
+        (data.belowCostBlocked === true ||
+          data.code === "BELOW_FLOOR_BLOCKED" ||
+          data.code === "BELOW_COST_BLOCKED")
+      ) {
+        setShowOverrideForm(true);
+      } else if (ok) {
+        setShowOverrideForm(false);
+      }
       setMsg({
         ok,
         text: String(data.message ?? (ok ? "انجام شد" : data.error ?? "خطا")),
       });
       router.refresh();
     });
+  };
+
   return (
-    <span className="inline-flex flex-wrap items-center gap-2">
-      <button type="button" className="btn-success" disabled={pending} onClick={() => act("approve")}>
-        تأیید و اعمال
-      </button>
-      <button type="button" className="btn-secondary" disabled={pending} onClick={() => act("reject")}>
-        رد
-      </button>
-      {msg && (
-        <span className={`text-xs font-medium ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>
-          {msg.text}
-        </span>
+    <div className="inline-flex flex-col items-end gap-2">
+      <span className="inline-flex flex-wrap items-center gap-2">
+        {syncFailed ? (
+          <button
+            type="button"
+            className="btn-primary text-xs"
+            disabled={pending}
+            onClick={() => act("retry_sync")}
+          >
+            🔄 تلاش مجدد ارسال به فروشگاه
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={isBelowFloor ? "btn-danger text-xs" : "btn-success"}
+            disabled={pending}
+            onClick={() => act("approve")}
+          >
+            {isBelowFloor ? "⚠️ تایید با مجوز زیر کف…" : "تأیید و اعمال"}
+          </button>
+        )}
+        <button type="button" className="btn-secondary" disabled={pending} onClick={() => act("reject")}>
+          رد
+        </button>
+        {msg && (
+          <span className={`text-xs font-medium ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>
+            {msg.text}
+          </span>
+        )}
+      </span>
+
+      {showOverrideForm && (
+        <div className="w-72 space-y-2 rounded-xl border border-rose-300 bg-rose-50 p-3 text-right">
+          <div className="text-xs font-bold text-rose-900">
+            🛡️ مجوز صریح فروش زیر کف قیمت خرید / سود
+          </div>
+          <input
+            className="input text-xs"
+            placeholder="نام تأییدکننده (مثلاً مدیر بازرگانی)"
+            value={authorizedBy}
+            onChange={(e) => setAuthorizedBy(e.target.value)}
+          />
+          <input
+            className="input text-xs"
+            placeholder="علت مجوز (حداقل ۵ کاراکتر)"
+            value={belowCostReason}
+            onChange={(e) => setBelowCostReason(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-danger text-xs"
+              disabled={pending || authorizedBy.trim().length < 2 || belowCostReason.trim().length < 5}
+              onClick={() =>
+                act("approve", {
+                  allowBelowCost: true,
+                  authorizedBy: authorizedBy.trim(),
+                  belowCostReason: belowCostReason.trim(),
+                })
+              }
+            >
+              ثبت مجوز و اعمال
+            </button>
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() => setShowOverrideForm(false)}
+            >
+              انصراف
+            </button>
+          </div>
+        </div>
       )}
-    </span>
+    </div>
   );
 }
 

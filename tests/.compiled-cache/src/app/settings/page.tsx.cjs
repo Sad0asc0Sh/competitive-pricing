@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.default = SettingsPage;
 const jsx_runtime_1 = require("react/jsx-runtime");
-const db_1 = require("@/db");
+const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
 const settings_panels_1 = require("@/components/settings-panels");
 const config_1 = require("../../lib/ai/config");
@@ -12,9 +12,9 @@ exports.dynamic = "force-dynamic";
 async function SettingsPage() {
     await (0, bootstrap_1.ensureDefaults)();
     const [profiles, sch, conns, aiStatus] = await Promise.all([
-        db_1.db.select().from(schema_1.pricingProfiles).orderBy(schema_1.pricingProfiles.id),
-        db_1.db.select().from(schema_1.schedules).orderBy(schema_1.schedules.id),
-        db_1.db.select().from(schema_1.storeConnectors).orderBy(schema_1.storeConnectors.id),
+        index_ts_1.db.select().from(schema_1.pricingProfiles).orderBy(schema_1.pricingProfiles.id),
+        index_ts_1.db.select().from(schema_1.schedules).orderBy(schema_1.schedules.id),
+        index_ts_1.db.select().from(schema_1.storeConnectors).orderBy(schema_1.storeConnectors.id),
         (0, config_1.getAIStatus)(),
     ]);
     const masked = conns.map((c) => ({ ...c, config: Object.fromEntries(Object.entries(c.config).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v])) }));
