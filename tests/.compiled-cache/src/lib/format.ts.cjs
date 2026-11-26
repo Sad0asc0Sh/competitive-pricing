@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.strategyLabel = exports.badgeThemeLabel = exports.campaignColor = exports.campaignLabel = exports.statusColor = exports.statusLabel = exports.faDate = exports.pct = exports.faNum = exports.toman = void 0;
+exports.strategyLabel = exports.badgeThemeLabel = exports.campaignColor = exports.campaignShortLabel = exports.campaignLabel = exports.statusColor = exports.statusLabel = exports.faDate = exports.pct = exports.faNum = exports.toman = void 0;
 const toman = (n) => (n == null ? "—" : `${Math.round(n).toLocaleString("fa-IR")} تومان`);
 exports.toman = toman;
 const faNum = (n, digits = 0) => (n == null ? "—" : Number(n).toLocaleString("fa-IR", { maximumFractionDigits: digits }));
@@ -12,6 +12,9 @@ exports.faDate = faDate;
 exports.statusLabel = {
     applied: "اعمال شد",
     pending_review: "در انتظار بازبینی",
+    pending_sync: "در صف ارسال",
+    sync_failed: "خطای همگام‌سازی",
+    superseded: "جایگزین‌شده",
     rejected: "رد شد",
     failed: "ناموفق",
     skipped: "رد شد",
@@ -24,8 +27,12 @@ exports.statusLabel = {
 exports.statusColor = {
     applied: "bg-emerald-100 text-emerald-800",
     pending_review: "bg-amber-100 text-amber-800",
+    pending_sync: "bg-sky-100 text-sky-800",
+    sync_failed: "bg-rose-100 text-rose-800",
+    superseded: "bg-slate-100 text-slate-500",
     rejected: "bg-slate-200 text-slate-700",
     failed: "bg-rose-100 text-rose-800",
+    skipped: "bg-slate-200 text-slate-700",
     active: "bg-emerald-100 text-emerald-800",
     paused: "bg-slate-200 text-slate-700",
     needs_review: "bg-amber-100 text-amber-800",
@@ -38,6 +45,13 @@ exports.campaignLabel = {
     timed_sale: "فرصت زمان‌دار (مالی و تخفیف / منتخب‌ها)",
     none: "بدون کمپین",
     auto: "تشخیص خودکار موتور",
+};
+exports.campaignShortLabel = {
+    flash: "لحظه‌ای",
+    featured: "شگفت‌انگیز",
+    timed_sale: "فرصت زمان‌دار",
+    none: "عادی",
+    auto: "خودکار",
 };
 exports.campaignColor = {
     flash: "bg-amber-100 text-amber-900 border-amber-300",

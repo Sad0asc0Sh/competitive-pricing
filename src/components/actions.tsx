@@ -2,8 +2,13 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { IconChevronDown, IconSliders, IconSpinner } from "./icons";
+import { ConfirmDialog, useToast } from "./ui";
 
-async function safeJsonFetch(url: string, init: RequestInit): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+async function safeJsonFetch(
+  url: string,
+  init: RequestInit,
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
   try {
     const res = await fetch(url, init);
     if (res.status === 401 && typeof window !== "undefined") {
@@ -33,18 +38,22 @@ export function RunButton({
   cardRangeTo,
   label = "اجرای استعلام",
   className = "btn-primary",
+  onDone,
 }: {
   productIds?: number[];
   cardRangeFrom?: number;
   cardRangeTo?: number;
   label?: string;
   className?: string;
+  onDone?: () => void;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   return (
-    <span className="inline-flex flex-wrap items-center gap-2">
+    <span className="inline-flex max-w-full flex-wrap items-center gap-2">
       <button
         type="button"
         className={className}
@@ -64,21 +73,26 @@ export function RunButton({
             });
             if (ok) {
               const lastErr = typeof data.lastError === "string" && data.lastError ? ` (${data.lastError})` : "";
-              setMsg({
-                ok: Number(data.failed ?? 0) === 0 || Number(data.applied ?? 0) + Number(data.pendingReview ?? 0) > 0,
-                text: `اعمال: ${data.applied ?? 0} | بازبینی: ${data.pendingReview ?? 0} | رد/خطا: ${data.failed ?? 0}${lastErr}`,
-              });
+              const text = `اعمال: ${data.applied ?? 0} | بازبینی: ${data.pendingReview ?? 0} | رد/خطا: ${data.failed ?? 0}${lastErr}`;
+              const isSuccess = Number(data.failed ?? 0) === 0 || Number(data.applied ?? 0) + Number(data.pendingReview ?? 0) > 0;
+              setMsg({ ok: isSuccess, text });
+              if (isSuccess) toast.success(text);
+              else toast.error(text);
+              onDone?.();
             } else {
-              setMsg({ ok: false, text: String(data.error ?? "خطا در اجرای استعلام") });
+              const errText = String(data.error ?? "خطا در اجرای استعلام");
+              setMsg({ ok: false, text: errText });
+              toast.error(errText);
             }
             router.refresh();
           })
         }
       >
-        {pending ? "در حال استعلام…" : label}
+        {pending && <IconSpinner className="h-4 w-4 shrink-0" />}
+        <span>{pending ? "در حال استعلام…" : label}</span>
       </button>
       {msg && (
-        <span className={`text-xs font-medium ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>
+        <span className={`text-xs font-medium break-words ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>
           {msg.text}
         </span>
       )}
@@ -89,122 +103,204 @@ export function RunButton({
 /**
  * نوار ابزار اجرای هوشمند روی یک رنج دلخواه از کارت‌ها + دکمه پاک‌سازی فوری دسته ۳ و ریست قفل ترب
  */
-export function CardRangeRunner({ totalCards }: { totalCards: number }) {
+export function CardRangeRunner({
+  totalCards,
+  defaultCollapsedOnMobile = false,
+}: {
+  totalCards: number;
+  defaultCollapsedOnMobile?: boolean;
+}) {
   const router = useRouter();
+  const toast = useToast();
   const [fromCard, setFromCard] = useState(1);
   const [toCard, setToCard] = useState(Math.max(1, Math.min(3, totalCards || 3)));
   const [category, setCategory] = useState("");
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(!defaultCollapsedOnMobile);
+  const [cleanupConfirmOpen, setCleanupConfirmOpen] = useState(false);
+
+  const presets: Array<[number, number]> = [
+    [1, 3],
+    [1, 5],
+    [6, 10],
+    [11, 15],
+  ];
+
+  const runCleanup = () =>
+    start(async () => {
+      setMsg(null);
+      const { ok, data } = await safeJsonFetch("/api/campaigns/cleanup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const text = String(data.message ?? data.error ?? "پاک‌سازی انجام شد");
+      setMsg({ ok, text });
+      if (ok) toast.success(text);
+      else toast.error(text);
+      setCleanupConfirmOpen(false);
+      router.refresh();
+    });
 
   return (
-    <div className="space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/50 p-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <div className="text-xs font-bold text-indigo-900">
-            🎯 اجرای هدفمند کف و سقف + تخفیف روی رنجی از کارت‌ها
+    <>
+      <div className="rounded-2xl border border-indigo-200/80 bg-indigo-50/50 p-3.5 sm:p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-bold text-indigo-950 sm:text-sm">
+              🎯 اجرای هدفمند کف و سقف + تخفیف روی رنجی از کارت‌ها
+            </div>
+            <div className="mt-0.5 text-[11px] leading-5 text-slate-600 sm:text-xs">
+              برای جلوگیری از چالش کپچای ترب (HTTP 490)، استعلام را در دسته‌های ۳ تا ۵ کارتی اجرا کنید
+            </div>
           </div>
-          <div className="text-xs text-slate-500">
-            برای جلوگیری از چالش کپچای ترب (HTTP 490)، استعلام را در دسته‌های ۳ تا ۵ کارتی اجرا کنید
-          </div>
-        </div>
-        <div>
-          <label className="label">از کارت #</label>
-          <input
-            className="input num w-24"
-            type="number"
-            min={1}
-            value={fromCard}
-            onChange={(e) => setFromCard(Math.max(1, Number(e.target.value)))}
-          />
-        </div>
-        <div>
-          <label className="label">تا کارت #</label>
-          <input
-            className="input num w-24"
-            type="number"
-            min={1}
-            value={toCard}
-            onChange={(e) => setToCard(Math.max(1, Number(e.target.value)))}
-          />
-        </div>
-        <div>
-          <label className="label">فیلتر دسته (اختیاری)</label>
-          <input
-            className="input w-40"
-            placeholder="همه دسته‌ها"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          />
-        </div>
-        <button
-          type="button"
-          className="btn-primary"
-          disabled={pending}
-          onClick={() =>
-            start(async () => {
-              setMsg(null);
-              const { ok, data } = await safeJsonFetch("/api/runs", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  cardRangeFrom: fromCard,
-                  cardRangeTo: toCard,
-                  category: category.trim() || undefined,
-                }),
-              });
-              if (ok) {
-                const lastErr = typeof data.lastError === "string" && data.lastError ? ` — علت خطا: ${data.lastError}` : "";
-                setMsg({
-                  ok: Number(data.failed ?? 0) === 0 || Number(data.applied ?? 0) + Number(data.pendingReview ?? 0) > 0,
-                  text: `کارت #${fromCard} تا #${toCard} بررسی شد → اعمال: ${data.applied ?? 0} | صف بازبینی: ${data.pendingReview ?? 0} | رد/خطا: ${data.failed ?? 0}${lastErr}`,
-                });
-              } else {
-                setMsg({ ok: false, text: String(data.error ?? "خطا در اجرای رنج کارت‌ها") });
-              }
-              router.refresh();
-            })
-          }
-        >
-          {pending ? "در حال اجرای رنج کارت‌ها…" : `⚡ اعمال روی کارت #${fromCard} تا #${toCard}`}
-        </button>
 
-        <button
-          type="button"
-          className="btn-secondary text-xs"
-          disabled={pending}
-          onClick={() =>
-            start(async () => {
-              setMsg(null);
-              const { ok, data } = await safeJsonFetch("/api/campaigns/cleanup", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({}),
-              });
-              setMsg({
-                ok,
-                text: String(data.message ?? data.error ?? "پاک‌سازی انجام شد"),
-              });
-              router.refresh();
-            })
-          }
-        >
-          🧹 پاک‌سازی کارت اشتباه دسته ۳ (فرصت زمان‌دار) + ریست قفل ترب
-        </button>
+          {defaultCollapsedOnMobile && (
+            <button
+              type="button"
+              onClick={() => setMobileOpen((o) => !o)}
+              aria-expanded={mobileOpen}
+              className="btn-secondary btn-sm md:hidden"
+            >
+              <IconSliders className="h-3.5 w-3.5" />
+              <span>{mobileOpen ? "بستن ابزار" : "تنظیم و اجرا"}</span>
+              <IconChevronDown className={`h-3.5 w-3.5 transition-transform ${mobileOpen ? "rotate-180" : ""}`} />
+            </button>
+          )}
+        </div>
+
+        <div className={`mt-3 space-y-3 ${mobileOpen ? "block" : "hidden md:block"}`}>
+          {/* میانبرهای سریع رنج کارت */}
+          <div className="no-scrollbar flex items-center gap-1.5 overflow-x-auto pb-0.5">
+            <span className="shrink-0 text-[11px] font-medium text-slate-500">رنج سریع:</span>
+            {presets.map(([f, t]) => {
+              const clampedTo = totalCards > 0 ? Math.min(t, totalCards) : t;
+              if (totalCards > 0 && f > totalCards) return null;
+              const isCurrent = fromCard === f && toCard === clampedTo;
+              return (
+                <button
+                  key={`${f}-${t}`}
+                  type="button"
+                  onClick={() => {
+                    setFromCard(f);
+                    setToCard(clampedTo);
+                  }}
+                  className={`chip num min-h-8 text-[11px] ${isCurrent ? "chip-active" : ""}`}
+                >
+                  کارت #{f.toLocaleString("fa-IR")} تا #{clampedTo.toLocaleString("fa-IR")}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-[110px_110px_minmax(150px,1fr)_auto_auto] lg:items-end">
+            <div>
+              <label className="label">از کارت #</label>
+              <input
+                className="input num"
+                type="number"
+                min={1}
+                value={fromCard}
+                onChange={(e) => setFromCard(Math.max(1, Number(e.target.value)))}
+              />
+            </div>
+            <div>
+              <label className="label">تا کارت #</label>
+              <input
+                className="input num"
+                type="number"
+                min={1}
+                value={toCard}
+                onChange={(e) => setToCard(Math.max(1, Number(e.target.value)))}
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-2 lg:col-span-1">
+              <label className="label">فیلتر دسته (اختیاری)</label>
+              <input
+                className="input"
+                placeholder="همه دسته‌ها"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-2 lg:col-span-1">
+              <button
+                type="button"
+                className="btn-primary w-full"
+                disabled={pending}
+                onClick={() =>
+                  start(async () => {
+                    setMsg(null);
+                    const { ok, data } = await safeJsonFetch("/api/runs", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        cardRangeFrom: fromCard,
+                        cardRangeTo: toCard,
+                        category: category.trim() || undefined,
+                      }),
+                    });
+                    if (ok) {
+                      const lastErr =
+                        typeof data.lastError === "string" && data.lastError ? ` — علت خطا: ${data.lastError}` : "";
+                      const text = `کارت #${fromCard} تا #${toCard} بررسی شد → اعمال: ${data.applied ?? 0} | صف بازبینی: ${data.pendingReview ?? 0} | رد/خطا: ${data.failed ?? 0}${lastErr}`;
+                      const isOk =
+                        Number(data.failed ?? 0) === 0 ||
+                        Number(data.applied ?? 0) + Number(data.pendingReview ?? 0) > 0;
+                      setMsg({ ok: isOk, text });
+                      if (isOk) toast.success(text);
+                      else toast.error(text);
+                    } else {
+                      const errText = String(data.error ?? "خطا در اجرای رنج کارت‌ها");
+                      setMsg({ ok: false, text: errText });
+                      toast.error(errText);
+                    }
+                    router.refresh();
+                  })
+                }
+              >
+                {pending && <IconSpinner className="h-4 w-4 shrink-0" />}
+                <span>{pending ? "در حال اجرا…" : `⚡ اعمال روی کارت #${fromCard} تا #${toCard}`}</span>
+              </button>
+            </div>
+            <div className="col-span-2 sm:col-span-2 lg:col-span-1">
+              <button
+                type="button"
+                className="btn-secondary w-full text-xs"
+                disabled={pending}
+                onClick={() => setCleanupConfirmOpen(true)}
+              >
+                🧹 پاک‌سازی دسته ۳ + ریست قفل ترب
+              </button>
+            </div>
+          </div>
+
+          {msg && (
+            <div
+              className={`rounded-xl border px-3 py-2 text-xs font-medium break-words ${
+                msg.ok
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                  : "border-rose-300 bg-rose-50 text-rose-900"
+              }`}
+            >
+              {msg.text}
+            </div>
+          )}
+        </div>
       </div>
 
-      {msg && (
-        <div
-          className={`rounded-lg border px-3 py-2 text-xs font-medium ${
-            msg.ok
-              ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-              : "border-rose-300 bg-rose-50 text-rose-900"
-          }`}
-        >
-          {msg.text}
-        </div>
-      )}
-    </div>
+      <ConfirmDialog
+        open={cleanupConfirmOpen}
+        title="پاک‌سازی دسته ۳ و ریست قفل ترب"
+        description="کارت‌هایی که بدون قیمت خرید به اشتباه وارد دسته ۳ (فرصت زمان‌دار) شده‌اند از دیتابیس و فروشگاه بازگردانی شده و قفل موقت استعلام ترب ریست می‌شود. ادامه می‌دهید؟"
+        confirmLabel="تأیید و پاک‌سازی"
+        tone="primary"
+        busy={pending}
+        onConfirm={runCleanup}
+        onCancel={() => setCleanupConfirmOpen(false)}
+      />
+    </>
   );
 }
 
@@ -223,6 +319,7 @@ export function DecisionActions({
 }) {
   const targetId = decisionId ?? id ?? 0;
   const router = useRouter();
+  const toast = useToast();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [showOverrideForm, setShowOverrideForm] = useState(false);
@@ -231,14 +328,13 @@ export function DecisionActions({
 
   const act = (
     action: "approve" | "reject" | "retry_sync",
-    overrideOpts?: { allowBelowCost: boolean; belowCostReason: string; authorizedBy: string }
+    overrideOpts?: { allowBelowCost: boolean; belowCostReason: string; authorizedBy: string },
   ) => {
     if (action === "approve" && isBelowFloor && !overrideOpts?.allowBelowCost) {
       setShowOverrideForm(true);
-      setMsg({
-        ok: false,
-        text: "این تصمیم زیر کف هزینه/سود است؛ برای تایید، مجوز صریح مدیریت (Override) را ثبت کنید.",
-      });
+      const warn = "این تصمیم زیر کف هزینه/سود است؛ برای تایید، مجوز صریح مدیریت (Override) را ثبت کنید.";
+      setMsg({ ok: false, text: warn });
+      toast.info(warn);
       return;
     }
 
@@ -269,48 +365,56 @@ export function DecisionActions({
       } else if (ok) {
         setShowOverrideForm(false);
       }
-      setMsg({
-        ok,
-        text: String(data.message ?? (ok ? "انجام شد" : data.error ?? "خطا")),
-      });
+      const text = String(data.message ?? (ok ? "انجام شد" : data.error ?? "خطا"));
+      setMsg({ ok, text });
+      if (ok) toast.success(text);
+      else toast.error(text);
       router.refresh();
     });
   };
 
   return (
-    <div className="inline-flex flex-col items-end gap-2">
-      <span className="inline-flex flex-wrap items-center gap-2">
+    <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
+      <div className="flex flex-wrap items-center gap-2">
         {syncFailed ? (
           <button
             type="button"
-            className="btn-primary text-xs"
+            className="btn-primary flex-1 text-xs sm:flex-initial"
             disabled={pending}
             onClick={() => act("retry_sync")}
           >
-            🔄 تلاش مجدد ارسال به فروشگاه
+            {pending && <IconSpinner className="h-3.5 w-3.5" />}
+            <span>🔄 تلاش مجدد ارسال به فروشگاه</span>
           </button>
         ) : (
           <button
             type="button"
-            className={isBelowFloor ? "btn-danger text-xs" : "btn-success"}
+            className={`flex-1 sm:flex-initial ${isBelowFloor ? "btn-danger text-xs" : "btn-success"}`}
             disabled={pending}
             onClick={() => act("approve")}
           >
-            {isBelowFloor ? "⚠️ تایید با مجوز زیر کف…" : "تأیید و اعمال"}
+            {pending && <IconSpinner className="h-3.5 w-3.5" />}
+            <span>{isBelowFloor ? "⚠️ تایید با مجوز زیر کف…" : "تأیید و اعمال"}</span>
           </button>
         )}
-        <button type="button" className="btn-secondary" disabled={pending} onClick={() => act("reject")}>
+        <button
+          type="button"
+          className="btn-secondary flex-1 sm:flex-initial"
+          disabled={pending}
+          onClick={() => act("reject")}
+        >
           رد
         </button>
-        {msg && (
-          <span className={`text-xs font-medium ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>
-            {msg.text}
-          </span>
-        )}
-      </span>
+      </div>
+
+      {msg && (
+        <span className={`text-xs font-medium break-words ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>
+          {msg.text}
+        </span>
+      )}
 
       {showOverrideForm && (
-        <div className="w-72 space-y-2 rounded-xl border border-rose-300 bg-rose-50 p-3 text-right">
+        <div className="w-full space-y-2 rounded-xl border border-rose-300 bg-rose-50 p-3 text-right sm:w-80">
           <div className="text-xs font-bold text-rose-900">
             🛡️ مجوز صریح فروش زیر کف قیمت خرید / سود
           </div>
@@ -326,10 +430,10 @@ export function DecisionActions({
             value={belowCostReason}
             onChange={(e) => setBelowCostReason(e.target.value)}
           />
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              className="btn-danger text-xs"
+              className="btn-danger flex-1 text-xs sm:flex-initial"
               disabled={pending || authorizedBy.trim().length < 2 || belowCostReason.trim().length < 5}
               onClick={() =>
                 act("approve", {
@@ -339,11 +443,12 @@ export function DecisionActions({
                 })
               }
             >
-              ثبت مجوز و اعمال
+              {pending && <IconSpinner className="h-3.5 w-3.5" />}
+              <span>ثبت مجوز و اعمال</span>
             </button>
             <button
               type="button"
-              className="btn-secondary text-xs"
+              className="btn-secondary flex-1 text-xs sm:flex-initial"
               onClick={() => setShowOverrideForm(false)}
             >
               انصراف
@@ -357,6 +462,7 @@ export function DecisionActions({
 
 export function ProductStatusToggle({ id, status }: { id: number; status: string }) {
   const router = useRouter();
+  const toast = useToast();
   const [pending, start] = useTransition();
   const next = status === "paused" ? "active" : "paused";
   return (
@@ -366,38 +472,67 @@ export function ProductStatusToggle({ id, status }: { id: number; status: string
       disabled={pending}
       onClick={() =>
         start(async () => {
-          await safeJsonFetch(`/api/products/${id}`, {
+          const { ok, data } = await safeJsonFetch(`/api/products/${id}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ status: next }),
           });
+          if (ok) {
+            toast.success(next === "active" ? "قیمت‌گذاری محصول فعال شد" : "قیمت‌گذاری محصول متوقف شد");
+          } else {
+            toast.error(String(data.error ?? "خطا در تغییر وضعیت محصول"));
+          }
           router.refresh();
         })
       }
     >
-      {status === "paused" ? "فعال‌سازی" : "توقف قیمت‌گذاری"}
+      {pending && <IconSpinner className="h-4 w-4" />}
+      <span>{status === "paused" ? "فعال‌سازی" : "توقف قیمت‌گذاری"}</span>
     </button>
   );
 }
 
-export function DeleteProductButton({ id }: { id: number }) {
+export function DeleteProductButton({ id, name }: { id: number; name?: string }) {
   const router = useRouter();
+  const toast = useToast();
   const [pending, start] = useTransition();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const remove = () =>
+    start(async () => {
+      const { ok, data } = await safeJsonFetch(`/api/products/${id}`, { method: "DELETE" });
+      if (ok) {
+        toast.success("محصول با موفقیت حذف شد");
+        setConfirmOpen(false);
+        router.push("/products");
+        router.refresh();
+      } else {
+        toast.error(String(data.error ?? "خطا در حذف محصول"));
+      }
+    });
+
   return (
-    <button
-      type="button"
-      className="btn-danger"
-      disabled={pending}
-      onClick={() => {
-        if (!confirm("حذف محصول؟")) return;
-        start(async () => {
-          await safeJsonFetch(`/api/products/${id}`, { method: "DELETE" });
-          router.push("/products");
-          router.refresh();
-        });
-      }}
-    >
-      حذف
-    </button>
+    <>
+      <button
+        type="button"
+        className="btn-danger"
+        disabled={pending}
+        onClick={() => setConfirmOpen(true)}
+      >
+        {pending && <IconSpinner className="h-4 w-4" />}
+        <span>حذف</span>
+      </button>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="حذف کارت محصول"
+        description={`آیا از حذف ${name ? `«${name}»` : "این محصول"} و تمام تاریخچه تصمیم‌های آن مطمئن هستید؟ این عمل قابل بازگشت نیست.`}
+        confirmLabel="بله، حذف شود"
+        tone="danger"
+        busy={pending}
+        onConfirm={remove}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </>
   );
 }

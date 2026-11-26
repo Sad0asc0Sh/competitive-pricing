@@ -1,21 +1,17 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.default = RunsPage;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
-const format_1 = require("../../lib/format");
+const runs_client_1 = require("@/components/runs-client");
 const drizzle_orm_1 = require("drizzle-orm");
-const link_1 = __importDefault(require("next/link"));
 exports.dynamic = "force-dynamic";
 async function RunsPage({ searchParams }) {
     const { run } = await searchParams;
     const runs = await index_ts_1.db.select().from(schema_1.priceRuns).orderBy((0, drizzle_orm_1.desc)(schema_1.priceRuns.startedAt)).limit(50);
-    const selected = run ? Number(run) : runs[0]?.id;
+    const selected = run ? Number(run) : runs[0]?.id ?? null;
     const decisions = selected
         ? await index_ts_1.db
             .select({ d: schema_1.priceDecisions, name: schema_1.products.name, sku: schema_1.products.sku })
@@ -24,5 +20,31 @@ async function RunsPage({ searchParams }) {
             .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.runId, selected))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.priceDecisions.createdAt))
         : [];
-    return ((0, jsx_runtime_1.jsxs)("div", { className: "grid gap-6 lg:grid-cols-[320px_1fr]", children: [(0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsx)("h1", { className: "mb-3 text-lg font-bold", children: "\u0627\u062C\u0631\u0627\u0647\u0627" }), (0, jsx_runtime_1.jsxs)("ul", { className: "space-y-1", children: [runs.map((r) => ((0, jsx_runtime_1.jsx)("li", { children: (0, jsx_runtime_1.jsxs)(link_1.default, { href: `/runs?run=${r.id}`, className: `block rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${selected === r.id ? "bg-indigo-50 text-indigo-800" : ""}`, children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex items-center justify-between", children: [(0, jsx_runtime_1.jsxs)("span", { children: ["#", r.id, " \u00B7 ", r.trigger === "schedule" ? "زمان‌بندی" : r.trigger === "manual" ? "دستی" : "API"] }), (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[r.status]}`, children: format_1.statusLabel[r.status] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "text-xs text-slate-500", children: [(0, format_1.faDate)(r.startedAt), " \u00B7 ", (0, format_1.faNum)(r.totalProducts), " \u0645\u062D\u0635\u0648\u0644 \u00B7 ", (0, format_1.faNum)(r.applied), "\u2713 ", (0, format_1.faNum)(r.pendingReview), "\u23F3 ", (0, format_1.faNum)(r.failed), "\u2717"] })] }) }, r.id))), !runs.length && (0, jsx_runtime_1.jsx)("li", { className: "text-sm text-slate-400", children: "\u0627\u062C\u0631\u0627\u06CC\u06CC \u062B\u0628\u062A \u0646\u0634\u062F\u0647" })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "space-y-3 lg:hidden", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "px-1 font-bold", children: ["\u062A\u0635\u0645\u06CC\u0645\u200C\u0647\u0627\u06CC \u0627\u062C\u0631\u0627\u06CC #", selected ?? "—"] }), decisions.map(({ d, name, sku }) => ((0, jsx_runtime_1.jsxs)("div", { className: "m-row", children: [(0, jsx_runtime_1.jsxs)("div", { className: "mb-2 flex items-start justify-between gap-2", children: [(0, jsx_runtime_1.jsxs)("div", { className: "min-w-0", children: [(0, jsx_runtime_1.jsx)(link_1.default, { href: `/products/${d.productId}`, className: "block truncate font-bold text-indigo-700", children: name }), (0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-400", children: sku })] }), (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[d.status]}`, children: format_1.statusLabel[d.status] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u0642\u06CC\u0645\u062A \u0646\u0647\u0627\u06CC\u06CC" }), (0, jsx_runtime_1.jsx)("span", { className: "num font-bold text-emerald-700", children: (0, format_1.toman)(d.finalPrice) })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u0645\u0631\u062C\u0639 / \u0627\u0635\u0644\u06CC" }), (0, jsx_runtime_1.jsxs)("span", { className: "num text-xs", children: [(0, format_1.toman)(d.referencePrice), " / ", (0, format_1.toman)(d.basePrice)] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "m-row-kv", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u062A\u062E\u0641\u06CC\u0641 / \u06A9\u0645\u067E\u06CC\u0646 / \u0627\u0639\u062A\u0645\u0627\u062F" }), (0, jsx_runtime_1.jsxs)("span", { className: "num text-xs", children: [(0, format_1.pct)(d.discountPct), " \u00B7 ", format_1.campaignLabel[d.campaignType ?? "none"], " \u00B7 ", (0, format_1.pct)(d.confidence * 100, 0)] })] })] }, d.id))), !decisions.length && (0, jsx_runtime_1.jsx)("div", { className: "empty-state", children: "\u062A\u0635\u0645\u06CC\u0645\u06CC \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F" })] }), (0, jsx_runtime_1.jsxs)("div", { className: "card hidden lg:block", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "mb-3 font-bold", children: ["\u062A\u0635\u0645\u06CC\u0645\u200C\u0647\u0627\u06CC \u0627\u062C\u0631\u0627\u06CC #", selected ?? "—"] }), (0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "\u0645\u062D\u0635\u0648\u0644" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0645\u0646\u0628\u0639" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0645\u0639\u062A\u0628\u0631/\u06A9\u0644" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0645\u0631\u062C\u0639" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0627\u0635\u0644\u06CC" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0646\u0647\u0627\u06CC\u06CC" }), (0, jsx_runtime_1.jsx)("th", { children: "\u062A\u062E\u0641\u06CC\u0641" }), (0, jsx_runtime_1.jsx)("th", { children: "\u06A9\u0645\u067E\u06CC\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0627\u0639\u062A\u0645\u0627\u062F" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0636\u0639\u06CC\u062A" })] }) }), (0, jsx_runtime_1.jsxs)("tbody", { children: [decisions.map(({ d, name, sku }) => ((0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsxs)("td", { children: [(0, jsx_runtime_1.jsx)(link_1.default, { href: `/products/${d.productId}`, className: "text-indigo-700 hover:underline", children: name }), (0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-400", children: sku })] }), (0, jsx_runtime_1.jsx)("td", { children: d.source }), (0, jsx_runtime_1.jsxs)("td", { className: "num", children: [(0, format_1.faNum)(d.offersUsed), "/", (0, format_1.faNum)(d.offersTotal)] }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.toman)(d.referencePrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num line-through decoration-slate-400", children: (0, format_1.toman)(d.basePrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num font-bold text-emerald-700", children: (0, format_1.toman)(d.finalPrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.pct)(d.discountPct) }), (0, jsx_runtime_1.jsx)("td", { children: format_1.campaignLabel[d.campaignType ?? "none"] }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.pct)(d.confidence * 100, 0) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[d.status]}`, children: format_1.statusLabel[d.status] }) })] }, d.id))), !decisions.length && ((0, jsx_runtime_1.jsx)("tr", { children: (0, jsx_runtime_1.jsx)("td", { colSpan: 10, className: "py-6 text-center text-slate-400", children: "\u062A\u0635\u0645\u06CC\u0645\u06CC \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F" }) }))] })] })] })] }));
+    const serializedRuns = runs.map((r) => ({
+        id: r.id,
+        trigger: r.trigger,
+        status: r.status,
+        totalProducts: r.totalProducts,
+        applied: r.applied,
+        pendingReview: r.pendingReview,
+        failed: r.failed,
+        startedAt: r.startedAt.toISOString(),
+    }));
+    const serializedDecisions = decisions.map(({ d, name, sku }) => ({
+        id: d.id,
+        productId: d.productId,
+        name,
+        sku,
+        source: d.source,
+        offersUsed: d.offersUsed,
+        offersTotal: d.offersTotal,
+        referencePrice: d.referencePrice,
+        basePrice: d.basePrice,
+        finalPrice: d.finalPrice,
+        discountPct: d.discountPct,
+        campaignType: d.campaignType,
+        confidence: d.confidence,
+        status: d.status,
+    }));
+    return (0, jsx_runtime_1.jsx)(runs_client_1.RunsClient, { runs: serializedRuns, selectedRunId: selected, decisions: serializedDecisions });
 }

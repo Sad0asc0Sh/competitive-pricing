@@ -7,6 +7,9 @@ export const faDate = (d: Date | string | null | undefined) =>
 export const statusLabel: Record<string, string> = {
   applied: "اعمال شد",
   pending_review: "در انتظار بازبینی",
+  pending_sync: "در صف ارسال",
+  sync_failed: "خطای همگام‌سازی",
+  superseded: "جایگزین‌شده",
   rejected: "رد شد",
   failed: "ناموفق",
   skipped: "رد شد",
@@ -20,8 +23,12 @@ export const statusLabel: Record<string, string> = {
 export const statusColor: Record<string, string> = {
   applied: "bg-emerald-100 text-emerald-800",
   pending_review: "bg-amber-100 text-amber-800",
+  pending_sync: "bg-sky-100 text-sky-800",
+  sync_failed: "bg-rose-100 text-rose-800",
+  superseded: "bg-slate-100 text-slate-500",
   rejected: "bg-slate-200 text-slate-700",
   failed: "bg-rose-100 text-rose-800",
+  skipped: "bg-slate-200 text-slate-700",
   active: "bg-emerald-100 text-emerald-800",
   paused: "bg-slate-200 text-slate-700",
   needs_review: "bg-amber-100 text-amber-800",
@@ -35,6 +42,14 @@ export const campaignLabel: Record<string, string> = {
   timed_sale: "فرصت زمان‌دار (مالی و تخفیف / منتخب‌ها)",
   none: "بدون کمپین",
   auto: "تشخیص خودکار موتور",
+};
+
+export const campaignShortLabel: Record<string, string> = {
+  flash: "لحظه‌ای",
+  featured: "شگفت‌انگیز",
+  timed_sale: "فرصت زمان‌دار",
+  none: "عادی",
+  auto: "خودکار",
 };
 
 export const campaignColor: Record<string, string> = {

@@ -1,0 +1,10 @@
+"use client";
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DocsClient = DocsClient;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const ui_1 = require("./ui");
+function DocsClient({ html, toc }) {
+    const tocLinks = ((0, jsx_runtime_1.jsx)("ul", { className: "space-y-1.5 text-xs", children: toc.map((item) => ((0, jsx_runtime_1.jsx)("li", { children: (0, jsx_runtime_1.jsx)("a", { href: `#${item.id}`, className: "block rounded-lg px-2.5 py-1.5 leading-5 text-slate-600 transition hover:bg-indigo-50 hover:text-indigo-700", children: item.text }) }, item.id))) }));
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-4", children: [toc.length > 0 && ((0, jsx_runtime_1.jsx)("div", { className: "xl:hidden", children: (0, jsx_runtime_1.jsx)(ui_1.CollapsibleSection, { title: "\u0641\u0647\u0631\u0633\u062A \u0645\u0637\u0627\u0644\u0628 \u0645\u0633\u062A\u0646\u062F\u0627\u062A", subtitle: `${toc.length.toLocaleString("fa-IR")} بخش`, defaultOpen: false, children: tocLinks }) })), (0, jsx_runtime_1.jsxs)("div", { className: "grid gap-6 xl:grid-cols-[minmax(0,1fr)_250px] xl:items-start", children: [(0, jsx_runtime_1.jsxs)("article", { className: "card prose-fa max-w-none min-w-0", children: [(0, jsx_runtime_1.jsx)("div", { dangerouslySetInnerHTML: { __html: html } }), (0, jsx_runtime_1.jsx)("div", { className: "mt-8 border-t border-slate-100 pt-4", children: (0, jsx_runtime_1.jsx)("button", { type: "button", onClick: () => window.scrollTo({ top: 0, behavior: "smooth" }), className: "btn-secondary btn-sm", children: "\u2191 \u0628\u0627\u0632\u06AF\u0634\u062A \u0628\u0647 \u0628\u0627\u0644\u0627\u06CC \u0635\u0641\u062D\u0647" }) })] }), toc.length > 0 && ((0, jsx_runtime_1.jsxs)("aside", { className: "card hidden xl:sticky xl:top-20 xl:block", children: [(0, jsx_runtime_1.jsx)("div", { className: "mb-2.5 text-xs font-bold text-slate-900", children: "\u0641\u0647\u0631\u0633\u062A \u0633\u0631\u0641\u0635\u0644\u200C\u0647\u0627" }), tocLinks] }))] })] }));
+}

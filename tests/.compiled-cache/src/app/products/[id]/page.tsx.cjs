@@ -5,13 +5,11 @@ exports.default = ProductDetailPage;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const index_ts_1 = require("../../../db/index.ts");
 const schema_1 = require("../../../db/schema");
-const actions_1 = require("@/components/actions");
-const product_form_1 = require("@/components/product-form");
-const format_1 = require("../../../lib/format");
+const product_detail_client_1 = require("@/components/product-detail-client");
 const drizzle_orm_1 = require("drizzle-orm");
 const navigation_1 = require("next/navigation");
 exports.dynamic = "force-dynamic";
-/** فاصله روز از آخرین تغییر قیمت — خارج از رندر کامپوننت تا خروجی پایدار بماند */
+/** فاصله روز از آخرین تغییر قیمت — محاسبه‌شده در سرور برای پایداری رندر کلاینت */
 function daysAgo(date) {
     return Math.round((Date.now() - new Date(date).getTime()) / 86400000);
 }
@@ -34,47 +32,73 @@ async function ProductDetailPage({ params }) {
             .where((0, drizzle_orm_1.eq)(schema_1.competitorOffers.decisionId, latest.id))
             .orderBy(schema_1.competitorOffers.price)
         : [];
-    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-6", children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-start justify-between gap-3", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("h1", { className: "text-2xl font-bold", children: p.name }), (0, jsx_runtime_1.jsxs)("div", { className: "mt-1 text-sm text-slate-500", children: [p.sku, " \u00B7 ", (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[p.status]}`, children: format_1.statusLabel[p.status] }), p.selectedSupplierName && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" ", "\u00B7 ", (0, jsx_runtime_1.jsxs)("span", { className: "text-indigo-700 font-medium", children: ["\u0645\u0646\u0628\u0639 \u06A9\u0641 \u0642\u06CC\u0645\u062A: ", p.selectedSupplierName] })] })), p.currentShowInFeatured && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" ", "\u00B7 ", (0, jsx_runtime_1.jsx)("span", { className: "badge bg-indigo-100 text-indigo-800", children: "\u2605 \u0646\u0645\u0627\u06CC\u0634 \u062F\u0631 \u0645\u0646\u062A\u062E\u0628\u200C\u0647\u0627\u06CC \u0635\u0641\u062D\u0647 \u0627\u0635\u0644\u06CC" })] })), p.torobUrl && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" ", "\u00B7", " ", (0, jsx_runtime_1.jsx)("a", { href: p.torobUrl, target: "_blank", className: "text-indigo-600", rel: "noreferrer", children: "\u0635\u0641\u062D\u0647 \u062A\u0631\u0628 \u2197" })] }))] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap gap-2", children: [(0, jsx_runtime_1.jsx)(actions_1.RunButton, { productIds: [p.id], label: "\u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0633\u0642\u0641 \u0648 \u06A9\u0641 \u0648 \u0642\u06CC\u0645\u062A\u200C\u06AF\u0630\u0627\u0631\u06CC \u0627\u06A9\u0646\u0648\u0646" }), (0, jsx_runtime_1.jsx)(actions_1.ProductStatusToggle, { id: p.id, status: p.status }), (0, jsx_runtime_1.jsx)(actions_1.DeleteProductButton, { id: p.id })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "grid grid-cols-2 gap-4 md:grid-cols-6", children: [(0, jsx_runtime_1.jsx)(Box, { title: "\u0642\u06CC\u0645\u062A \u062A\u0645\u0627\u0645\u200C\u0634\u062F\u0647 \u0647\u0645\u06A9\u0627\u0631", value: (0, format_1.toman)(p.costPrice), sub: p.selectedSupplierName ?? "تامین پایه" }), (0, jsx_runtime_1.jsx)(Box, { title: "\u062E\u0637 \u0642\u0631\u0645\u0632 \u0641\u0631\u0648\u0634 (\u06A9\u0641 \u0633\u0648\u062F)", value: (0, format_1.toman)(p.currentHardFloorPrice ?? latest?.hardFloorPrice), sub: "\u0647\u0631\u06AF\u0632 \u0632\u06CC\u0631 \u0627\u06CC\u0646 \u0642\u06CC\u0645\u062A" }), (0, jsx_runtime_1.jsx)(Box, { title: "\u0633\u0642\u0641 \u0645\u0639\u06CC\u0627\u0631 \u062A\u062E\u0641\u06CC\u0641 (\u062E\u0637\u200C\u062E\u0648\u0631\u062F\u0647)", value: (0, format_1.toman)(p.currentBasePrice), sub: "\u0633\u0642\u0641 \u0648\u0627\u0642\u0639\u06CC \u0628\u0627\u0632\u0627\u0631 \u0628\u062F\u0648\u0646 \u067E\u0631\u062A" }), (0, jsx_runtime_1.jsx)(Box, { title: "\u06A9\u0641 \u0642\u0637\u0639\u06CC \u0641\u0631\u0648\u0634", value: (0, format_1.toman)(p.currentFinalPrice), strong: true, sub: "\u067E\u0633 \u0627\u0632 \u0627\u0639\u0645\u0627\u0644 \u062F\u0631\u0635\u062F \u062A\u062E\u0641\u06CC\u0641 \u0631\u0648\u06CC \u0633\u0642\u0641" }), (0, jsx_runtime_1.jsx)(Box, { title: "\u062A\u062E\u0641\u06CC\u0641 / \u0633\u06CC\u0633\u062A\u0645 \u0641\u0639\u0627\u0644", value: (0, format_1.pct)(p.currentDiscountPct, 0), sub: `${p.currentCampaignName || format_1.campaignLabel[p.currentCampaign ?? "none"]} (${format_1.badgeThemeLabel[p.currentBadgeTheme ?? "green-orange"] ?? ""})` }), (0, jsx_runtime_1.jsx)(Box, { title: "\u0633\u0648\u062F \u062E\u0627\u0644\u0635 \u0641\u0639\u0644\u06CC", value: p.currentFinalPrice && p.costPrice
-                            ? `${(0, format_1.toman)(p.currentFinalPrice - p.costPrice)} (${(0, format_1.pct)(((p.currentFinalPrice - p.costPrice) / p.costPrice) * 100)})`
-                            : "—" })] }), latest && ((0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsxs)("div", { className: "mb-3 flex flex-wrap items-center justify-between gap-2", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "font-bold", children: ["\u0622\u062E\u0631\u06CC\u0646 \u062A\u0635\u0645\u06CC\u0645 #", latest.id, " \u00B7 ", (0, format_1.faDate)(latest.createdAt), " \u00B7", " ", (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[latest.status]}`, children: format_1.statusLabel[latest.status] })] }), (latest.status === "pending_review" ||
-                                latest.status === "sync_failed" ||
-                                latest.status === "pending_sync") && ((0, jsx_runtime_1.jsx)(actions_1.DecisionActions, { decisionId: latest.id, force: true, isBelowFloor: (latest.finalPrice ?? 0) > 0 &&
-                                    (latest.finalPrice ?? 0) <
-                                        Math.max(latest.hardFloorPrice ?? 0, p.currentHardFloorPrice ?? 0, latest.effectiveCostPrice ?? 0, p.costPrice ?? 0), syncFailed: latest.status === "sync_failed" ||
-                                    latest.status === "pending_sync" ||
-                                    latest.pushStatus === "failed" }))] }), (0, jsx_runtime_1.jsxs)("div", { className: "grid grid-cols-2 gap-3 text-sm md:grid-cols-5 lg:grid-cols-11", children: [(0, jsx_runtime_1.jsx)(Mini, { k: "\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u0645\u0639\u062A\u0628\u0631/\u06A9\u0644", v: `${(0, format_1.faNum)(latest.offersUsed)}/${(0, format_1.faNum)(latest.offersTotal)}` }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u062A\u0645\u0627\u0645\u200C\u0634\u062F\u0647 \u0647\u0645\u06A9\u0627\u0631", v: (0, format_1.toman)(latest.effectiveCostPrice) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u062E\u0637 \u0642\u0631\u0645\u0632 \u0641\u0631\u0648\u0634", v: (0, format_1.toman)(latest.hardFloorPrice) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u06A9\u0641 \u0645\u0639\u062A\u0628\u0631 \u0645\u0634\u0647\u062F", v: (0, format_1.toman)(latest.localLowestValid) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u06A9\u0641 \u0645\u0639\u062A\u0628\u0631 \u06A9\u0644 \u062A\u0631\u0628", v: (0, format_1.toman)(latest.lowestValid) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0645\u06CC\u0627\u0646\u0647 \u0628\u0627\u0632\u0627\u0631", v: (0, format_1.toman)(latest.marketMedian) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0633\u0642\u0641 \u0631\u0635\u062F\u0634\u062F\u0647 \u0628\u0627\u0632\u0627\u0631", v: (0, format_1.toman)(latest.monitoredMarketCeiling ?? latest.basePrice) }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0631\u062A\u0628\u0647 \u062F\u0631 \u0645\u0634\u0647\u062F", v: latest.projectedLocalRank ? `#${(0, format_1.faNum)(latest.projectedLocalRank)}` : "—" }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0631\u062A\u0628\u0647 \u062F\u0631 \u06A9\u0644 \u062A\u0631\u0628", v: latest.projectedNationalRank ? `#${(0, format_1.faNum)(latest.projectedNationalRank)}` : "—" }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0627\u0633\u062A\u0631\u0627\u062A\u0698\u06CC", v: format_1.strategyLabel[latest.strategy ?? ""] ?? latest.strategy ?? "—" }), (0, jsx_runtime_1.jsx)(Mini, { k: "\u0627\u0639\u062A\u0645\u0627\u062F", v: (0, format_1.pct)(latest.confidence * 100, 0) })] }), (0, jsx_runtime_1.jsx)("h3", { className: "mt-5 mb-2 text-sm font-bold", children: "\u0645\u0631\u0627\u062D\u0644 \u062A\u0635\u0645\u06CC\u0645\u200C\u06AF\u06CC\u0631\u06CC (\u06A9\u0634\u0641 \u06A9\u0641\u060C \u0633\u0642\u0641 \u0648\u0627\u0642\u0639\u06CC \u0648 \u0633\u06CC\u0633\u062A\u0645 \u062A\u062E\u0641\u06CC\u0641)" }), (0, jsx_runtime_1.jsx)("ol", { className: "space-y-2", children: latest.steps.map((s, i) => ((0, jsx_runtime_1.jsxs)("li", { className: `rounded-lg border px-3 py-2 text-sm ${s.level === "error"
-                                ? "border-rose-200 bg-rose-50"
-                                : s.level === "warn"
-                                    ? "border-amber-200 bg-amber-50"
-                                    : "border-slate-200 bg-slate-50"}`, children: [(0, jsx_runtime_1.jsx)("span", { className: "ml-2 text-xs text-slate-400", children: i + 1 }), (0, jsx_runtime_1.jsxs)("b", { children: [s.title, ":"] }), " ", (0, jsx_runtime_1.jsx)("span", { className: "text-slate-700", children: s.message })] }, i))) }), latest.pushStatus && ((0, jsx_runtime_1.jsxs)("p", { className: "mt-3 text-xs text-slate-500", children: ["\u0627\u0631\u0633\u0627\u0644 \u0628\u0647 \u0641\u0631\u0648\u0634\u06AF\u0627\u0647:", " ", latest.pushStatus === "pushed"
-                                ? "موفق"
-                                : latest.pushStatus === "skipped"
-                                    ? "کانکتور غیرفعال"
-                                    : `ناموفق — ${latest.pushError}`] }))] })), offers.length > 0 && ((0, jsx_runtime_1.jsxs)("div", { className: "card table-wrap", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "mb-3 font-bold", children: ["\u067E\u06CC\u0634\u0646\u0647\u0627\u062F\u0647\u0627\u06CC \u0631\u0642\u0628\u0627 \u062F\u0631 \u062A\u0631\u0628 (", (0, format_1.faNum)(offers.length), ")"] }), (0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "#" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0641\u0631\u0648\u0634\u06AF\u0627\u0647" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0634\u0647\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0627\u0645\u062A\u06CC\u0627\u0632" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0642\u06CC\u0645\u062A" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0622\u062E\u0631\u06CC\u0646 \u062A\u063A\u06CC\u06CC\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0632\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0636\u0639\u06CC\u062A \u062F\u0631 \u0631\u0627\u062F\u0627\u0631 \u0628\u0627\u0632\u0627\u0631" })] }) }), (0, jsx_runtime_1.jsx)("tbody", { children: offers.map((o, i) => ((0, jsx_runtime_1.jsxs)("tr", { className: o.included ? "" : "text-slate-400", children: [(0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.faNum)(i + 1) }), (0, jsx_runtime_1.jsxs)("td", { children: [o.shopName, o.sellerType === "in_person" && ((0, jsx_runtime_1.jsx)("span", { className: "badge mr-2 bg-sky-100 text-sky-700", children: "\u062D\u0636\u0648\u0631\u06CC" })), o.isAd && (0, jsx_runtime_1.jsx)("span", { className: "badge mr-2 bg-purple-100 text-purple-700", children: "\u0622\u06AF\u0647\u06CC" }), !o.inStock && (0, jsx_runtime_1.jsx)("span", { className: "badge mr-2 bg-slate-200 text-slate-600", children: "\u0646\u0627\u0645\u0648\u062C\u0648\u062F" }), o.priceUnreliable && ((0, jsx_runtime_1.jsx)("span", { className: "badge mr-2 bg-rose-100 text-rose-700", children: "\u063A\u06CC\u0631\u0642\u0627\u0628\u0644 \u0627\u0639\u062A\u0645\u0627\u062F \u062A\u0631\u0628" }))] }), (0, jsx_runtime_1.jsx)("td", { children: o.shopCity ? ((0, jsx_runtime_1.jsx)("span", { className: o.isLocalCity ? "badge bg-indigo-100 text-indigo-800 font-bold" : "text-xs", children: o.shopCity })) : ("—") }), (0, jsx_runtime_1.jsx)("td", { className: "num text-xs", children: o.shopScore ? (0, format_1.faNum)(o.shopScore, 1) : "—" }), (0, jsx_runtime_1.jsx)("td", { className: `num ${o.included ? "font-medium" : "line-through"}`, children: (0, format_1.toman)(o.price) }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: o.lastChangedAt ? `${(0, format_1.faNum)(daysAgo(o.lastChangedAt))} روز پیش` : "—" }), (0, jsx_runtime_1.jsx)("td", { className: "num text-xs", children: o.included ? (0, format_1.faNum)(o.weight, 2) : "—" }), (0, jsx_runtime_1.jsx)("td", { children: o.included ? ((0, jsx_runtime_1.jsx)("span", { className: "badge bg-emerald-100 text-emerald-700", children: "\u0628\u0627\u0632\u0627\u0631 \u0645\u0639\u062A\u0628\u0631 \u062A\u062D\u062A \u0631\u0635\u062F" })) : ((0, jsx_runtime_1.jsxs)("span", { className: "badge bg-rose-100 text-rose-700", children: ["\u062D\u0630\u0641\u200C\u0634\u062F\u0647 (", o.excludeReason, ")"] })) })] }, o.id))) })] })] })), (0, jsx_runtime_1.jsxs)("div", { className: "card table-wrap", children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 font-bold", children: "\u062A\u0627\u0631\u06CC\u062E\u0686\u0647 \u062A\u0635\u0645\u06CC\u0645\u200C\u0647\u0627" }), (0, jsx_runtime_1.jsxs)("table", { className: "data", children: [(0, jsx_runtime_1.jsx)("thead", { children: (0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("th", { children: "#" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0632\u0645\u0627\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u06A9\u0641 \u0647\u0645\u06A9\u0627\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0633\u0642\u0641 \u0645\u0639\u06CC\u0627\u0631" }), (0, jsx_runtime_1.jsx)("th", { children: "\u06A9\u0641 \u0646\u0647\u0627\u06CC\u06CC" }), (0, jsx_runtime_1.jsx)("th", { children: "\u062A\u062E\u0641\u06CC\u0641 / \u06A9\u0645\u067E\u06CC\u0646" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0631\u062A\u0628\u0647 \u0645\u0634\u0647\u062F" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0631\u062A\u0628\u0647 \u062A\u0631\u0628" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0633\u0648\u062F \u062E\u0627\u0644\u0635" }), (0, jsx_runtime_1.jsx)("th", { children: "\u0648\u0636\u0639\u06CC\u062A" }), (0, jsx_runtime_1.jsx)("th", {})] }) }), (0, jsx_runtime_1.jsxs)("tbody", { children: [decisions.map((d) => ((0, jsx_runtime_1.jsxs)("tr", { children: [(0, jsx_runtime_1.jsx)("td", { className: "num", children: d.id }), (0, jsx_runtime_1.jsx)("td", { className: "text-xs", children: (0, format_1.faDate)(d.createdAt) }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.toman)(d.hardFloorPrice ?? d.effectiveCostPrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num line-through text-slate-400", children: (0, format_1.toman)(d.basePrice) }), (0, jsx_runtime_1.jsx)("td", { className: "num font-medium text-emerald-700", children: (0, format_1.toman)(d.finalPrice) }), (0, jsx_runtime_1.jsxs)("td", { className: "text-xs", children: [(0, jsx_runtime_1.jsx)("span", { className: "font-bold text-rose-600", children: (0, format_1.pct)(d.discountPct, 0) }), " \u00B7", " ", d.campaignName || format_1.campaignLabel[d.campaignType ?? "none"]] }), (0, jsx_runtime_1.jsx)("td", { className: "num font-bold text-indigo-700", children: d.projectedLocalRank ? `#${(0, format_1.faNum)(d.projectedLocalRank)}` : "—" }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: d.projectedNationalRank ? `#${(0, format_1.faNum)(d.projectedNationalRank)}` : "—" }), (0, jsx_runtime_1.jsx)("td", { className: "num", children: (0, format_1.toman)(d.netProfitToman) }), (0, jsx_runtime_1.jsx)("td", { children: (0, jsx_runtime_1.jsx)("span", { className: `badge ${format_1.statusColor[d.status]}`, children: format_1.statusLabel[d.status] }) }), (0, jsx_runtime_1.jsx)("td", { children: (d.status === "pending_review" ||
-                                                    d.status === "sync_failed" ||
-                                                    d.status === "pending_sync") && ((0, jsx_runtime_1.jsx)(actions_1.DecisionActions, { decisionId: d.id, force: true, isBelowFloor: (d.finalPrice ?? 0) > 0 &&
-                                                        (d.finalPrice ?? 0) <
-                                                            Math.max(d.hardFloorPrice ?? 0, p.currentHardFloorPrice ?? 0, d.effectiveCostPrice ?? 0, p.costPrice ?? 0), syncFailed: d.status === "sync_failed" ||
-                                                        d.status === "pending_sync" ||
-                                                        d.pushStatus === "failed" })) })] }, d.id))), !decisions.length && ((0, jsx_runtime_1.jsx)("tr", { children: (0, jsx_runtime_1.jsx)("td", { colSpan: 11, className: "py-6 text-center text-slate-400", children: "\u0647\u0646\u0648\u0632 \u0627\u0633\u062A\u0639\u0644\u0627\u0645\u06CC \u0627\u0646\u062C\u0627\u0645 \u0646\u0634\u062F\u0647" }) }))] })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsx)("h2", { className: "mb-3 font-bold", children: "\u0648\u06CC\u0631\u0627\u06CC\u0634 \u0645\u062D\u0635\u0648\u0644\u060C \u0644\u06CC\u0633\u062A \u0642\u06CC\u0645\u062A \u0647\u0645\u06A9\u0627\u0631\u0627\u0646 \u0648 \u0633\u06CC\u0633\u062A\u0645 \u062A\u062E\u0641\u06CC\u0641 \u062A\u0631\u062C\u06CC\u062D\u06CC" }), (0, jsx_runtime_1.jsx)(product_form_1.ProductForm, { initial: {
-                            id: p.id,
-                            sku: p.sku,
-                            name: p.name,
-                            category: p.category ?? "",
-                            storeExternalId: p.storeExternalId ?? "",
-                            sourceType: p.sourceType,
-                            torobUrl: p.torobUrl ?? "",
-                            costPrice: p.costPrice,
-                            minMarginPct: p.minMarginPct ?? "",
-                            minProfitAmount: p.minProfitAmount ?? "",
-                            preferredCampaignType: p.preferredCampaignType ?? "auto",
-                            autoApply: p.autoApply,
-                            showInFeatured: p.showInFeatured,
-                        }, initialQuotes: p.supplierQuotes })] })] }));
-}
-function Box({ title, value, sub, strong }) {
-    return ((0, jsx_runtime_1.jsxs)("div", { className: "card", children: [(0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-500", children: title }), (0, jsx_runtime_1.jsx)("div", { className: `mt-1 num ${strong ? "text-xl font-bold text-emerald-700" : "text-lg font-semibold"}`, children: value }), sub && (0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-400", children: sub })] }));
-}
-function Mini({ k, v }) {
-    return ((0, jsx_runtime_1.jsxs)("div", { className: "rounded-lg bg-slate-50 px-3 py-2", children: [(0, jsx_runtime_1.jsx)("div", { className: "text-xs text-slate-500", children: k }), (0, jsx_runtime_1.jsx)("div", { className: "num font-medium", children: v })] }));
+    const serializedProduct = {
+        id: p.id,
+        sku: p.sku,
+        name: p.name,
+        category: p.category,
+        storeExternalId: p.storeExternalId,
+        sourceType: p.sourceType,
+        torobUrl: p.torobUrl,
+        costPrice: p.costPrice,
+        minMarginPct: p.minMarginPct,
+        minProfitAmount: p.minProfitAmount,
+        preferredCampaignType: p.preferredCampaignType,
+        autoApply: p.autoApply,
+        showInFeatured: p.showInFeatured,
+        status: p.status,
+        selectedSupplierName: p.selectedSupplierName,
+        currentHardFloorPrice: p.currentHardFloorPrice,
+        currentBasePrice: p.currentBasePrice,
+        currentFinalPrice: p.currentFinalPrice,
+        currentDiscountPct: p.currentDiscountPct,
+        currentCampaign: p.currentCampaign,
+        currentCampaignName: p.currentCampaignName,
+        currentBadgeTheme: p.currentBadgeTheme,
+        currentShowInFeatured: p.currentShowInFeatured,
+        supplierQuotes: p.supplierQuotes,
+    };
+    const serializedDecisions = decisions.map((d) => ({
+        id: d.id,
+        status: d.status,
+        createdAt: d.createdAt.toISOString(),
+        offersUsed: d.offersUsed,
+        offersTotal: d.offersTotal,
+        effectiveCostPrice: d.effectiveCostPrice,
+        hardFloorPrice: d.hardFloorPrice,
+        localLowestValid: d.localLowestValid,
+        lowestValid: d.lowestValid,
+        marketMedian: d.marketMedian,
+        monitoredMarketCeiling: d.monitoredMarketCeiling,
+        basePrice: d.basePrice,
+        finalPrice: d.finalPrice,
+        discountPct: d.discountPct,
+        campaignType: d.campaignType,
+        campaignName: d.campaignName,
+        projectedLocalRank: d.projectedLocalRank,
+        projectedNationalRank: d.projectedNationalRank,
+        netProfitToman: d.netProfitToman,
+        strategy: d.strategy,
+        confidence: d.confidence,
+        steps: d.steps,
+        pushStatus: d.pushStatus,
+        pushError: d.pushError,
+    }));
+    const serializedOffers = offers.map((o) => ({
+        id: o.id,
+        shopName: o.shopName,
+        shopCity: o.shopCity,
+        sellerType: o.sellerType,
+        isAd: o.isAd,
+        inStock: o.inStock,
+        priceUnreliable: o.priceUnreliable,
+        isLocalCity: o.isLocalCity,
+        shopScore: o.shopScore,
+        price: o.price,
+        lastChangedDaysAgo: o.lastChangedAt ? daysAgo(o.lastChangedAt) : null,
+        weight: o.weight,
+        included: o.included,
+        excludeReason: o.excludeReason,
+    }));
+    return (0, jsx_runtime_1.jsx)(product_detail_client_1.ProductDetailClient, { product: serializedProduct, decisions: serializedDecisions, offers: serializedOffers });
 }

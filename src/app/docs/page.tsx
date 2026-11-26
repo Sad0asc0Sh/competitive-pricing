@@ -1,16 +1,34 @@
+import { DocsClient, type DocsTocItem } from "@/components/docs-client";
 import { marked } from "marked";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 export const dynamic = "force-dynamic";
 
+function stripHtmlTags(raw: string): string {
+  return raw.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
+async function renderPricingDocs(md: string): Promise<{ html: string; toc: DocsTocItem[] }> {
+  const rawHtml = await marked.parse(md, { gfm: true });
+  const toc: DocsTocItem[] = [];
+  let idx = 0;
+
+  const withIds = rawHtml.replace(/<h2>([\s\S]*?)<\/h2>/g, (_, inner: string) => {
+    idx += 1;
+    const id = `sec-${idx}`;
+    const text = stripHtmlTags(inner);
+    if (text) toc.push({ id, text });
+    return `<h2 id="${id}">${inner}</h2>`;
+  });
+
+  const html = withIds.replace(/<table>([\s\S]*?)<\/table>/g, '<div class="docs-table-wrap"><table>$1</table></div>');
+  return { html, toc };
+}
+
 export default async function DocsPage() {
   const md = await readFile(path.join(process.cwd(), "docs", "PRICING_LOGIC.md"), "utf8");
-  const html = await marked.parse(md, { gfm: true });
-  return (
-    <div className="card prose-fa max-w-5xl">
-      <style>{`.prose-fa table{width:100%;font-size:.85rem;margin:1rem 0}.prose-fa th,.prose-fa td{border:1px solid #e2e8f0;padding:.4rem .6rem;text-align:right}.prose-fa th{background:#f8fafc}.prose-fa h1{font-size:1.6rem;font-weight:800;margin-bottom:1rem}.prose-fa blockquote{border-right:4px solid #6366f1;padding-right:1rem;color:#475569;margin:1rem 0}`}</style>
-      <div dangerouslySetInnerHTML={{ __html: html }} />
-    </div>
-  );
+  const { html, toc } = await renderPricingDocs(md);
+
+  return <DocsClient html={html} toc={toc} />;
 }
