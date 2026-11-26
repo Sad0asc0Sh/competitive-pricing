@@ -63,6 +63,7 @@ export async function POST(req: Request) {
     const summary = await runPricing(runOpts);
     return NextResponse.json(summary);
   } catch (e) {
+    console.error("[API /api/runs] POST error:", e);
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "خطا در اجرای استعلام قیمت‌گذاری" },
       { status: 500 },

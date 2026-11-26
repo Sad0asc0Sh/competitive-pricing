@@ -24,14 +24,23 @@ import {
 import type { PricingResult, RawOffer, SupplierQuote } from "@/lib/pricing/types";
 import { fetchFromSource, isAllowedSourceType } from "@/lib/sources/registry";
 import { buildIdempotencyKey, pushToStore, type BelowCostOverrideMeta, type PushResult } from "@/lib/store/connectors";
-import { and, asc, eq, gt, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { ensureDefaults, getProfileConfig, logActivity } from "./bootstrap";
 
-/** تبدیل ایمن مقادیر موتور به عدد صحیح/اعشاری معتبر قبل از درج در دیتابیس (NaN/Infinity هرگز درج نشود) */
-const safeInt = (v: number | null | undefined): number | null =>
-  v == null || !Number.isFinite(v) ? null : Math.round(v);
-const safeReal = (v: number | null | undefined, fallback = 0): number =>
+const PG_INT4_MIN = -2_147_483_648;
+const PG_INT4_MAX = 2_147_483_647;
+
+/** تبدیل ایمن مقادیر موتور به عدد صحیح/اعشاری معتبر قبل از درج در دیتابیس (NaN/Infinity/overflow هرگز درج نشود) */
+export const safeInt = (v: number | null | undefined): number | null => {
+  if (v == null || !Number.isFinite(v)) return null;
+  const rounded = Math.round(v);
+  if (!Number.isFinite(rounded)) return null;
+  return Math.max(PG_INT4_MIN, Math.min(PG_INT4_MAX, rounded));
+};
+export const safeReal = (v: number | null | undefined, fallback = 0): number =>
   v == null || !Number.isFinite(v) ? fallback : v;
+const safeDate = (v: unknown): Date | null =>
+  v instanceof Date && Number.isFinite(v.getTime()) ? v : null;
 
 const DEFAULT_INTERVAL_MINUTES = 180;
 const MAX_AUTO_SYNC_ATTEMPTS = 5;
@@ -67,6 +76,7 @@ export interface RunSummary {
   failed: number;
   pendingSync?: number;
   syncFailed?: number;
+  skippedLocked?: number;
   decisionIds: number[];
   lastError?: string | null;
 }
@@ -124,16 +134,16 @@ interface OwnDiscountContext {
  * قفل نرم تک‌محصولی (P0-5): با یک UPDATE اتمی قفل «۵ دقیقه‌ای» گرفته می‌شود؛
  * اجرای موازی/کلاسترِ هم‌زمان هر محصول را حداکثر یک‌بار استعلام می‌کند.
  */
-async function tryLockProduct(productId: number): Promise<boolean> {
+async function tryLockProduct(productId: number): Promise<{ locked: boolean; error?: string }> {
   try {
     const res = await db.execute(
       sql`update products set locked_until = now() + interval '5 minutes' where id = ${productId} and (locked_until is null or locked_until <= now()) returning id`,
     );
-    return (res.rows?.length ?? 0) > 0;
-  } catch {
+    return { locked: (res.rows?.length ?? 0) > 0 };
+  } catch (e) {
     // ۴.۱.۱: پس از مهاجرت 0001، نبود ستون یا هر خطای قفل نباید fail-open شود.
     // محصول در این اجرا skip می‌شود تا هرگز دو اجرای هم‌زمان روی یک محصول قیمت نگذارند.
-    return false;
+    return { locked: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -310,22 +320,34 @@ export async function runPricing(opts: RunOptions = {}): Promise<RunSummary> {
     : opts.runMode === "shadow" || normalizedTrigger === "shadow"
       ? "shadow"
       : "live";
+  const validationSource: ValidationSource = isSimulated
+    ? "simulated"
+    : runMode === "shadow"
+      ? "shadow_torob"
+      : "live_torob";
 
-  const conds = [eq(products.status, "active")];
-  if (opts.productIds?.length) conds.push(inArray(products.id, opts.productIds));
-  if (opts.category) conds.push(eq(products.category, opts.category));
-
-  let targets =
-    opts.productIds?.length && normalizedTrigger !== "schedule"
-      ? await db.select().from(products).where(inArray(products.id, opts.productIds)).orderBy(asc(products.id))
-      : await db.select().from(products).where(and(...conds)).orderBy(asc(products.id));
-
-  targets = targets.filter((p) => p.status !== "paused");
-
-  if (opts.cardRangeFrom || opts.cardRangeTo) {
+  const hasRange = Boolean((opts.cardRangeFrom && opts.cardRangeFrom > 0) || (opts.cardRangeTo && opts.cardRangeTo > 0));
+  let targets: Product[];
+  if (opts.productIds?.length && normalizedTrigger !== "schedule") {
+    targets = await db.select().from(products).where(inArray(products.id, opts.productIds)).orderBy(asc(products.id));
+    targets = targets.filter((p) => p.status !== "paused");
+  } else if (hasRange && !opts.category) {
+    // شماره‌گذاری کارت‌ها (#1..#N) در صفحه محصولات بر اساس تمام ردیف‌ها (جز متوقف‌ها هنگام اجرا) است؛
+    // ابتدا برش بازه را مطابق اندیس صفحه محصولات انجام می‌دهیم و سپس کارت‌های paused را کنار می‌گذاریم.
+    const allRows = await db.select().from(products).orderBy(asc(products.id));
     const startIdx = Math.max(0, (opts.cardRangeFrom ?? 1) - 1);
-    const endIdx = opts.cardRangeTo && opts.cardRangeTo > 0 ? opts.cardRangeTo : targets.length;
-    targets = targets.slice(startIdx, endIdx);
+    const endIdx = opts.cardRangeTo && opts.cardRangeTo > 0 ? opts.cardRangeTo : allRows.length;
+    targets = allRows.slice(startIdx, endIdx).filter((p) => p.status !== "paused");
+  } else {
+    // همهٔ محصولات فعال و در انتظار بازبینی (paused هرگز استعلام نمی‌شود)
+    const conds = [ne(products.status, "paused")];
+    if (opts.category) conds.push(eq(products.category, opts.category));
+    targets = await db.select().from(products).where(and(...conds)).orderBy(asc(products.id));
+    if (hasRange) {
+      const startIdx = Math.max(0, (opts.cardRangeFrom ?? 1) - 1);
+      const endIdx = opts.cardRangeTo && opts.cardRangeTo > 0 ? opts.cardRangeTo : targets.length;
+      targets = targets.slice(startIdx, endIdx);
+    }
   }
 
   const [run] = await db
@@ -365,15 +387,50 @@ export async function runPricing(opts: RunOptions = {}): Promise<RunSummary> {
       if (idx >= targets.length) return;
       const product = targets[idx];
       const cardIndex = (opts.cardRangeFrom ? Math.max(1, opts.cardRangeFrom) : 1) + idx;
-      const locked = await tryLockProduct(product.id);
-      if (!locked) {
-        skippedLocked++;
-        await logActivity(
-          "runner",
-          `قفل فعال محصول ${product.sku} — این اجرا رد شد (skipped_locked، قفل ۵ دقیقه‌ای نرم)`,
-          { productId: product.id, runId: run.id },
-          "warn",
-        );
+      const lock = await tryLockProduct(product.id);
+      if (!lock.locked) {
+        if (lock.error) {
+          summary.failed++;
+          const lockErrMsg = `خطای قفل دیتابیس محصول ${product.sku}: ${lock.error}`;
+          if (!summary.lastError) summary.lastError = lockErrMsg;
+          await logActivity("runner", lockErrMsg, { productId: product.id, runId: run.id }, "error");
+          try {
+            const [failedRow] = await db
+              .insert(priceDecisions)
+              .values({
+                runId: run.id,
+                productId: product.id,
+                source: product.sourceType || "torob",
+                offersTotal: 0,
+                offersUsed: 0,
+                confidence: 0,
+                status: "failed",
+                pushError: lockErrMsg,
+                isSimulated,
+                validationSource,
+                steps: [
+                  {
+                    step: "error",
+                    title: "خطا در قفل‌گذاری محصول پیش از استعلام",
+                    message: lockErrMsg,
+                    level: "error",
+                  },
+                ],
+              })
+              .returning({ id: priceDecisions.id });
+            if (failedRow) summary.decisionIds.push(failedRow.id);
+          } catch {
+            // ثبت خطا نباید جریان کل را بشکند
+          }
+        } else {
+          skippedLocked++;
+          await logActivity(
+            "runner",
+            `قفل فعال محصول ${product.sku} — این اجرا رد شد (skipped_locked، قفل ۵ دقیقه‌ای نرم)`,
+            { productId: product.id, runId: run.id },
+            "warn",
+          );
+        }
         continue;
       }
       try {
@@ -409,12 +466,47 @@ export async function runPricing(opts: RunOptions = {}): Promise<RunSummary> {
           { productId: product.id, runId: run.id },
           "error",
         );
+        try {
+          const [failedRow] = await db
+            .insert(priceDecisions)
+            .values({
+              runId: run.id,
+              productId: product.id,
+              source: product.sourceType || "torob",
+              offersTotal: 0,
+              offersUsed: 0,
+              confidence: 0,
+              status: "failed",
+              pushError: errMsg,
+              isSimulated,
+              validationSource,
+              steps: [
+                {
+                  step: "error",
+                  title: "خطای غیرمنتظره هنگام استعلام کارت",
+                  message: errMsg,
+                  level: "error",
+                },
+              ],
+            })
+            .returning({ id: priceDecisions.id });
+          if (failedRow) summary.decisionIds.push(failedRow.id);
+        } catch {
+          // ثبت خطای تصمیم نباید باعث توقف سایر کارت‌ها شود
+        }
       } finally {
         await unlockProduct(product.id);
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, targets.length)) }, () => worker()));
+
+  summary.skippedLocked = skippedLocked;
+  if (targets.length === 0 && !summary.lastError) {
+    summary.lastError = "هیچ محصول فعالی در این بازه/فیلتر یافت نشد (بررسی کنید کارت متوقف/paused نباشد)";
+  } else if (skippedLocked > 0 && outcomes.length === 0 && !summary.lastError) {
+    summary.lastError = `${skippedLocked} کارت به‌دلیل قفل ۵ دقیقه‌ای اجرای قبلی رد شد (برای باز کردن فوری، «ریست قفل ترب» را بزنید)`;
+  }
 
   // ---------- فاز ۲: تخصیص صندلی «منتخب‌ها» (showInFeatured) — نوار رتبه‌محور و تعیین‌شده (P0-4)
   const featuredCandidates: FeaturedCandidate[] = [];
@@ -1071,27 +1163,34 @@ async function priceOneProduct(
   }
 
   if (result.offers.length) {
-    await db.insert(competitorOffers).values(
-      result.offers.map((o) => ({
-        decisionId: decision.id,
-        productId: product.id,
-        shopName: o.shopName,
-        shopId: o.shopId ?? null,
-        shopCity: o.shopCity ?? null,
-        sellerType: o.sellerType ?? "online",
-        shopScore: o.shopScore ?? null,
-        isLocalCity: !!o.isLocalCity,
-        priceUnreliable: !!o.priceUnreliable,
-        price: Math.round(o.price),
-        lastChangedAt: o.lastChangedAt ?? null,
-        isAd: !!o.isAd,
-        inStock: o.inStock !== false,
-        url: o.url ?? null,
-        included: o.included,
-        excludeReason: o.excludeReason ?? null,
-        weight: o.weight,
-      })),
-    );
+    const offerValues = result.offers
+      .map((o) => {
+        const safeOfferPrice = safeInt(o.price);
+        if (!safeOfferPrice || safeOfferPrice <= 0) return null;
+        return {
+          decisionId: decision.id,
+          productId: product.id,
+          shopName: o.shopName || "نامشخص",
+          shopId: o.shopId ?? null,
+          shopCity: o.shopCity ?? null,
+          sellerType: o.sellerType ?? "online",
+          shopScore: o.shopScore != null && Number.isFinite(o.shopScore) ? o.shopScore : null,
+          isLocalCity: !!o.isLocalCity,
+          priceUnreliable: !!o.priceUnreliable,
+          price: safeOfferPrice,
+          lastChangedAt: safeDate(o.lastChangedAt),
+          isAd: !!o.isAd,
+          inStock: o.inStock !== false,
+          url: o.url ?? null,
+          included: o.included,
+          excludeReason: o.excludeReason ?? null,
+          weight: safeReal(o.weight, 0),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+    if (offerValues.length) {
+      await db.insert(competitorOffers).values(offerValues);
+    }
   }
 
   // قفل کردن PRK در دیتابیس فقط زمانی که تصمیم اعمال شده یا گیت تطابق هویت بالای آستانه تایید خودکار (approve) باشد!
@@ -1099,7 +1198,8 @@ async function priceOneProduct(
 
   // P0-1 (M2): write-back قیمت خرید ممنوع. قیمت همکار فقط در replacementCost ثبت می‌شود؛
   // costPrice (هزینه موجودی) هرگز از لیست همکار بازنویسی نمی‌شود (INV-2).
-  const lowestQuoteCost = result.supply.lowestQuoteCost;
+  const lowestQuoteCost = safeInt(result.supply.lowestQuoteCost);
+  const safeHardFloor = safeInt(result.supply.hardFloorPrice);
   const shouldStoreReplacement =
     (lowestQuoteCost ?? 0) > 0 &&
     (product.costPrice <= 0 || lowestQuoteCost! > product.costPrice);
@@ -1112,12 +1212,12 @@ async function priceOneProduct(
       updatedAt: new Date(),
       ...(shouldStoreReplacement
         ? {
-            replacementCost: Math.round(lowestQuoteCost!),
+            replacementCost: lowestQuoteCost!,
             replacementCostAt: new Date(),
           }
         : {}),
       selectedSupplierName: result.supply.selectedQuote?.supplierName ?? product.selectedSupplierName ?? null,
-      ...(result.supply.hardFloorPrice > 0 ? { currentHardFloorPrice: result.supply.hardFloorPrice } : {}),
+      ...(safeHardFloor && safeHardFloor > 0 ? { currentHardFloorPrice: safeHardFloor } : {}),
       ...(source.prk && !product.torobPrk && identityApproved ? { torobPrk: source.prk } : {}),
       ...(source.detailsUrl && !product.torobDetailsUrl && identityApproved
         ? { torobDetailsUrl: source.detailsUrl }
@@ -1148,7 +1248,18 @@ async function priceOneProduct(
         }
       : undefined;
 
-  return { id: decision.id, productId: product.id, status, errorHint: source.error ?? null, deferred, featuredCandidate };
+  const errorHint =
+    status === "rejected" || status === "failed"
+      ? !source.ok && source.error
+        ? source.error
+        : result.rejectedBySupervisor
+          ? formatSupervisorRejectMessage(result.supervisor)
+          : result.reviewReasons[0] ??
+            result.steps.find((s) => s.level === "error")?.message ??
+            "داده کافی برای محاسبه قیمت یافت نشد"
+      : null;
+
+  return { id: decision.id, productId: product.id, status, errorHint, deferred, featuredCandidate };
 }
 
 /** آیا تصمیم توسط ناظر SystemOne رد شده؟ (وضعیت rejected یا لاگ supervisor با verdict=reject) */
@@ -1788,6 +1899,9 @@ export async function cleanupWrongTimedSaleCards(opts?: {
     .update(discountCampaigns)
     .set({ active: false, minDiscountPct: 10, cardRangeFrom: 21, cardRangeTo: 50 })
     .where(and(eq(discountCampaigns.type, "timed_sale"), eq(discountCampaigns.minDiscountPct, 3)));
+
+  // آزادسازی قفل‌های گیرکردهٔ محصولات در دیتابیس
+  await db.update(products).set({ lockedUntil: null }).where(isNotNull(products.lockedUntil));
 
   // ریست قفل ضدربات (Circuit Breaker Wall) روی سرور torob-mcp در صورت فعال بودن
   let mcpReset = false;

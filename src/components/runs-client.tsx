@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { campaignLabel, faDate, faNum, pct, statusColor, statusLabel, toman } from "@/lib/format";
 import { IconChevronDown, IconChevronLeft, IconChevronRight, IconSearch } from "./icons";
 import { EmptyState, ModalSheet } from "./ui";
@@ -9,12 +9,22 @@ import { EmptyState, ModalSheet } from "./ui";
 export interface SerializedRunItem {
   id: number;
   trigger: string;
+  runMode: string;
   status: string;
   totalProducts: number;
   applied: number;
   pendingReview: number;
   failed: number;
+  error: string | null;
   startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface SerializedDecisionStep {
+  step: string;
+  title: string;
+  message: string;
+  level?: "info" | "warn" | "error";
 }
 
 export interface SerializedRunDecision {
@@ -30,8 +40,21 @@ export interface SerializedRunDecision {
   finalPrice: number | null;
   discountPct: number | null;
   campaignType: string | null;
+  strategy: string | null;
   confidence: number;
   status: string;
+  pushStatus: string | null;
+  pushError: string | null;
+  errorSummary: string | null;
+  steps: SerializedDecisionStep[];
+}
+
+export interface SerializedRunLog {
+  id: number;
+  scope: string;
+  level: string;
+  message: string;
+  createdAt: string;
 }
 
 type DecisionStatusFilter = "all" | "applied" | "pending_review" | "failed";
@@ -46,15 +69,18 @@ export function RunsClient({
   runs,
   selectedRunId,
   decisions,
+  runLogs = [],
 }: {
   runs: SerializedRunItem[];
   selectedRunId: number | null;
   decisions: SerializedRunDecision[];
+  runLogs?: SerializedRunLog[];
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [runSearch, setRunSearch] = useState("");
   const [decisionSearch, setDecisionSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<DecisionStatusFilter>("all");
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const selectedIndex = useMemo(
     () => runs.findIndex((r) => r.id === selectedRunId),
@@ -88,6 +114,11 @@ export function RunsClient({
     });
   }, [decisions, statusFilter, decisionSearch]);
 
+  const diagnosticLogs = useMemo(
+    () => runLogs.filter((l) => l.level === "error" || l.level === "warn" || Boolean(selectedRun?.error)),
+    [runLogs, selectedRun],
+  );
+
   const renderRunList = (onPick?: () => void) => (
     <div className="space-y-2">
       <div className="relative">
@@ -102,6 +133,7 @@ export function RunsClient({
       <ul className="space-y-1.5">
         {filteredRuns.map((r) => {
           const active = selectedRun?.id === r.id;
+          const hasErr = r.failed > 0 || Boolean(r.error);
           return (
             <li key={r.id}>
               <Link
@@ -117,9 +149,16 @@ export function RunsClient({
                   <span className="font-bold">
                     #{faNum(r.id)} · {triggerLabel(r.trigger)}
                   </span>
-                  <span className={`badge text-[11px] ${statusColor[r.status] ?? "bg-slate-100"}`}>
-                    {statusLabel[r.status] ?? r.status}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    {hasErr && (
+                      <span className="badge bg-rose-100 text-[10px] text-rose-800" title={r.error ?? "دارای خطا"}>
+                        خطا
+                      </span>
+                    )}
+                    <span className={`badge text-[11px] ${statusColor[r.status] ?? "bg-slate-100"}`}>
+                      {statusLabel[r.status] ?? r.status}
+                    </span>
+                  </div>
                 </div>
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-xs text-slate-500">
                   <span>{faDate(r.startedAt)}</span>
@@ -164,9 +203,14 @@ export function RunsClient({
               <div className="text-sm font-bold text-indigo-950">
                 اجرای #{faNum(selectedRun.id)} · {triggerLabel(selectedRun.trigger)}
               </div>
-              <span className={`badge ${statusColor[selectedRun.status] ?? "bg-slate-100"}`}>
-                {statusLabel[selectedRun.status] ?? selectedRun.status}
-              </span>
+              <div className="flex items-center gap-1.5">
+                {(selectedRun.failed > 0 || selectedRun.error) && (
+                  <span className="badge bg-rose-100 text-[11px] text-rose-800">دارای خطا</span>
+                )}
+                <span className={`badge ${statusColor[selectedRun.status] ?? "bg-slate-100"}`}>
+                  {statusLabel[selectedRun.status] ?? selectedRun.status}
+                </span>
+              </div>
             </div>
             <div className="mt-1 text-xs text-slate-600">{faDate(selectedRun.startedAt)}</div>
             <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-indigo-200/70 pt-2">
@@ -219,6 +263,44 @@ export function RunsClient({
             </div>
           )}
 
+          {(selectedRun?.error || diagnosticLogs.length > 0) && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-bold text-rose-950">🔍 گزارش خطا و لاگ‌های عیب‌یابی اجرا</h3>
+                {selectedRun && (
+                  <span className="text-[11px] text-rose-700">
+                    اجرای #{faNum(selectedRun.id)} · حالت: {selectedRun.runMode}
+                  </span>
+                )}
+              </div>
+              {selectedRun?.error && (
+                <div className="rounded-xl border border-rose-300 bg-white/90 px-3 py-2 text-xs font-medium leading-6 text-rose-900 break-words">
+                  <strong>علت اصلی خطای اجرا:</strong> {selectedRun.error}
+                </div>
+              )}
+              {diagnosticLogs.length > 0 && (
+                <ul className="space-y-1.5">
+                  {diagnosticLogs.map((log) => (
+                    <li
+                      key={log.id}
+                      className={`rounded-lg border px-2.5 py-1.5 text-xs leading-5 break-words ${
+                        log.level === "error"
+                          ? "border-rose-200 bg-white text-rose-900"
+                          : log.level === "warn"
+                            ? "border-amber-200 bg-amber-50 text-amber-900"
+                            : "border-slate-200 bg-white/80 text-slate-700"
+                      }`}
+                    >
+                      <span className="ml-1.5 font-semibold">[{log.scope}]</span>
+                      <span>{log.message}</span>
+                      <span className="mr-2 text-[10px] opacity-70">{faDate(log.createdAt)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           <div className="card space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-base font-bold text-slate-900">
@@ -267,45 +349,75 @@ export function RunsClient({
             </div>
 
             {filteredDecisions.length === 0 ? (
-              <EmptyState title="تصمیمی در این اجرا وجود ندارد" />
+              <EmptyState
+                title="تصمیمی در این اجرا وجود ندارد"
+                description={
+                  selectedRun?.error
+                    ? `علت: ${selectedRun.error}`
+                    : runLogs.length > 0
+                      ? runLogs[0].message
+                      : undefined
+                }
+              />
             ) : (
               <>
                 <div className="space-y-3 lg:hidden">
-                  {filteredDecisions.map((d) => (
-                    <div key={d.id} className="m-row space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <Link href={`/products/${d.productId}`} className="block truncate font-bold text-indigo-700">
-                            {d.name}
-                          </Link>
-                          <div className="text-xs text-slate-400">{d.sku}</div>
+                  {filteredDecisions.map((d) => {
+                    const isExpanded = expandedId === d.id;
+                    const isErrStatus = ["rejected", "failed", "sync_failed"].includes(d.status);
+                    return (
+                      <div key={d.id} className="m-row space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <Link href={`/products/${d.productId}`} className="block truncate font-bold text-indigo-700">
+                              {d.name}
+                            </Link>
+                            <div className="text-xs text-slate-400">{d.sku}</div>
+                          </div>
+                          <span className={`badge shrink-0 ${statusColor[d.status] ?? "bg-slate-100"}`}>
+                            {statusLabel[d.status] ?? d.status}
+                          </span>
                         </div>
-                        <span className={`badge shrink-0 ${statusColor[d.status] ?? "bg-slate-100"}`}>
-                          {statusLabel[d.status] ?? d.status}
-                        </span>
+                        {d.errorSummary && (
+                          <p
+                            className={`rounded-lg px-2.5 py-1.5 text-xs leading-5 break-words ${
+                              isErrStatus ? "bg-rose-50 text-rose-800" : "bg-amber-50 text-amber-900"
+                            }`}
+                          >
+                            {d.errorSummary}
+                          </p>
+                        )}
+                        <div className="m-row-kv">
+                          <span>قیمت نهایی</span>
+                          <span className="num font-bold text-emerald-700">{toman(d.finalPrice)}</span>
+                        </div>
+                        <div className="m-row-kv">
+                          <span>مرجع / اصلی</span>
+                          <span className="num text-xs">
+                            {toman(d.referencePrice)} / {toman(d.basePrice)}
+                          </span>
+                        </div>
+                        <div className="m-row-kv">
+                          <span>تخفیف / کمپین / اعتماد</span>
+                          <span className="num text-xs">
+                            {pct(d.discountPct)} · {campaignLabel[d.campaignType ?? "none"]} · {pct(d.confidence * 100, 0)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedId(isExpanded ? null : d.id)}
+                          className="btn-secondary btn-sm w-full text-xs"
+                        >
+                          {isExpanded ? "بستن جزئیات مراحل" : `🔍 جزئیات مراحل (${faNum(d.steps.length)})`}
+                        </button>
+                        {isExpanded && <DecisionStepsDetail decision={d} />}
                       </div>
-                      <div className="m-row-kv">
-                        <span>قیمت نهایی</span>
-                        <span className="num font-bold text-emerald-700">{toman(d.finalPrice)}</span>
-                      </div>
-                      <div className="m-row-kv">
-                        <span>مرجع / اصلی</span>
-                        <span className="num text-xs">
-                          {toman(d.referencePrice)} / {toman(d.basePrice)}
-                        </span>
-                      </div>
-                      <div className="m-row-kv">
-                        <span>تخفیف / کمپین / اعتماد</span>
-                        <span className="num text-xs">
-                          {pct(d.discountPct)} · {campaignLabel[d.campaignType ?? "none"]} · {pct(d.confidence * 100, 0)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <div className="table-scroll hidden lg:block">
-                  <table className="data min-w-[840px]">
+                  <table className="data min-w-[920px]">
                     <thead>
                       <tr>
                         <th>محصول</th>
@@ -317,35 +429,67 @@ export function RunsClient({
                         <th>تخفیف</th>
                         <th>کمپین</th>
                         <th>اعتماد</th>
-                        <th>وضعیت</th>
+                        <th>وضعیت / جزئیات</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredDecisions.map((d) => (
-                        <tr key={d.id}>
-                          <td className="max-w-[230px]">
-                            <Link href={`/products/${d.productId}`} className="block truncate font-medium text-indigo-700 hover:underline">
-                              {d.name}
-                            </Link>
-                            <div className="text-xs text-slate-400">{d.sku}</div>
-                          </td>
-                          <td>{d.source}</td>
-                          <td className="num">
-                            {faNum(d.offersUsed)}/{faNum(d.offersTotal)}
-                          </td>
-                          <td className="num">{toman(d.referencePrice)}</td>
-                          <td className="num line-through decoration-slate-400">{toman(d.basePrice)}</td>
-                          <td className="num font-bold text-emerald-700">{toman(d.finalPrice)}</td>
-                          <td className="num">{pct(d.discountPct)}</td>
-                          <td className="text-xs">{campaignLabel[d.campaignType ?? "none"]}</td>
-                          <td className="num">{pct(d.confidence * 100, 0)}</td>
-                          <td>
-                            <span className={`badge ${statusColor[d.status] ?? "bg-slate-100"}`}>
-                              {statusLabel[d.status] ?? d.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      {filteredDecisions.map((d) => {
+                        const isExpanded = expandedId === d.id;
+                        const isErrStatus = ["rejected", "failed", "sync_failed"].includes(d.status);
+                        return (
+                          <Fragment key={d.id}>
+                            <tr>
+                              <td className="max-w-[260px]">
+                                <Link href={`/products/${d.productId}`} className="block truncate font-medium text-indigo-700 hover:underline">
+                                  {d.name}
+                                </Link>
+                                <div className="text-xs text-slate-400">{d.sku}</div>
+                                {d.errorSummary && (
+                                  <div
+                                    className={`mt-1 line-clamp-2 text-[11px] leading-4 ${
+                                      isErrStatus ? "text-rose-700" : "text-amber-800"
+                                    }`}
+                                    title={d.errorSummary}
+                                  >
+                                    {d.errorSummary}
+                                  </div>
+                                )}
+                              </td>
+                              <td>{d.source}</td>
+                              <td className="num">
+                                {faNum(d.offersUsed)}/{faNum(d.offersTotal)}
+                              </td>
+                              <td className="num">{toman(d.referencePrice)}</td>
+                              <td className="num line-through decoration-slate-400">{toman(d.basePrice)}</td>
+                              <td className="num font-bold text-emerald-700">{toman(d.finalPrice)}</td>
+                              <td className="num">{pct(d.discountPct)}</td>
+                              <td className="text-xs">{campaignLabel[d.campaignType ?? "none"]}</td>
+                              <td className="num">{pct(d.confidence * 100, 0)}</td>
+                              <td>
+                                <div className="flex flex-col items-start gap-1">
+                                  <span className={`badge ${statusColor[d.status] ?? "bg-slate-100"}`}>
+                                    {statusLabel[d.status] ?? d.status}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedId(isExpanded ? null : d.id)}
+                                    className="text-[11px] font-medium text-indigo-700 hover:underline"
+                                  >
+                                    {isExpanded ? "بستن مراحل ▲" : `جزئیات (${faNum(d.steps.length)}) ▼`}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr>
+                                <td colSpan={10} className="bg-slate-50/90 p-3">
+                                  <DecisionStepsDetail decision={d} />
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -365,6 +509,55 @@ export function RunsClient({
       >
         {renderRunList(() => setPickerOpen(false))}
       </ModalSheet>
+    </div>
+  );
+}
+
+function DecisionStepsDetail({ decision }: { decision: SerializedRunDecision }) {
+  return (
+    <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3 text-right">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2 text-xs">
+        <span className="font-bold text-slate-800">
+          ردپای تصمیم #{faNum(decision.id)} — استراتژی: {decision.strategy || "—"}
+        </span>
+        <Link href={`/products/${decision.productId}`} className="font-medium text-indigo-700 hover:underline">
+          مشاهده صفحه محصول ←
+        </Link>
+      </div>
+      {decision.pushError && (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-900 break-words">
+          <strong>خطای ثبت/ارسال:</strong> {decision.pushError}
+        </div>
+      )}
+      {decision.steps.length === 0 ? (
+        <p className="text-xs text-slate-500">هیچ گامی برای این تصمیم ثبت نشده است.</p>
+      ) : (
+        <ol className="space-y-1.5">
+          {decision.steps.map((s, idx) => {
+            const cls =
+              s.level === "error"
+                ? "border-rose-200 bg-rose-50/70 text-rose-950"
+                : s.level === "warn"
+                  ? "border-amber-200 bg-amber-50/70 text-amber-950"
+                  : "border-slate-200 bg-slate-50/70 text-slate-800";
+            const badgeCls =
+              s.level === "error"
+                ? "bg-rose-200 text-rose-900"
+                : s.level === "warn"
+                  ? "bg-amber-200 text-amber-900"
+                  : "bg-slate-200 text-slate-700";
+            return (
+              <li key={`${s.step}-${idx}`} className={`rounded-lg border px-2.5 py-2 text-xs leading-5 ${cls}`}>
+                <div className="flex flex-wrap items-center gap-1.5 font-semibold">
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] ${badgeCls}`}>{s.step}</span>
+                  <span>{s.title}</span>
+                </div>
+                <div className="mt-1 break-words">{s.message}</div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </div>
   );
 }

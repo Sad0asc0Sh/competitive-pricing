@@ -21,6 +21,9 @@ const { buildSgeoooleRequestPayload } = loadTsModule('src/lib/store/connectors.t
 const { invalidateAIConfigCache, resolveSubqRuntime } = loadTsModule('src/lib/ai/config.ts')
 const { verifyTorobMatchesWithAI } = loadTsModule('src/lib/ai/client.ts')
 const mcpClient = loadTsModule('src/lib/sources/torob-mcp-client.ts')
+const { torobAdapter } = loadTsModule('src/lib/sources/torob.ts')
+const { invalidateTorobRelayCache } = loadTsModule('src/lib/torob-relay/config.ts')
+const { safeInt } = loadTsModule('src/lib/services/runner.ts')
 const { pool } = loadTsModule('src/db/index.ts')
 
 const NOW = new Date('2026-10-24T09:00:00.000Z')
@@ -620,4 +623,122 @@ test('M1 & P1. پشتیبانی trimmed_weighted_mean، پیش‌فرض نظار
   assert.equal(res.strategy, 'provisional_market_percentile')
   assert.equal(res.isProvisional, true)
   assert.equal(res.needsReview, true)
+})
+
+test('T1. torobAdapter با وجود torobUrl (شناخته‌شدن prk) و غیاب detailsUrl مستقیم جزئیات را می‌گیرد و search نمی‌زند', async () => {
+  const origQuery = pool.query.bind(pool)
+  const origFetch = globalThis.fetch
+  const origMcp = process.env.TOROB_MCP_URL
+  const origBase = process.env.TOROB_API_BASE
+  pool.query = async () => ({ rows: [] })
+  delete process.env.TOROB_MCP_URL
+  process.env.TOROB_API_BASE = 'https://torob-api.test'
+  invalidateTorobRelayCache()
+
+  const urls = []
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    urls.push(u)
+    if (u.includes('/v4/base-product/search/')) {
+      throw new Error('SHOULD_NOT_SEARCH_WHEN_PRK_EXISTS')
+    }
+    if (u.includes('/v4/base-product/details/')) {
+      return new Response(
+        JSON.stringify({
+          random_key: 'abc12345',
+          name1: 'دوربین تست',
+          shop_count: 3,
+          products_info: {
+            count: 3,
+            result: [
+              { shop_name: 'ف۱', price: 2400000, shop_city: 'تهران', last_price_change_date: '۱ ساعت پیش' },
+              { shop_name: 'ف۲', price: 2450000, shop_city: 'تهران', last_price_change_date: '۱ ساعت پیش' },
+            ],
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    return new Response(JSON.stringify({ labels: [], dataSets: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  try {
+    const res = await torobAdapter.fetchOffers({
+      id: 1,
+      sku: 'SKU-1',
+      name: 'دوربین مداربسته نامرتبط برای جستجو',
+      sourceType: 'torob',
+      torobUrl: 'https://torob.com/p/abc12345/camera-test/',
+      torobPrk: null,
+      torobDetailsUrl: null,
+      costPrice: 2000000,
+    })
+    assert.equal(res.ok, true)
+    assert.equal(res.prk, 'abc12345')
+    assert.equal(res.offers.length, 2)
+    assert.ok(!urls.some((u) => u.includes('/v4/base-product/search/')))
+    assert.ok(urls.some((u) => u.includes('/v4/base-product/details/?prk=abc12345')))
+  } finally {
+    globalThis.fetch = origFetch
+    pool.query = origQuery
+    if (origMcp === undefined) delete process.env.TOROB_MCP_URL
+    else process.env.TOROB_MCP_URL = origMcp
+    if (origBase === undefined) delete process.env.TOROB_API_BASE
+    else process.env.TOROB_API_BASE = origBase
+    invalidateTorobRelayCache()
+  }
+})
+
+test('T2. حفظ جزئیات دقیق خطای شبکه/HTTP در torobAdapter و fetchViaTorobMcpServer', async () => {
+  const origQuery = pool.query.bind(pool)
+  const origFetch = globalThis.fetch
+  const origMcp = process.env.TOROB_MCP_URL
+  const origBase = process.env.TOROB_API_BASE
+  pool.query = async () => ({ rows: [] })
+  delete process.env.TOROB_MCP_URL
+  process.env.TOROB_API_BASE = 'https://torob-api.test'
+  invalidateTorobRelayCache()
+
+  try {
+    globalThis.fetch = async () => new Response('down', { status: 502, headers: { 'content-type': 'text/plain' } })
+    const mcpOut = await mcpClient.fetchViaTorobMcpServer({
+      mcpUrl: 'http://fake-mcp.local/mcp',
+      prk: 'xyz999',
+      productName: 'دوربین تست',
+      now: NOW,
+    })
+    assert.ok(mcpOut && mcpOut.ok === false)
+    assert.match(String(mcpOut.error), /MCP HTTP 502/)
+
+    const adapterOut = await torobAdapter.fetchOffers({
+      id: 2,
+      sku: 'SKU-2',
+      name: 'دوربین تست',
+      sourceType: 'torob',
+      torobUrl: 'https://torob.com/p/xyz999/',
+      costPrice: 1000000,
+    })
+    assert.equal(adapterOut.ok, false)
+    assert.match(String(adapterOut.error), /502/)
+    assert.ok(Array.isArray(adapterOut.meta?.diagnostics) && adapterOut.meta.diagnostics.length >= 1)
+  } finally {
+    globalThis.fetch = origFetch
+    pool.query = origQuery
+    if (origMcp === undefined) delete process.env.TOROB_MCP_URL
+    else process.env.TOROB_MCP_URL = origMcp
+    if (origBase === undefined) delete process.env.TOROB_API_BASE
+    else process.env.TOROB_API_BASE = origBase
+    invalidateTorobRelayCache()
+  }
+})
+
+test('T3. safeInt از سرریز عدد صحیح PostgreSQL (INT4) و NaN جلوگیری می‌کند', () => {
+  assert.equal(safeInt(Number.NaN), null)
+  assert.equal(safeInt(Number.POSITIVE_INFINITY), null)
+  assert.equal(safeInt(9_999_999_999), 2_147_483_647)
+  assert.equal(safeInt(-9_999_999_999), -2_147_483_648)
+  assert.equal(safeInt(2540000.6), 2540001)
 })

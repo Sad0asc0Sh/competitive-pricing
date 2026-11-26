@@ -55,6 +55,7 @@ async function POST(req) {
         return server_1.NextResponse.json(summary);
     }
     catch (e) {
+        console.error("[API /api/runs] POST error:", e);
         return server_1.NextResponse.json({ error: e instanceof Error ? e.message : "خطا در اجرای استعلام قیمت‌گذاری" }, { status: 500 });
     }
 }

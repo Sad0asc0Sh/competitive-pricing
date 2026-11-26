@@ -1,5 +1,8 @@
 "use client";
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RunButton = RunButton;
 exports.CardRangeRunner = CardRangeRunner;
@@ -8,6 +11,7 @@ exports.RelinkTorobAction = RelinkTorobAction;
 exports.ProductStatusToggle = ProductStatusToggle;
 exports.DeleteProductButton = DeleteProductButton;
 const jsx_runtime_1 = require("react/jsx-runtime");
+const link_1 = __importDefault(require("next/link"));
 const navigation_1 = require("next/navigation");
 const react_1 = require("react");
 const icons_1 = require("./icons");
@@ -54,10 +58,19 @@ function RunButton({ productIds, cardRangeFrom, cardRangeTo, label = "اجرای
                         body: JSON.stringify(bodyPayload),
                     });
                     if (ok) {
-                        const lastErr = typeof data.lastError === "string" && data.lastError ? ` (${data.lastError})` : "";
-                        const text = `اعمال: ${data.applied ?? 0} | بازبینی: ${data.pendingReview ?? 0} | رد/خطا: ${data.failed ?? 0}${lastErr}`;
-                        const isSuccess = Number(data.failed ?? 0) === 0 || Number(data.applied ?? 0) + Number(data.pendingReview ?? 0) > 0;
-                        setMsg({ ok: isSuccess, text });
+                        const runId = typeof data.runId === "number" ? data.runId : undefined;
+                        const applied = Number(data.applied ?? 0);
+                        const pendingReview = Number(data.pendingReview ?? 0);
+                        const failed = Number(data.failed ?? 0);
+                        const total = Number(data.total ?? 0);
+                        const skippedLocked = Number(data.skippedLocked ?? 0);
+                        const lastErr = typeof data.lastError === "string" && data.lastError ? ` — علت: ${data.lastError}` : "";
+                        const lockNote = skippedLocked > 0 ? ` | ردشده (قفل): ${skippedLocked}` : "";
+                        const text = `اعمال: ${applied} | بازبینی: ${pendingReview} | رد/خطا: ${failed}${lockNote}${lastErr}`;
+                        const isSuccess = total > 0 &&
+                            (failed === 0 || applied + pendingReview > 0) &&
+                            !(skippedLocked > 0 && applied + pendingReview + failed === 0);
+                        setMsg({ ok: isSuccess, text, runId });
                         if (isSuccess)
                             toast.success(text);
                         else
@@ -70,7 +83,7 @@ function RunButton({ productIds, cardRangeFrom, cardRangeTo, label = "اجرای
                         toast.error(errText);
                     }
                     router.refresh();
-                }), children: [pending && (0, jsx_runtime_1.jsx)(icons_1.IconSpinner, { className: "h-4 w-4 shrink-0" }), (0, jsx_runtime_1.jsx)("span", { children: pending ? "در حال استعلام…" : label })] }), msg && ((0, jsx_runtime_1.jsx)("span", { className: `text-xs font-medium break-words ${msg.ok ? "text-emerald-700" : "text-rose-700"}`, children: msg.text }))] }));
+                }), children: [pending && (0, jsx_runtime_1.jsx)(icons_1.IconSpinner, { className: "h-4 w-4 shrink-0" }), (0, jsx_runtime_1.jsx)("span", { children: pending ? "در حال استعلام…" : label })] }), msg && ((0, jsx_runtime_1.jsxs)("span", { className: `text-xs font-medium break-words ${msg.ok ? "text-emerald-700" : "text-rose-700"}`, children: [msg.text, msg.runId && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" · ", (0, jsx_runtime_1.jsxs)(link_1.default, { href: `/runs?run=${msg.runId}`, className: "underline hover:opacity-80", children: ["\u062C\u0632\u0626\u06CC\u0627\u062A \u0627\u062C\u0631\u0627 #", msg.runId.toLocaleString("fa-IR"), " \u2190"] })] }))] }))] }));
 }
 /**
  * نوار ابزار اجرای هوشمند روی یک رنج دلخواه از کارت‌ها + دکمه پاک‌سازی فوری دسته ۳ و ریست قفل ترب
@@ -128,11 +141,19 @@ function CardRangeRunner({ totalCards, defaultCollapsedOnMobile = false, }) {
                                                     }),
                                                 });
                                                 if (ok) {
+                                                    const runId = typeof data.runId === "number" ? data.runId : undefined;
+                                                    const applied = Number(data.applied ?? 0);
+                                                    const pendingReview = Number(data.pendingReview ?? 0);
+                                                    const failed = Number(data.failed ?? 0);
+                                                    const total = Number(data.total ?? 0);
+                                                    const skippedLocked = Number(data.skippedLocked ?? 0);
                                                     const lastErr = typeof data.lastError === "string" && data.lastError ? ` — علت خطا: ${data.lastError}` : "";
-                                                    const text = `کارت #${fromCard} تا #${toCard} بررسی شد → اعمال: ${data.applied ?? 0} | صف بازبینی: ${data.pendingReview ?? 0} | رد/خطا: ${data.failed ?? 0}${lastErr}`;
-                                                    const isOk = Number(data.failed ?? 0) === 0 ||
-                                                        Number(data.applied ?? 0) + Number(data.pendingReview ?? 0) > 0;
-                                                    setMsg({ ok: isOk, text });
+                                                    const lockNote = skippedLocked > 0 ? ` | ردشده (قفل): ${skippedLocked}` : "";
+                                                    const text = `کارت #${fromCard} تا #${toCard} بررسی شد → اعمال: ${applied} | صف بازبینی: ${pendingReview} | رد/خطا: ${failed}${lockNote}${lastErr}`;
+                                                    const isOk = total > 0 &&
+                                                        (failed === 0 || applied + pendingReview > 0) &&
+                                                        !(skippedLocked > 0 && applied + pendingReview + failed === 0);
+                                                    setMsg({ ok: isOk, text, runId });
                                                     if (isOk)
                                                         toast.success(text);
                                                     else
@@ -144,9 +165,9 @@ function CardRangeRunner({ totalCards, defaultCollapsedOnMobile = false, }) {
                                                     toast.error(errText);
                                                 }
                                                 router.refresh();
-                                            }), children: [pending && (0, jsx_runtime_1.jsx)(icons_1.IconSpinner, { className: "h-4 w-4 shrink-0" }), (0, jsx_runtime_1.jsx)("span", { children: pending ? "در حال اجرا…" : `🔍 استعلام و پیشنهاد کارت #${fromCard} تا #${toCard}` })] }) }), (0, jsx_runtime_1.jsx)("div", { className: "col-span-2 sm:col-span-2 lg:col-span-1", children: (0, jsx_runtime_1.jsx)("button", { type: "button", className: "btn-secondary w-full text-xs", disabled: pending, onClick: () => setCleanupConfirmOpen(true), children: "\uD83E\uDDF9 \u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u0647 \u06F3 + \u0631\u06CC\u0633\u062A \u0642\u0641\u0644 \u062A\u0631\u0628" }) })] }), msg && ((0, jsx_runtime_1.jsx)("div", { className: `rounded-xl border px-3 py-2 text-xs font-medium break-words ${msg.ok
+                                            }), children: [pending && (0, jsx_runtime_1.jsx)(icons_1.IconSpinner, { className: "h-4 w-4 shrink-0" }), (0, jsx_runtime_1.jsx)("span", { children: pending ? "در حال اجرا…" : `🔍 استعلام و پیشنهاد کارت #${fromCard} تا #${toCard}` })] }) }), (0, jsx_runtime_1.jsx)("div", { className: "col-span-2 sm:col-span-2 lg:col-span-1", children: (0, jsx_runtime_1.jsx)("button", { type: "button", className: "btn-secondary w-full text-xs", disabled: pending, onClick: () => setCleanupConfirmOpen(true), children: "\uD83E\uDDF9 \u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u0647 \u06F3 + \u0631\u06CC\u0633\u062A \u0642\u0641\u0644 \u062A\u0631\u0628" }) })] }), msg && ((0, jsx_runtime_1.jsxs)("div", { className: `rounded-xl border px-3 py-2 text-xs font-medium break-words ${msg.ok
                                     ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-                                    : "border-rose-300 bg-rose-50 text-rose-900"}`, children: msg.text }))] })] }), (0, jsx_runtime_1.jsx)(ui_1.ConfirmDialog, { open: cleanupConfirmOpen, title: "\u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u0647 \u06F3 \u0648 \u0631\u06CC\u0633\u062A \u0642\u0641\u0644 \u062A\u0631\u0628", description: "\u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC\u06CC \u06A9\u0647 \u0628\u062F\u0648\u0646 \u0642\u06CC\u0645\u062A \u062E\u0631\u06CC\u062F \u0628\u0647 \u0627\u0634\u062A\u0628\u0627\u0647 \u0648\u0627\u0631\u062F \u062F\u0633\u062A\u0647 \u06F3 (\u0641\u0631\u0635\u062A \u0632\u0645\u0627\u0646\u200C\u062F\u0627\u0631) \u0634\u062F\u0647\u200C\u0627\u0646\u062F \u0627\u0632 \u062F\u06CC\u062A\u0627\u0628\u06CC\u0633 \u0648 \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u0628\u0627\u0632\u06AF\u0631\u062F\u0627\u0646\u06CC \u0634\u062F\u0647 \u0648 \u0642\u0641\u0644 \u0645\u0648\u0642\u062A \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062A\u0631\u0628 \u0631\u06CC\u0633\u062A \u0645\u06CC\u200C\u0634\u0648\u062F. \u0627\u062F\u0627\u0645\u0647 \u0645\u06CC\u200C\u062F\u0647\u06CC\u062F\u061F", confirmLabel: "\u062A\u0623\u06CC\u06CC\u062F \u0648 \u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC", tone: "primary", busy: pending, onConfirm: runCleanup, onCancel: () => setCleanupConfirmOpen(false) })] }));
+                                    : "border-rose-300 bg-rose-50 text-rose-900"}`, children: [(0, jsx_runtime_1.jsx)("span", { children: msg.text }), msg.runId && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" · ", (0, jsx_runtime_1.jsxs)(link_1.default, { href: `/runs?run=${msg.runId}`, className: "underline hover:opacity-80", children: ["\u0645\u0634\u0627\u0647\u062F\u0647 \u062C\u0632\u0626\u06CC\u0627\u062A \u0627\u062C\u0631\u0627 #", msg.runId.toLocaleString("fa-IR"), " \u2190"] })] }))] }))] })] }), (0, jsx_runtime_1.jsx)(ui_1.ConfirmDialog, { open: cleanupConfirmOpen, title: "\u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u0647 \u06F3 \u0648 \u0631\u06CC\u0633\u062A \u0642\u0641\u0644 \u062A\u0631\u0628", description: "\u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC\u06CC \u06A9\u0647 \u0628\u062F\u0648\u0646 \u0642\u06CC\u0645\u062A \u062E\u0631\u06CC\u062F \u0628\u0647 \u0627\u0634\u062A\u0628\u0627\u0647 \u0648\u0627\u0631\u062F \u062F\u0633\u062A\u0647 \u06F3 (\u0641\u0631\u0635\u062A \u0632\u0645\u0627\u0646\u200C\u062F\u0627\u0631) \u0634\u062F\u0647\u200C\u0627\u0646\u062F \u0627\u0632 \u062F\u06CC\u062A\u0627\u0628\u06CC\u0633 \u0648 \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u0628\u0627\u0632\u06AF\u0631\u062F\u0627\u0646\u06CC \u0634\u062F\u0647 \u0648 \u0642\u0641\u0644 \u0645\u0648\u0642\u062A \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062A\u0631\u0628 \u0631\u06CC\u0633\u062A \u0645\u06CC\u200C\u0634\u0648\u062F. \u0627\u062F\u0627\u0645\u0647 \u0645\u06CC\u200C\u062F\u0647\u06CC\u062F\u061F", confirmLabel: "\u062A\u0623\u06CC\u06CC\u062F \u0648 \u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC", tone: "primary", busy: pending, onConfirm: runCleanup, onCancel: () => setCleanupConfirmOpen(false) })] }));
 }
 function DecisionActions({ decisionId, id, force = false, isBelowFloor = false, syncFailed = false, initialFinalPrice, initialBasePrice, initialDiscountPct, initialCampaignType, effectiveCost, }) {
     const targetId = decisionId ?? id ?? 0;

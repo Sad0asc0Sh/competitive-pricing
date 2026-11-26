@@ -557,7 +557,18 @@ export async function fetchViaTorobMcpServer(opts: {
     }
   }
 
-  if (!prk) return null;
+  if (!prk) {
+    const diagMsg = searchLog.find((x) => x.error)?.error || "پاسخ خالی یا بدون شناسه محصول از سرور torob-mcp";
+    return {
+      source: "torob",
+      offers: [],
+      totalSellerCount: 0,
+      fetchedAt: now,
+      ok: false,
+      error: diagMsg,
+      meta: { via: "torob_mcp_server", mcpFallback: true, mcpError: diagMsg, searchQueries: searchLog },
+    };
+  }
 
   const detailsOut = await callTorobMcpToolWithDiag<TorobMcpProductDetails>(
     opts.mcpUrl,
@@ -574,7 +585,17 @@ export async function fetchViaTorobMcpServer(opts: {
 
   const details = detailsOut.data;
   if (!details || (!details.offers?.length && !details.in_person_sellers?.length)) {
-    return null;
+    const diagMsg = detailsOut.errorText || "پاسخ جزئیات سرور torob-mcp فاقد فروشنده است";
+    return {
+      source: "torob",
+      prk,
+      offers: [],
+      totalSellerCount: 0,
+      fetchedAt: now,
+      ok: false,
+      error: diagMsg,
+      meta: { via: "torob_mcp_server", mcpFallback: true, mcpError: diagMsg, searchQueries: searchLog },
+    };
   }
 
   const primaryConverted = convertMcpDetailsToOffers(details, now);

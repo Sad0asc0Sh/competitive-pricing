@@ -20,6 +20,7 @@ interface TorobTransportResponse {
   status: number;
   contentType: string;
   bodyText: string;
+  error?: string;
 }
 
 async function torobTransportGet(
@@ -39,11 +40,13 @@ async function torobTransportGet(
       timeoutMs: opts.timeoutMs ?? 12_000,
     });
     const status = relayed.status ?? 502;
+    const ok = relayed.ok && status >= 200 && status < 300;
     return {
-      ok: relayed.ok && status >= 200 && status < 300,
+      ok,
       status,
       contentType: relayed.contentType ?? "",
       bodyText: relayed.body ?? "",
+      error: ok ? undefined : relayed.error || `Relay HTTP ${status}`,
     };
   }
 
@@ -59,6 +62,7 @@ async function torobTransportGet(
     status: res.status,
     contentType: res.headers.get("content-type") ?? "",
     bodyText: await res.text(),
+    error: res.ok ? undefined : `HTTP ${res.status}`,
   };
 }
 
@@ -243,6 +247,7 @@ export async function searchTorobProductV4(
   matchExplanation?: string;
   challenged?: boolean;
   rejectedAll?: boolean;
+  transportError?: string;
 } | null> {
   const cleanQuery = query.replace(/[\u200c\u200d]/g, " ").replace(/\s+/g, " ").trim();
   if (!cleanQuery) return null;
@@ -263,7 +268,14 @@ export async function searchTorobProductV4(
     if (looksLikeTorobChallenge(res.status, res.contentType, res.bodyText)) {
       return { prk: null, detailsUrl: null, title: null, challenged: true };
     }
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return {
+        prk: null,
+        detailsUrl: null,
+        title: null,
+        transportError: res.error || `HTTP ${res.status}`,
+      };
+    }
     const raw = JSON.parse(res.bodyText) as { results?: AnyRec[] };
     const rows = Array.isArray(raw.results) ? raw.results : [];
     if (!rows.length) return null;
@@ -390,8 +402,13 @@ export async function searchTorobProductV4(
       matchScore: outcome.best.score,
       matchExplanation: outcome.explanation,
     };
-  } catch {
-    return null;
+  } catch (e) {
+    return {
+      prk: null,
+      detailsUrl: null,
+      title: null,
+      transportError: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 
@@ -459,6 +476,8 @@ export const torobAdapter: PriceSourceAdapter = {
           ? product.costPrice
           : null;
 
+    const diagnostics: string[] = [];
+
     // --- لایه ۰: اتصال به سرور Torob MCP در صورت تنظیم متغیر محیطی TOROB_MCP_URL
     const mcpUrl = process.env.TOROB_MCP_URL?.trim();
     if (mcpUrl) {
@@ -478,13 +497,15 @@ export const torobAdapter: PriceSourceAdapter = {
         if (mcpResult.ok || mcpResult.meta?.challenged || mcpResult.meta?.rejectedInSearch) {
           return mcpResult;
         }
+        if (mcpResult.error) diagnostics.push(`MCP: ${mcpResult.error}`);
       }
     }
 
     // --- لایه ۱: موتور مستقیم Torob API v4 با تطبیق هویت ۷ لایه
+    // نکته مهم: وقتی prk از روی torobUrl یا torobPrk از قبل مشخص است، حتی بدون detailsUrl نباید دوباره جستجوی عنوانی زد
     let matchMeta: Record<string, unknown> = {};
     let extraMatchedPrks: string[] = [];
-    if ((!prk || !detailsUrl) && product.name) {
+    if (!prk && product.name) {
       const discovered = await searchTorobProductV4(product.name, prk, {
         sku: product.sku,
         category: product.category,
@@ -501,18 +522,27 @@ export const torobAdapter: PriceSourceAdapter = {
           ok: false,
           error:
             "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای استعلام از سرور خارج از کشور، آدرس Relay/Worker ایرانی را در TOROB_API_BASE تنظیم کنید.",
-          meta: { challenged: true },
+          meta: { challenged: true, ...(diagnostics.length ? { diagnostics } : {}) },
         };
       }
+      if (discovered?.transportError) {
+        diagnostics.push(`جستجوی مستقیم ترب: ${discovered.transportError}`);
+      }
       if (discovered?.rejectedAll) {
+        const diagSuffix = diagnostics.length ? ` (${diagnostics.join(" | ")})` : "";
         return {
           source: "torob",
+          prk,
           offers: [],
           totalSellerCount: 0,
           fetchedAt,
           ok: false,
-          error: discovered.matchExplanation ?? "هیچ کارتی در ترب با مشخصات و کد مدل محصول مطابقت نداشت",
-          meta: discovered.aiIdentityCheck ? { aiIdentityCheck: discovered.aiIdentityCheck } : undefined,
+          error:
+            (discovered.matchExplanation ?? "هیچ کارتی در ترب با مشخصات و کد مدل محصول مطابقت نداشت") + diagSuffix,
+          meta: {
+            ...(discovered.aiIdentityCheck ? { aiIdentityCheck: discovered.aiIdentityCheck } : {}),
+            ...(diagnostics.length ? { diagnostics } : {}),
+          },
         };
       }
       if (discovered && discovered.prk) {
@@ -528,13 +558,15 @@ export const torobAdapter: PriceSourceAdapter = {
     }
 
     if (!prk) {
+      const diagSuffix = diagnostics.length ? ` | جزئیات فنی: ${diagnostics.join(" | ")}` : "";
       return {
         source: "torob",
         offers: [],
         totalSellerCount: 0,
         fetchedAt,
         ok: false,
-        error: "شناسه/لینک ترب (prk) تعریف نشده و در جستجوی خودکار هیچ کارتی با مشخصات و کد مدل محصول مطابقت دقیق نداشت",
+        error: `شناسه/لینک ترب (prk) تعریف نشده و جستجوی خودکار نتیجه‌ای نداد${diagSuffix}`,
+        meta: diagnostics.length ? { diagnostics } : undefined,
       };
     }
 
@@ -561,7 +593,7 @@ export const torobAdapter: PriceSourceAdapter = {
           ok: false,
           error:
             "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای رفع آن رله ایران را در تنظیمات پنل پیکربندی کنید.",
-          meta: { challenged: true },
+          meta: { challenged: true, ...(diagnostics.length ? { diagnostics } : {}) },
         };
       }
 
@@ -627,9 +659,12 @@ export const torobAdapter: PriceSourceAdapter = {
             },
           };
         }
+        diagnostics.push("API v4 ترب: لیست فروشندگان در پاسخ ترب خالی است");
+      } else {
+        diagnostics.push(`API v4 ترب: ${res.error || `HTTP ${res.status}`}`);
       }
-    } catch {
-      // ادامه به لایه ۲ (HTML)
+    } catch (e) {
+      diagnostics.push(`API v4 ترب: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     // --- لایه ۲: HTML صفحه + __NEXT_DATA__
@@ -649,26 +684,46 @@ export const torobAdapter: PriceSourceAdapter = {
         { retries: 0, timeoutMs: 5000 },
       );
       html = res.bodyText;
-      const nd = extractNextData(html);
-      const details = nd ? findDetailsInNextData(nd) : null;
-      if (details) {
-        const parsed = parseTorobJson(details, fetchedAt);
-        if (parsed.offers.length) {
-          return {
-            source: "torob",
-            productTitle: parsed.title ?? undefined,
-            prk,
-            offers: parsed.offers,
-            totalSellerCount: parsed.total,
-            inPersonSellerCount: parsed.inPersonCount,
-            fetchedAt,
-            ok: true,
-            meta: { via: "html_next_data", ...matchMeta },
-          };
-        }
+      if (looksLikeTorobChallenge(res.status, res.contentType, html)) {
+        return {
+          source: "torob",
+          prk,
+          offers: [],
+          totalSellerCount: 0,
+          fetchedAt,
+          ok: false,
+          error:
+            "ترب درخواست صفحه محصول را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای رفع آن رله ایران را در تنظیمات پنل پیکربندی کنید.",
+          meta: { challenged: true, ...(diagnostics.length ? { diagnostics } : {}) },
+        };
       }
-    } catch {
-      // ادامه به لایه ۳ (AI)
+      if (res.ok) {
+        const nd = extractNextData(html);
+        const details = nd ? findDetailsInNextData(nd) : null;
+        if (details) {
+          const parsed = parseTorobJson(details, fetchedAt);
+          if (parsed.offers.length) {
+            return {
+              source: "torob",
+              productTitle: parsed.title ?? undefined,
+              prk,
+              offers: parsed.offers,
+              totalSellerCount: parsed.total,
+              inPersonSellerCount: parsed.inPersonCount,
+              fetchedAt,
+              ok: true,
+              meta: { via: "html_next_data", ...matchMeta },
+            };
+          }
+          diagnostics.push("HTML ترب: هیچ فروشنده‌ای در __NEXT_DATA__ یافت نشد");
+        } else {
+          diagnostics.push("HTML ترب: ساختار __NEXT_DATA__ یافت نشد");
+        }
+      } else {
+        diagnostics.push(`HTML ترب: ${res.error || `HTTP ${res.status}`}`);
+      }
+    } catch (e) {
+      diagnostics.push(`HTML ترب: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     // --- لایه ۳: استخراج با هوش مصنوعی از HTML
@@ -688,6 +743,7 @@ export const torobAdapter: PriceSourceAdapter = {
       }
     }
 
+    const diagSuffix = diagnostics.length ? ` (${diagnostics.join(" | ")})` : "";
     return {
       source: "torob",
       prk,
@@ -695,7 +751,8 @@ export const torobAdapter: PriceSourceAdapter = {
       totalSellerCount: 0,
       fetchedAt,
       ok: false,
-      error: "دسترسی به ترب ممکن نشد (مسدودسازی IP دیتاسنتر خارجی توسط ترب). می‌توانید TOROB_API_BASE را تنظیم کنید.",
+      error: `دسترسی به ترب ممکن نشد${diagSuffix}. می‌توانید رله ایران یا TOROB_API_BASE را در تنظیمات بررسی کنید.`,
+      meta: diagnostics.length ? { diagnostics } : undefined,
     };
   },
 };

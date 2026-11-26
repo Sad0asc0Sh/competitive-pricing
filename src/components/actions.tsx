@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { IconChevronDown, IconSliders, IconSpinner } from "./icons";
@@ -50,7 +51,7 @@ export function RunButton({
   const router = useRouter();
   const toast = useToast();
   const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; runId?: number } | null>(null);
 
   return (
     <span className="inline-flex max-w-full flex-wrap items-center gap-2">
@@ -72,10 +73,20 @@ export function RunButton({
               body: JSON.stringify(bodyPayload),
             });
             if (ok) {
-              const lastErr = typeof data.lastError === "string" && data.lastError ? ` (${data.lastError})` : "";
-              const text = `اعمال: ${data.applied ?? 0} | بازبینی: ${data.pendingReview ?? 0} | رد/خطا: ${data.failed ?? 0}${lastErr}`;
-              const isSuccess = Number(data.failed ?? 0) === 0 || Number(data.applied ?? 0) + Number(data.pendingReview ?? 0) > 0;
-              setMsg({ ok: isSuccess, text });
+              const runId = typeof data.runId === "number" ? data.runId : undefined;
+              const applied = Number(data.applied ?? 0);
+              const pendingReview = Number(data.pendingReview ?? 0);
+              const failed = Number(data.failed ?? 0);
+              const total = Number(data.total ?? 0);
+              const skippedLocked = Number(data.skippedLocked ?? 0);
+              const lastErr = typeof data.lastError === "string" && data.lastError ? ` — علت: ${data.lastError}` : "";
+              const lockNote = skippedLocked > 0 ? ` | ردشده (قفل): ${skippedLocked}` : "";
+              const text = `اعمال: ${applied} | بازبینی: ${pendingReview} | رد/خطا: ${failed}${lockNote}${lastErr}`;
+              const isSuccess =
+                total > 0 &&
+                (failed === 0 || applied + pendingReview > 0) &&
+                !(skippedLocked > 0 && applied + pendingReview + failed === 0);
+              setMsg({ ok: isSuccess, text, runId });
               if (isSuccess) toast.success(text);
               else toast.error(text);
               onDone?.();
@@ -94,6 +105,14 @@ export function RunButton({
       {msg && (
         <span className={`text-xs font-medium break-words ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>
           {msg.text}
+          {msg.runId && (
+            <>
+              {" · "}
+              <Link href={`/runs?run=${msg.runId}`} className="underline hover:opacity-80">
+                جزئیات اجرا #{msg.runId.toLocaleString("fa-IR")} ←
+              </Link>
+            </>
+          )}
         </span>
       )}
     </span>
@@ -116,7 +135,7 @@ export function CardRangeRunner({
   const [toCard, setToCard] = useState(Math.max(1, Math.min(3, totalCards || 3)));
   const [category, setCategory] = useState("");
   const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; runId?: number } | null>(null);
   const [mobileOpen, setMobileOpen] = useState(!defaultCollapsedOnMobile);
   const [cleanupConfirmOpen, setCleanupConfirmOpen] = useState(false);
 
@@ -242,13 +261,21 @@ export function CardRangeRunner({
                       }),
                     });
                     if (ok) {
+                      const runId = typeof data.runId === "number" ? data.runId : undefined;
+                      const applied = Number(data.applied ?? 0);
+                      const pendingReview = Number(data.pendingReview ?? 0);
+                      const failed = Number(data.failed ?? 0);
+                      const total = Number(data.total ?? 0);
+                      const skippedLocked = Number(data.skippedLocked ?? 0);
                       const lastErr =
                         typeof data.lastError === "string" && data.lastError ? ` — علت خطا: ${data.lastError}` : "";
-                      const text = `کارت #${fromCard} تا #${toCard} بررسی شد → اعمال: ${data.applied ?? 0} | صف بازبینی: ${data.pendingReview ?? 0} | رد/خطا: ${data.failed ?? 0}${lastErr}`;
+                      const lockNote = skippedLocked > 0 ? ` | ردشده (قفل): ${skippedLocked}` : "";
+                      const text = `کارت #${fromCard} تا #${toCard} بررسی شد → اعمال: ${applied} | صف بازبینی: ${pendingReview} | رد/خطا: ${failed}${lockNote}${lastErr}`;
                       const isOk =
-                        Number(data.failed ?? 0) === 0 ||
-                        Number(data.applied ?? 0) + Number(data.pendingReview ?? 0) > 0;
-                      setMsg({ ok: isOk, text });
+                        total > 0 &&
+                        (failed === 0 || applied + pendingReview > 0) &&
+                        !(skippedLocked > 0 && applied + pendingReview + failed === 0);
+                      setMsg({ ok: isOk, text, runId });
                       if (isOk) toast.success(text);
                       else toast.error(text);
                     } else {
@@ -284,7 +311,15 @@ export function CardRangeRunner({
                   : "border-rose-300 bg-rose-50 text-rose-900"
               }`}
             >
-              {msg.text}
+              <span>{msg.text}</span>
+              {msg.runId && (
+                <>
+                  {" · "}
+                  <Link href={`/runs?run=${msg.runId}`} className="underline hover:opacity-80">
+                    مشاهده جزئیات اجرا #{msg.runId.toLocaleString("fa-IR")} ←
+                  </Link>
+                </>
+              )}
             </div>
           )}
         </div>
