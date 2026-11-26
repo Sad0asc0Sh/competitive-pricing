@@ -1,18 +1,29 @@
 import { db } from "@/db";
 import { pricingProfiles, schedules, storeConnectors } from "@/db/schema";
-import { SettingsClient } from "@/components/settings-client";
+import { SettingsClient, type SettingsTab } from "@/components/settings-client";
 import { getAIStatus } from "@/lib/ai/config";
 import { ensureDefaults, mergeConfig } from "@/lib/services/bootstrap";
+import { getTorobRelayStatus } from "@/lib/torob-relay/config";
 
 export const dynamic = "force-dynamic";
 
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
   await ensureDefaults();
-  const [profiles, sch, conns, aiStatus] = await Promise.all([
+  const sp = searchParams ? await searchParams : {};
+  const rawTab = sp?.tab;
+  const initialTab: SettingsTab =
+    rawTab === "torob" || rawTab === "profiles" || rawTab === "schedules" || rawTab === "connectors" ? rawTab : "ai";
+
+  const [profiles, sch, conns, aiStatus, torobRelayStatus] = await Promise.all([
     db.select().from(pricingProfiles).orderBy(pricingProfiles.id),
     db.select().from(schedules).orderBy(schedules.id),
     db.select().from(storeConnectors).orderBy(storeConnectors.id),
     getAIStatus(),
+    getTorobRelayStatus(),
   ]);
   const masked = conns.map((c) => ({
     ...c,
@@ -24,6 +35,8 @@ export default async function SettingsPage() {
   return (
     <SettingsClient
       aiStatus={aiStatus}
+      torobRelayStatus={torobRelayStatus}
+      initialTab={initialTab}
       profiles={profiles.map((p) => ({ ...p, config: mergeConfig(p.config) }))}
       schedules={sch}
       connectors={masked}

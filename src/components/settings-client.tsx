@@ -2,31 +2,36 @@
 
 import type { PricingProfile, Schedule, StoreConnector } from "@/db/schema";
 import type { AIStatus } from "@/lib/ai/config";
+import type { TorobRelayStatus } from "@/lib/torob-relay/config";
 import { useState } from "react";
-import { AISettingsPanel, ConnectorEditor, ProfileEditor, ScheduleEditor } from "./settings-panels";
+import { AISettingsPanel, ConnectorEditor, ProfileEditor, ScheduleEditor, TorobRelayPanel } from "./settings-panels";
 import { SegmentedTabs } from "./ui";
 
-type SettingsTab = "ai" | "profiles" | "schedules" | "connectors";
+export type SettingsTab = "ai" | "torob" | "profiles" | "schedules" | "connectors";
 
 export function SettingsClient({
   aiStatus,
+  torobRelayStatus,
+  initialTab = "ai",
   profiles,
   schedules,
   connectors,
 }: {
   aiStatus: AIStatus;
+  torobRelayStatus: TorobRelayStatus;
+  initialTab?: SettingsTab;
   profiles: PricingProfile[];
   schedules: Schedule[];
   connectors: StoreConnector[];
 }) {
-  const [tab, setTab] = useState<SettingsTab>("ai");
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
 
   return (
     <div className="space-y-5 sm:space-y-6">
       <div className="min-w-0 space-y-2">
         <h1 className="text-lg font-extrabold text-slate-900 sm:text-2xl">تنظیمات موتور قیمت‌گذاری</h1>
         <p className="text-xs leading-6 text-slate-500 sm:text-sm">
-          همه پارامترهای الگوریتم، کلیدهای هوش مصنوعی، زمان‌بندی‌ها و اتصال به فروشگاه از این بخش قابل تنظیم است.
+          همه پارامترهای الگوریتم، رله اتصال به ترب، کلیدهای هوش مصنوعی، زمان‌بندی‌ها و اتصال به فروشگاه از این بخش قابل تنظیم است.
         </p>
         <div className="flex flex-wrap gap-2 text-xs">
           <span
@@ -43,6 +48,20 @@ export function SettingsClient({
           >
             ناظر SubQ SystemOne: {aiStatus.subq.configured ? `متصل (${aiStatus.subq.model})` : "موتور آنی محلی"}
           </span>
+          <span
+            className={`badge ${
+              torobRelayStatus.configured && torobRelayStatus.enabled
+                ? "bg-emerald-100 text-emerald-800"
+                : "bg-slate-100 text-slate-700"
+            }`}
+          >
+            رله ترب:{" "}
+            {torobRelayStatus.configured && torobRelayStatus.enabled
+              ? torobRelayStatus.mode === "encrypted_relay"
+                ? "رله امن (کلید)"
+                : "رله HTTPS"
+              : "مستقیم"}
+          </span>
         </div>
       </div>
 
@@ -51,6 +70,7 @@ export function SettingsClient({
         onChange={setTab}
         items={[
           { key: "ai", label: "هوش مصنوعی و ناظر" },
+          { key: "torob", label: "رله ایران (ترب)" },
           { key: "profiles", label: "پروفایل‌های موتور", count: profiles.length },
           { key: "schedules", label: "زمان‌بندی خودکار", count: schedules.length },
           { key: "connectors", label: "اتصال فروشگاه", count: connectors.length },
@@ -63,6 +83,15 @@ export function SettingsClient({
             هوش مصنوعی و توکن‌های API (ذخیره امن در دیتابیس)
           </h2>
           <AISettingsPanel initial={aiStatus} />
+        </section>
+      )}
+
+      {tab === "torob" && (
+        <section className="space-y-3">
+          <h2 className="text-base font-bold text-slate-900 sm:text-lg">
+            رله اتصال امن به ترب (سرور مسکونی ایران)
+          </h2>
+          <TorobRelayPanel initial={torobRelayStatus} />
         </section>
       )}
 

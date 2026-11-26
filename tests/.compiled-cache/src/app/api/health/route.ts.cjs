@@ -5,6 +5,7 @@ exports.GET = GET;
 const index_ts_1 = require("../../../db/index.ts");
 const config_1 = require("../../../lib/ai/config");
 const connectors_1 = require("../../../lib/store/connectors");
+const config_2 = require("../../../lib/torob-relay/config");
 const drizzle_orm_1 = require("drizzle-orm");
 exports.dynamic = "force-dynamic";
 async function checkUrl(url, timeoutMs = 4000) {
@@ -43,6 +44,10 @@ async function GET() {
         store = null;
     }
     const torobMcpUrl = (process.env.TOROB_MCP_URL ?? "").trim();
+    const relayCfg = await (0, config_2.getTorobRelayConfig)().catch(() => null);
+    if (relayCfg && torobMcpUrl) {
+        await (0, config_2.syncTorobRelayToMcp)(relayCfg).catch(() => undefined);
+    }
     const torob = torobMcpUrl ? await checkUrl(torobMcpUrl, 4000) : { reachable: false };
     const storeBase = store?.baseUrl || (process.env.SGEOOOLE_API_URL ?? "");
     const storeCheck = storeBase ? await checkUrl(`${storeBase.replace(/\/$/, "")}/api/products/pricing-sync`, 4000) : null;
@@ -62,6 +67,8 @@ async function GET() {
         torob: {
             configured: Boolean(torobMcpUrl),
             reachable: torobMcpUrl ? torob.reachable : null,
+            relayConfigured: Boolean(relayCfg?.configured && relayCfg?.enabled),
+            relayMode: relayCfg?.mode ?? "direct",
         },
         ai: {
             enabled: ai.ai.enabled,

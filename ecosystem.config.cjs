@@ -9,7 +9,15 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: 3005,
+        HOST: "127.0.0.1",
         TOROB_API_BASE: process.env.TOROB_API_BASE || "",
+        TOROB_RELAY_KEY: process.env.TOROB_RELAY_KEY || "",
+        TOROB_MCP_SYNC_SECRET:
+          process.env.TOROB_MCP_SYNC_SECRET ||
+          process.env.AUTH_SECRET ||
+          process.env.SESSION_SECRET ||
+          process.env.CRON_SECRET ||
+          "",
       },
       autorestart: true,
       max_memory_restart: "250M",

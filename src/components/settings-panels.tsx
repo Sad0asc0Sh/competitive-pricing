@@ -2,6 +2,7 @@
 
 import type { PricingProfile, Schedule, StoreConnector } from "@/db/schema";
 import type { AIStatus, ProviderStatus } from "@/lib/ai/config";
+import type { TorobRelayStatus } from "@/lib/torob-relay/config";
 import { DEFAULT_PROFILE_CONFIG, type PricingProfileConfig, type SystemOneGateThresholdConfig } from "@/lib/pricing/types";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -950,6 +951,330 @@ export function AISettingsPanel({ initial }: { initial: AIStatus }) {
           else if (clearTarget === "subq") call("subq", "clear", subq);
         }}
         onCancel={() => setClearTarget(null)}
+      />
+    </div>
+  );
+}
+
+/* ---------------- رله اتصال امن به ترب ---------------- */
+function extractPortFromUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "43389";
+  try {
+    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`;
+    const u = new URL(withScheme);
+    if (u.port) return u.port;
+    return u.protocol === "https:" ? "443" : "43389";
+  } catch {
+    return "43389";
+  }
+}
+
+function generateSimpleRelayKey(): string {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  let out = "trb_";
+  for (const b of bytes) out += alphabet[b % alphabet.length];
+  return out;
+}
+
+export function TorobRelayPanel({ initial }: { initial: TorobRelayStatus }) {
+  const router = useRouter();
+  const toast = useToast();
+  const [pending, start] = useTransition();
+  const [status, setStatus] = useState<TorobRelayStatus>(initial);
+  const [enabled, setEnabled] = useState<boolean>(initial.enabled);
+  const [url, setUrl] = useState<string>(initial.url || "2.180.37.182:43389");
+  const [relayKey, setRelayKey] = useState<string>("");
+  const [showKey, setShowKey] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const port = extractPortFromUrl(url);
+  const displayKey = relayKey.trim() || "YOUR_RELAY_KEY";
+  const runCmd = `node torob-relay.mjs --port=${port} --key="${displayKey}"`;
+
+  const act = (action: "save" | "test" | "clear" | "reset_breaker") =>
+    start(async () => {
+      setMsg(null);
+      const payload =
+        action === "reset_breaker"
+          ? { action }
+          : action === "clear"
+            ? { action }
+            : { action, enabled, url, relayKey: relayKey || undefined };
+      const res = await fetch("/api/torob-relay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; message?: string; status?: TorobRelayStatus; mcpSynced?: boolean }
+        | null;
+
+      if (!res.ok) {
+        const text = data?.error ?? "خطا در ارتباط با سرور";
+        setMsg({ ok: false, text });
+        toast.error(text);
+        return;
+      }
+
+      if (data?.status) {
+        setStatus(data.status);
+        setEnabled(data.status.enabled);
+        if (action === "clear") setUrl("2.180.37.182:43389");
+        else if (data.status.url) setUrl(data.status.url);
+      }
+
+      if (action === "test" || action === "reset_breaker") {
+        const ok = Boolean(data?.ok);
+        const text = data?.message ?? "—";
+        setMsg({ ok, text });
+        if (ok) toast.success(text);
+        else toast.error(text);
+      } else if (action === "clear") {
+        const text = "تنظیمات رله پاک شد و اتصال به حالت پیش‌فرض برگشت.";
+        setMsg({ ok: true, text });
+        toast.info(text);
+        setRelayKey("");
+        setClearConfirmOpen(false);
+      } else {
+        const syncNote = data?.mcpSynced ? " و به torob-mcp اعمال شد" : "";
+        const text = `تنظیمات رله ذخیره شد${syncNote}.`;
+        setMsg({ ok: true, text });
+        toast.success(text);
+        setRelayKey("");
+      }
+      router.refresh();
+    });
+
+  const copyCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(runCmd);
+      toast.success("دستور اجرا کپی شد");
+    } catch {
+      toast.error("کپی خودکار پشتیبانی نشد — دستور را دستی کپی کنید");
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {msg && (
+        <div
+          className={`rounded-xl border px-3.5 py-2.5 text-xs font-medium ${
+            msg.ok ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-rose-300 bg-rose-50 text-rose-800"
+          }`}
+        >
+          {msg.ok ? "✅ " : "❌ "}
+          {msg.text}
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div
+          className={`card space-y-3.5 ${
+            status.configured && status.enabled ? "border-emerald-300" : "border-amber-300"
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-bold text-slate-900">اتصال به سرور رله ایران (با یک کلید)</h3>
+            {status.configured && status.enabled ? (
+              <span className="badge bg-emerald-100 text-emerald-700">
+                {status.mode === "encrypted_relay" ? "رله رمزنگاری‌شده فعال" : "رله HTTPS فعال"}
+              </span>
+            ) : (
+              <span className="badge bg-amber-100 text-amber-700">اتصال مستقیم سرور</span>
+            )}
+          </div>
+
+          <p className="text-xs leading-6 text-slate-500">
+            آدرس سرور مسکونی (مثل <code dir="ltr">2.180.37.182:43389</code>) و یک کلید ساده وارد کنید. تمام
+            درخواست‌ها و پاسخ‌ها با <code dir="ltr">AES-256-GCM</code> رمزنگاری می‌شوند و نیازی به گواهی SSL یا
+            تنظیمات پیچیده نیست.
+          </p>
+
+          <div className="space-y-1.5 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+            <div>
+              منبع فعلی:{" "}
+              <b>
+                {status.source === "db"
+                  ? "پنل (دیتابیس)"
+                  : status.source === "env"
+                    ? "فایل .env"
+                    : "تنظیم‌نشده (مستقیم)"}
+              </b>
+              {status.keyHint && (
+                <>
+                  {" "}
+                  · کلید فعلی: <code dir="ltr">{status.keyHint}</code>
+                </>
+              )}
+            </div>
+            <div className="break-all">
+              آدرس مؤثر: <code dir="ltr">{status.url || "https://api.torob.com (مستقیم)"}</code>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200/80 bg-white p-2.5">
+            <Switch
+              checked={enabled}
+              onChange={setEnabled}
+              label={enabled ? "ارسال درخواست‌های ترب از طریق رله فعال است" : "رله خاموش است (اتصال مستقیم)"}
+            />
+          </div>
+
+          <div>
+            <label className="label">آدرس و پورت سرور ایران</label>
+            <input
+              className="input text-xs"
+              dir="ltr"
+              placeholder="2.180.37.182:43389"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-2">
+              <label className="label">کلید رله (حداقل ۶ کاراکتر — خالی بگذارید تا تغییر نکند)</label>
+              <button
+                type="button"
+                className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
+                onClick={() => {
+                  setRelayKey(generateSimpleRelayKey());
+                  setShowKey(true);
+                }}
+              >
+                🎲 ساخت کلید تصادفی
+              </button>
+            </div>
+            <div className="relative">
+              <input
+                className="input pl-11 text-xs"
+                dir="ltr"
+                type={showKey ? "text" : "password"}
+                autoComplete="off"
+                placeholder={status.keyHint || "مثلاً MyTorobKey2026"}
+                value={relayKey}
+                onChange={(e) => setRelayKey(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((s) => !s)}
+                aria-label={showKey ? "مخفی کردن کلید" : "نمایش کلید"}
+                className="absolute top-1/2 left-2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              >
+                {showKey ? <IconEyeOff className="h-4 w-4" /> : <IconEye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button
+              type="button"
+              className="btn-primary flex-1 sm:flex-initial"
+              disabled={pending}
+              onClick={() => act("save")}
+            >
+              {pending && <IconSpinner className="h-4 w-4" />}
+              <span>💾 ذخیره و اعمال فوری</span>
+            </button>
+            <button
+              type="button"
+              className="btn-secondary flex-1 sm:flex-initial"
+              disabled={pending}
+              onClick={() => act("test")}
+            >
+              🔌 تست اتصال زنده به ترب
+            </button>
+            <button
+              type="button"
+              className="btn-secondary flex-1 sm:flex-initial"
+              disabled={pending}
+              onClick={() => act("reset_breaker")}
+            >
+              🔓 ریست قفل ۴۹۰
+            </button>
+            <button
+              type="button"
+              className="btn-danger w-full sm:w-auto"
+              disabled={pending || status.source !== "db"}
+              onClick={() => setClearConfirmOpen(true)}
+            >
+              پاک‌کردن تنظیمات
+            </button>
+          </div>
+        </div>
+
+        {/* راهنمای اجرای ۱ دقیقه‌ای روی ویندوز و لینوکس */}
+        <div className="card space-y-3.5 bg-slate-50/70">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-bold text-slate-900">⚡ راه‌اندازی ۱ دقیقه‌ای روی ویندوز یا لینوکس</h3>
+            <a
+              href="/api/torob-relay/script"
+              download="torob-relay.mjs"
+              className="btn-secondary btn-sm"
+            >
+              ⬇️ دانلود فایل torob-relay.mjs
+            </a>
+          </div>
+
+          <ol className="list-decimal space-y-2 pr-4 text-xs leading-6 text-slate-700">
+            <li>
+              فایل <code dir="ltr">torob-relay.mjs</code> را با دکمه بالا دانلود کنید (بدون نیاز به{" "}
+              <code dir="ltr">npm install</code> — فقط Node.js 18+ لازم است).
+            </li>
+            <li>
+              روی سرور مسکونی ایران، همان فایل را با دستور زیر در ترمینال (PowerShell ویندوز یا Bash لینوکس) اجرا
+              کنید:
+            </li>
+          </ol>
+
+          <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-900 p-3 text-slate-100">
+            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+              <span>دستور اجرا (Windows &amp; Linux)</span>
+              <button
+                type="button"
+                onClick={copyCommand}
+                className="rounded bg-slate-700 px-2 py-0.5 text-slate-100 hover:bg-slate-600"
+              >
+                کپی دستور
+              </button>
+            </div>
+            <pre dir="ltr" className="overflow-x-auto text-xs leading-relaxed text-emerald-300">
+              {runCmd}
+            </pre>
+          </div>
+
+          <div className="space-y-1.5 rounded-xl border border-indigo-200/80 bg-indigo-50/60 p-3 text-[11px] leading-6 text-indigo-950">
+            <div className="font-bold">نکات امنیتی آماده و ساده:</div>
+            <ul className="list-disc space-y-1 pr-4">
+              <li>
+                پورت <code dir="ltr">{port}</code> روی فایروال ویندوز/لینوکس سیستم مسکونی باید باز باشد.
+              </li>
+              <li>
+                برای امنیت بیشتر می‌توانید IP سرور پنل خودتان را هم اضافه کنید:{" "}
+                <code dir="ltr">--allow-ip=YOUR_VPS_IP</code>
+              </li>
+              <li>
+                رله فقط درخواست‌های <code dir="ltr">GET</code> به <code dir="ltr">api.torob.com</code> را قبول
+                می‌کند و بدون کلید یکسان حتی به اسکنرها پاسخ <code dir="ltr">404</code> می‌دهد.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={clearConfirmOpen}
+        title="حذف تنظیمات رله از دیتابیس"
+        description="آیا مطمئن هستید؟ پس از پاک‌کردن، استعلام ترب به حالت مستقیم (یا مقدار .env در صورت وجود) برمی‌گردد."
+        confirmLabel="پاک‌کردن"
+        tone="danger"
+        busy={pending}
+        onConfirm={() => act("clear")}
+        onCancel={() => setClearConfirmOpen(false)}
       />
     </div>
   );

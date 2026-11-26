@@ -2,9 +2,22 @@
 // torob-mcp (Node): stdio by default, Streamable HTTP + stateless JSON-RPC 2.0 with --http.
 import { createServer } from "node:http";
 import { MAX_BODY_BYTES, PORT } from "./config.js";
-import { resetBreakerForTests, setUpstreamBase, UpstreamError, UPSTREAM_BASE_ENV } from "./http.js";
+import {
+  getRelayRuntimeSummary,
+  resetBreakerForTests,
+  setEncryptedRelayTransport,
+  setRelayRuntimeConfig,
+  setUpstreamBase,
+  UpstreamError,
+  UPSTREAM_BASE_ENV,
+} from "./http.js";
 import { LANDING, MCP_PAGE } from "./landing.js";
 import { takePendingWrites } from "./project.js";
+import {
+  computeRelayConfigDigest,
+  createEncryptedRelayTransport,
+  timingSafeEqualSecret,
+} from "./relay-crypto.js";
 const VERSION = "0.5.9";
 const INSTRUCTIONS = "Torob price intelligence MCP server.";
 import { installFileStore } from "./store-node.js";
@@ -123,15 +136,95 @@ async function handleStatelessJsonRpc(parsed: any): Promise<{ status: number; bo
   return null;
 }
 
+function readInternalSyncSecret(): string {
+  return (
+    process.env.TOROB_MCP_SYNC_SECRET ||
+    process.env.AUTH_SECRET ||
+    process.env.SESSION_SECRET ||
+    process.env.CRON_SECRET ||
+    ""
+  ).trim();
+}
+
+function isAuthorizedSyncRequest(req: { headers: Record<string, string | string[] | undefined> }): boolean {
+  const expected = readInternalSyncSecret();
+  if (!expected) return true;
+  const raw = req.headers["x-internal-sync-secret"];
+  const candidate = Array.isArray(raw) ? raw[0] : (raw ?? "");
+  return timingSafeEqualSecret(String(candidate).trim(), expected);
+}
+
 async function main() {
   if (process.env.TOROB_MCP_STORE !== "off") installFileStore();
-  setUpstreamBase(process.env[UPSTREAM_BASE_ENV]);
+  setEncryptedRelayTransport(createEncryptedRelayTransport());
+
+  const initialBase = (process.env[UPSTREAM_BASE_ENV] ?? "").trim();
+  const initialKey = (process.env.TOROB_RELAY_KEY ?? "").trim();
+  if (initialBase && initialKey) {
+    const digest = computeRelayConfigDigest({
+      enabled: true,
+      mode: "encrypted_relay",
+      url: initialBase.replace(/\/+$/, ""),
+      key: initialKey,
+    });
+    setRelayRuntimeConfig({ enabled: true, url: initialBase, key: initialKey, digest });
+  } else {
+    setUpstreamBase(initialBase);
+  }
 
   if (process.argv.includes("--http")) {
+    const bindHost = (process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
     const http = createServer((req, res) => {
       const path = (req.url ?? "").split("?")[0];
       if (req.method === "OPTIONS" && (path === "/mcp" || path === "/reset")) {
         res.writeHead(204, { ...CORS_HEADERS, "access-control-max-age": "86400" }).end();
+        return;
+      }
+      if (req.method === "GET" && path === "/relay-status") {
+        if (!isAuthorizedSyncRequest(req)) {
+          res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ ok: false, error: "unauthorized" }));
+          return;
+        }
+        res
+          .writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
+          .end(JSON.stringify({ ok: true, ...getRelayRuntimeSummary() }));
+        return;
+      }
+      if (req.method === "POST" && path === "/relay-config") {
+        if (!isAuthorizedSyncRequest(req)) {
+          res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ ok: false, error: "unauthorized" }));
+          return;
+        }
+        let cfgBody = "";
+        let tooBig = false;
+        req.on("data", (c: Buffer | string) => {
+          if (tooBig) return;
+          cfgBody += c;
+          if (Buffer.byteLength(cfgBody, "utf8") > 32_768) {
+            tooBig = true;
+            if (!res.headersSent) res.writeHead(413).end("Body too large");
+            req.destroy();
+          }
+        });
+        req.on("end", () => {
+          if (tooBig || res.writableEnded) return;
+          try {
+            const parsed = cfgBody ? (JSON.parse(cfgBody) as Record<string, unknown>) : {};
+            setRelayRuntimeConfig({
+              enabled: Boolean(parsed.enabled),
+              url: typeof parsed.url === "string" ? parsed.url : "",
+              key: typeof parsed.key === "string" ? parsed.key : "",
+              digest: typeof parsed.digest === "string" ? parsed.digest : "",
+            });
+            res
+              .writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
+              .end(JSON.stringify({ ok: true, ...getRelayRuntimeSummary() }));
+          } catch (err) {
+            res
+              .writeHead(400, { "content-type": "application/json" })
+              .end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+          }
+        });
         return;
       }
       if (req.method === "POST" && path === "/reset") {
@@ -241,7 +334,7 @@ async function main() {
         res.writeHead(404).end("Not found. POST /mcp for MCP, POST /reset to clear breaker, GET /health for health.");
       }
     });
-    http.listen(PORT, () => console.error(`torob-mcp HTTP on :${PORT}/mcp`));
+    http.listen(PORT, bindHost, () => console.error(`torob-mcp HTTP on ${bindHost}:${PORT}/mcp`));
   } else {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
     const { buildServer } = await import("./server.js");

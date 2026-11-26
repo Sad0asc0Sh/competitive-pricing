@@ -67,6 +67,92 @@ export function setPaceForTests(ms: number | null): void {
 // blocked, no header or setting fixes them, and a relay on the address that is
 // already blocked buys nothing. Which is why the message above says so instead
 // of promising a configuration that works.
+export interface RelayTransportResponse {
+  status: number;
+  contentType: string;
+  body: string;
+}
+
+export type EncryptedRelayTransport = (opts: {
+  url: string;
+  key: string;
+  path: string;
+  headers: Record<string, string>;
+  timeoutMs: number;
+}) => Promise<RelayTransportResponse>;
+
+export interface RelayRuntimeConfig {
+  enabled: boolean;
+  mode: "direct" | "plain_https_base" | "encrypted_relay";
+  url: string;
+  key: string;
+  digest: string;
+}
+
+let encryptedRelayTransport: EncryptedRelayTransport | null = null;
+let relayConfig: RelayRuntimeConfig = {
+  enabled: false,
+  mode: "direct",
+  url: "",
+  key: "",
+  digest: "",
+};
+
+export function setEncryptedRelayTransport(fn: EncryptedRelayTransport | null): void {
+  encryptedRelayTransport = fn;
+}
+
+export function setRelayRuntimeConfig(next: Partial<RelayRuntimeConfig>): void {
+  const enabled = Boolean(next.enabled);
+  const rawUrl = (next.url ?? "").trim();
+  const key = (next.key ?? "").trim();
+  const mode: RelayRuntimeConfig["mode"] =
+    !enabled || !rawUrl
+      ? "direct"
+      : key
+        ? "encrypted_relay"
+        : "plain_https_base";
+
+  if (mode === "plain_https_base") {
+    setUpstreamBase(rawUrl);
+    relayConfig = { enabled: true, mode, url: upstreamBaseUrl(), key: "", digest: next.digest ?? "" };
+  } else if (mode === "encrypted_relay") {
+    const clean = rawUrl.replace(/\/+$/, "");
+    const check = new URL(clean);
+    if (check.protocol !== "http:" && check.protocol !== "https:") {
+      throw new Error(`Invalid relay protocol: ${check.protocol}`);
+    }
+    setUpstreamBase(null);
+    relayConfig = {
+      enabled: true,
+      mode,
+      url: `${check.origin}${check.pathname.replace(/\/+$/, "")}`,
+      key,
+      digest: next.digest ?? "",
+    };
+  } else {
+    setUpstreamBase(null);
+    relayConfig = { enabled: false, mode: "direct", url: "", key: "", digest: next.digest ?? "" };
+  }
+}
+
+export function getRelayRuntimeSummary() {
+  return {
+    enabled: relayConfig.enabled,
+    mode: relayConfig.mode,
+    url: relayConfig.url || upstreamBaseUrl(),
+    hasKey: Boolean(relayConfig.key),
+    digest: relayConfig.digest,
+    breakerRemainingMs: breakerRemainingMs(),
+  };
+}
+
+function relayPathForTorobApi(path: string): string | null {
+  if (!path.startsWith("http")) return path;
+  const match = path.match(/^https?:\/\/api\.torob\.com(\/.*)$/);
+  return match ? match[1] : null;
+}
+
 let upstreamBase: string | null = null;
 
 export const UPSTREAM_BASE_ENV = "TOROB_API_BASE";
@@ -174,9 +260,9 @@ const errText = (err: unknown): string =>
 // Torob identifies its JSON API by the content type it answers with. A 200 that
 // returns HTML is a challenge wearing a success code, so the body is checked,
 // not just the status.
-function looksLikeChallenge(res: Response, body: string): boolean {
-  if (res.status === 490) return true;
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
+function looksLikeChallenge(status: number, contentType: string, body: string): boolean {
+  if (status === 490) return true;
+  const ct = (contentType || "").toLowerCase();
   if (ct.includes("json")) return false;
   return /arcaptcha|ربات هستید|captcha/i.test(body.slice(0, 4000));
 }
@@ -349,40 +435,72 @@ export async function torobGet<T = unknown>(path: string, opts?: { retries?: num
       const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
       try {
         const startedAt = Date.now();
-        const res = await fetch(url, {
-          headers: {
-            "User-Agent": UA,
-            Accept: "application/json",
-            Referer: "https://torob.com/",
-            Origin: "https://torob.com",
-            source: SOURCE,
-          },
-          signal: controller.signal,
-        });
-        const body = await res.text();
+        const reqHeaders: Record<string, string> = {
+          "User-Agent": UA,
+          Accept: "application/json",
+          Referer: "https://torob.com/",
+          Origin: "https://torob.com",
+          source: SOURCE,
+        };
+        const relayApiPath =
+          relayConfig.enabled &&
+          relayConfig.mode === "encrypted_relay" &&
+          relayConfig.url &&
+          relayConfig.key &&
+          encryptedRelayTransport
+            ? relayPathForTorobApi(path)
+            : null;
+
+        let resStatus: number;
+        let resOk: boolean;
+        let resContentType: string;
+        let body: string;
+
+        if (relayApiPath && encryptedRelayTransport) {
+          const relayed = await encryptedRelayTransport({
+            url: relayConfig.url,
+            key: relayConfig.key,
+            path: relayApiPath,
+            headers: reqHeaders,
+            timeoutMs: FETCH_TIMEOUT_MS,
+          });
+          resStatus = relayed.status;
+          resOk = resStatus >= 200 && resStatus < 300;
+          resContentType = relayed.contentType;
+          body = relayed.body;
+        } else {
+          const res = await fetch(url, {
+            headers: reqHeaders,
+            signal: controller.signal,
+          });
+          resStatus = res.status;
+          resOk = res.ok;
+          resContentType = res.headers.get("content-type") || "";
+          body = await res.text();
+        }
 
         // A challenge is never retried: solving it is not this server's job and
         // hammering the endpoint while it is up is how a temporary block becomes
         // a permanent one. The first one also closes the gate, so the calls
         // behind it in a burst fail without spending an upstream request.
-        if (looksLikeChallenge(res, body)) {
+        if (looksLikeChallenge(resStatus, resContentType, body)) {
           await openWall();
-          throw new UpstreamError(CHALLENGED_MSG + demoNote(), "challenged", { status: res.status });
+          throw new UpstreamError(CHALLENGED_MSG + demoNote(), "challenged", { status: resStatus });
         }
 
         // An answer that is not a challenge is the edge letting us through, so
         // the gate opens again - but only for a call that started after it shut.
         await closeWallIfEarned(startedAt);
 
-        if (!res.ok) {
+        if (!resOk) {
           lastError = new UpstreamError(
-            `Torob answered HTTP ${res.status}. ${res.status === 404 ? "That product or category does not exist upstream." : "Retry shortly."}`,
+            `Torob answered HTTP ${resStatus}. ${resStatus === 404 ? "That product or category does not exist upstream." : "Retry shortly."}`,
             "http",
-            { status: res.status }
+            { status: resStatus }
           );
           // 4xx is the caller's fault, not a blip: 404 for a deleted product must
           // not be retried three times, and other 4xx are the same class.
-          if (res.status < 500 && res.status !== 429) {
+          if (resStatus < 500 && resStatus !== 429) {
             fatal = true;
             throw lastError;
           }
@@ -404,7 +522,7 @@ export async function torobGet<T = unknown>(path: string, opts?: { retries?: num
           throw new UpstreamError(
             "Torob returned a success status with a body that is not JSON. The API shape may have changed.",
             "http",
-            { status: res.status }
+            { status: resStatus }
           );
         }
       } finally {
@@ -412,6 +530,9 @@ export async function torobGet<T = unknown>(path: string, opts?: { retries?: num
       }
     } catch (err) {
       if (fatal) throw err;
+      if (err && typeof err === "object" && (err as { fatalRelayAuth?: boolean }).fatalRelayAuth) {
+        throw new UpstreamError(errText(err), "usage");
+      }
       if (err instanceof UpstreamError && (err.kind === "challenged" || err.kind === "usage")) throw err;
       lastError = err;
       if (attempt < retries) {

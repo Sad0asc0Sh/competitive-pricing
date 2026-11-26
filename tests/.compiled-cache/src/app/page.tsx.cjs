@@ -14,6 +14,7 @@ const format_1 = require("../lib/format");
 const bootstrap_1 = require("../lib/services/bootstrap");
 const config_1 = require("../lib/ai/config");
 const connectors_1 = require("../lib/store/connectors");
+const config_2 = require("../lib/torob-relay/config");
 const drizzle_orm_1 = require("drizzle-orm");
 const link_1 = __importDefault(require("next/link"));
 exports.dynamic = "force-dynamic";
@@ -38,7 +39,7 @@ async function DashboardPage() {
             .groupBy(schema_1.products.currentCampaign),
     ]);
     const nextRun = sch.map((s) => s.nextRunAt).filter(Boolean).sort((a, b) => a.getTime() - b.getTime())[0];
-    const aiStatus = await (0, config_1.getAIStatus)();
+    const [aiStatus, torobRelayStatus] = await Promise.all([(0, config_1.getAIStatus)(), (0, config_2.getTorobRelayStatus)()]);
     let storeStatus = null;
     try {
         storeStatus = await (0, connectors_1.getStoreStatus)();
@@ -77,7 +78,13 @@ async function DashboardPage() {
                                             ? "border-emerald-200 bg-emerald-50/70 text-emerald-800"
                                             : "border-slate-200 bg-white text-slate-600"}`, children: [(0, jsx_runtime_1.jsx)("span", { className: `h-2 w-2 rounded-full ${aiStatus.subq.configured ? "bg-emerald-500" : "bg-slate-400"}` }), (0, jsx_runtime_1.jsxs)("span", { children: ["\u0646\u0627\u0638\u0631 SubQ:", " ", aiStatus.subq.configured
                                                         ? `${aiStatus.subq.model} (${aiStatus.subq.source === "db" ? "پنل" : ".env"})`
-                                                        : "موتور آنی محلی"] })] }), (0, jsx_runtime_1.jsxs)(link_1.default, { href: "/settings", className: `inline-flex items-center gap-1.5 rounded-full border px-3 py-1 transition ${storeConnected
+                                                        : "موتور آنی محلی"] })] }), (0, jsx_runtime_1.jsxs)(link_1.default, { href: "/settings?tab=torob", className: `inline-flex items-center gap-1.5 rounded-full border px-3 py-1 transition ${torobRelayStatus.configured && torobRelayStatus.enabled
+                                            ? "border-emerald-200 bg-emerald-50/70 text-emerald-800"
+                                            : "border-slate-200 bg-white text-slate-600"}`, children: [(0, jsx_runtime_1.jsx)("span", { className: `h-2 w-2 rounded-full ${torobRelayStatus.configured && torobRelayStatus.enabled ? "bg-emerald-500" : "bg-slate-400"}` }), (0, jsx_runtime_1.jsxs)("span", { children: ["\u0631\u0644\u0647 \u062A\u0631\u0628:", " ", torobRelayStatus.configured && torobRelayStatus.enabled
+                                                        ? torobRelayStatus.mode === "encrypted_relay"
+                                                            ? "رمزنگاری‌شده (ایران)"
+                                                            : "رله HTTPS"
+                                                        : "اتصال مستقیم"] })] }), (0, jsx_runtime_1.jsxs)(link_1.default, { href: "/settings", className: `inline-flex items-center gap-1.5 rounded-full border px-3 py-1 transition ${storeConnected
                                             ? "border-emerald-200 bg-emerald-50/70 text-emerald-800"
                                             : "border-rose-200 bg-rose-50 text-rose-800"}`, children: [(0, jsx_runtime_1.jsx)("span", { className: `h-2 w-2 rounded-full ${storeConnected ? "bg-emerald-500" : "bg-rose-500"}` }), (0, jsx_runtime_1.jsxs)("span", { children: ["\u0641\u0631\u0648\u0634\u06AF\u0627\u0647:", " ", storeStatus?.activeType
                                                         ? `متصل (${storeStatus.activeType})`

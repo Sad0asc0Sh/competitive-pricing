@@ -3,6 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProfileEditor = ProfileEditor;
 exports.AISettingsPanel = AISettingsPanel;
+exports.TorobRelayPanel = TorobRelayPanel;
 exports.ScheduleEditor = ScheduleEditor;
 exports.ConnectorEditor = ConnectorEditor;
 const jsx_runtime_1 = require("react/jsx-runtime");
@@ -445,6 +446,115 @@ function AISettingsPanel({ initial }) {
                     else if (clearTarget === "subq")
                         call("subq", "clear", subq);
                 }, onCancel: () => setClearTarget(null) })] }));
+}
+/* ---------------- رله اتصال امن به ترب ---------------- */
+function extractPortFromUrl(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed)
+        return "43389";
+    try {
+        const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`;
+        const u = new URL(withScheme);
+        if (u.port)
+            return u.port;
+        return u.protocol === "https:" ? "443" : "43389";
+    }
+    catch {
+        return "43389";
+    }
+}
+function generateSimpleRelayKey() {
+    const bytes = new Uint8Array(18);
+    crypto.getRandomValues(bytes);
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    let out = "trb_";
+    for (const b of bytes)
+        out += alphabet[b % alphabet.length];
+    return out;
+}
+function TorobRelayPanel({ initial }) {
+    const router = (0, navigation_1.useRouter)();
+    const toast = (0, ui_1.useToast)();
+    const [pending, start] = (0, react_1.useTransition)();
+    const [status, setStatus] = (0, react_1.useState)(initial);
+    const [enabled, setEnabled] = (0, react_1.useState)(initial.enabled);
+    const [url, setUrl] = (0, react_1.useState)(initial.url || "2.180.37.182:43389");
+    const [relayKey, setRelayKey] = (0, react_1.useState)("");
+    const [showKey, setShowKey] = (0, react_1.useState)(false);
+    const [clearConfirmOpen, setClearConfirmOpen] = (0, react_1.useState)(false);
+    const [msg, setMsg] = (0, react_1.useState)(null);
+    const port = extractPortFromUrl(url);
+    const displayKey = relayKey.trim() || "YOUR_RELAY_KEY";
+    const runCmd = `node torob-relay.mjs --port=${port} --key="${displayKey}"`;
+    const act = (action) => start(async () => {
+        setMsg(null);
+        const payload = action === "reset_breaker"
+            ? { action }
+            : action === "clear"
+                ? { action }
+                : { action, enabled, url, relayKey: relayKey || undefined };
+        const res = await fetch("/api/torob-relay", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = (await res.json().catch(() => null));
+        if (!res.ok) {
+            const text = data?.error ?? "خطا در ارتباط با سرور";
+            setMsg({ ok: false, text });
+            toast.error(text);
+            return;
+        }
+        if (data?.status) {
+            setStatus(data.status);
+            setEnabled(data.status.enabled);
+            if (action === "clear")
+                setUrl("2.180.37.182:43389");
+            else if (data.status.url)
+                setUrl(data.status.url);
+        }
+        if (action === "test" || action === "reset_breaker") {
+            const ok = Boolean(data?.ok);
+            const text = data?.message ?? "—";
+            setMsg({ ok, text });
+            if (ok)
+                toast.success(text);
+            else
+                toast.error(text);
+        }
+        else if (action === "clear") {
+            const text = "تنظیمات رله پاک شد و اتصال به حالت پیش‌فرض برگشت.";
+            setMsg({ ok: true, text });
+            toast.info(text);
+            setRelayKey("");
+            setClearConfirmOpen(false);
+        }
+        else {
+            const syncNote = data?.mcpSynced ? " و به torob-mcp اعمال شد" : "";
+            const text = `تنظیمات رله ذخیره شد${syncNote}.`;
+            setMsg({ ok: true, text });
+            toast.success(text);
+            setRelayKey("");
+        }
+        router.refresh();
+    });
+    const copyCommand = async () => {
+        try {
+            await navigator.clipboard.writeText(runCmd);
+            toast.success("دستور اجرا کپی شد");
+        }
+        catch {
+            toast.error("کپی خودکار پشتیبانی نشد — دستور را دستی کپی کنید");
+        }
+    };
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-4", children: [msg && ((0, jsx_runtime_1.jsxs)("div", { className: `rounded-xl border px-3.5 py-2.5 text-xs font-medium ${msg.ok ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-rose-300 bg-rose-50 text-rose-800"}`, children: [msg.ok ? "✅ " : "❌ ", msg.text] })), (0, jsx_runtime_1.jsxs)("div", { className: "grid gap-4 lg:grid-cols-2", children: [(0, jsx_runtime_1.jsxs)("div", { className: `card space-y-3.5 ${status.configured && status.enabled ? "border-emerald-300" : "border-amber-300"}`, children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-center justify-between gap-2", children: [(0, jsx_runtime_1.jsx)("h3", { className: "font-bold text-slate-900", children: "\u0627\u062A\u0635\u0627\u0644 \u0628\u0647 \u0633\u0631\u0648\u0631 \u0631\u0644\u0647 \u0627\u06CC\u0631\u0627\u0646 (\u0628\u0627 \u06CC\u06A9 \u06A9\u0644\u06CC\u062F)" }), status.configured && status.enabled ? ((0, jsx_runtime_1.jsx)("span", { className: "badge bg-emerald-100 text-emerald-700", children: status.mode === "encrypted_relay" ? "رله رمزنگاری‌شده فعال" : "رله HTTPS فعال" })) : ((0, jsx_runtime_1.jsx)("span", { className: "badge bg-amber-100 text-amber-700", children: "\u0627\u062A\u0635\u0627\u0644 \u0645\u0633\u062A\u0642\u06CC\u0645 \u0633\u0631\u0648\u0631" }))] }), (0, jsx_runtime_1.jsxs)("p", { className: "text-xs leading-6 text-slate-500", children: ["\u0622\u062F\u0631\u0633 \u0633\u0631\u0648\u0631 \u0645\u0633\u06A9\u0648\u0646\u06CC (\u0645\u062B\u0644 ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "2.180.37.182:43389" }), ") \u0648 \u06CC\u06A9 \u06A9\u0644\u06CC\u062F \u0633\u0627\u062F\u0647 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F. \u062A\u0645\u0627\u0645 \u062F\u0631\u062E\u0648\u0627\u0633\u062A\u200C\u0647\u0627 \u0648 \u067E\u0627\u0633\u062E\u200C\u0647\u0627 \u0628\u0627 ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "AES-256-GCM" }), " \u0631\u0645\u0632\u0646\u06AF\u0627\u0631\u06CC \u0645\u06CC\u200C\u0634\u0648\u0646\u062F \u0648 \u0646\u06CC\u0627\u0632\u06CC \u0628\u0647 \u06AF\u0648\u0627\u0647\u06CC SSL \u06CC\u0627 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u067E\u06CC\u0686\u06CC\u062F\u0647 \u0646\u06CC\u0633\u062A."] }), (0, jsx_runtime_1.jsxs)("div", { className: "space-y-1.5 rounded-xl bg-slate-50 p-3 text-xs text-slate-600", children: [(0, jsx_runtime_1.jsxs)("div", { children: ["\u0645\u0646\u0628\u0639 \u0641\u0639\u0644\u06CC:", " ", (0, jsx_runtime_1.jsx)("b", { children: status.source === "db"
+                                                    ? "پنل (دیتابیس)"
+                                                    : status.source === "env"
+                                                        ? "فایل .env"
+                                                        : "تنظیم‌نشده (مستقیم)" }), status.keyHint && ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [" ", "\u00B7 \u06A9\u0644\u06CC\u062F \u0641\u0639\u0644\u06CC: ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: status.keyHint })] }))] }), (0, jsx_runtime_1.jsxs)("div", { className: "break-all", children: ["\u0622\u062F\u0631\u0633 \u0645\u0624\u062B\u0631: ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: status.url || "https://api.torob.com (مستقیم)" })] })] }), (0, jsx_runtime_1.jsx)("div", { className: "rounded-xl border border-slate-200/80 bg-white p-2.5", children: (0, jsx_runtime_1.jsx)(ui_1.Switch, { checked: enabled, onChange: setEnabled, label: enabled ? "ارسال درخواست‌های ترب از طریق رله فعال است" : "رله خاموش است (اتصال مستقیم)" }) }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u0622\u062F\u0631\u0633 \u0648 \u067E\u0648\u0631\u062A \u0633\u0631\u0648\u0631 \u0627\u06CC\u0631\u0627\u0646" }), (0, jsx_runtime_1.jsx)("input", { className: "input text-xs", dir: "ltr", placeholder: "2.180.37.182:43389", value: url, onChange: (e) => setUrl(e.target.value) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex items-center justify-between gap-2", children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: "\u06A9\u0644\u06CC\u062F \u0631\u0644\u0647 (\u062D\u062F\u0627\u0642\u0644 \u06F6 \u06A9\u0627\u0631\u0627\u06A9\u062A\u0631 \u2014 \u062E\u0627\u0644\u06CC \u0628\u06AF\u0630\u0627\u0631\u06CC\u062F \u062A\u0627 \u062A\u063A\u06CC\u06CC\u0631 \u0646\u06A9\u0646\u062F)" }), (0, jsx_runtime_1.jsx)("button", { type: "button", className: "text-[11px] font-semibold text-indigo-600 hover:text-indigo-800", onClick: () => {
+                                                    setRelayKey(generateSimpleRelayKey());
+                                                    setShowKey(true);
+                                                }, children: "\uD83C\uDFB2 \u0633\u0627\u062E\u062A \u06A9\u0644\u06CC\u062F \u062A\u0635\u0627\u062F\u0641\u06CC" })] }), (0, jsx_runtime_1.jsxs)("div", { className: "relative", children: [(0, jsx_runtime_1.jsx)("input", { className: "input pl-11 text-xs", dir: "ltr", type: showKey ? "text" : "password", autoComplete: "off", placeholder: status.keyHint || "مثلاً MyTorobKey2026", value: relayKey, onChange: (e) => setRelayKey(e.target.value) }), (0, jsx_runtime_1.jsx)("button", { type: "button", onClick: () => setShowKey((s) => !s), "aria-label": showKey ? "مخفی کردن کلید" : "نمایش کلید", className: "absolute top-1/2 left-2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700", children: showKey ? (0, jsx_runtime_1.jsx)(icons_1.IconEyeOff, { className: "h-4 w-4" }) : (0, jsx_runtime_1.jsx)(icons_1.IconEye, { className: "h-4 w-4" }) })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap gap-2 pt-1", children: [(0, jsx_runtime_1.jsxs)("button", { type: "button", className: "btn-primary flex-1 sm:flex-initial", disabled: pending, onClick: () => act("save"), children: [pending && (0, jsx_runtime_1.jsx)(icons_1.IconSpinner, { className: "h-4 w-4" }), (0, jsx_runtime_1.jsx)("span", { children: "\uD83D\uDCBE \u0630\u062E\u06CC\u0631\u0647 \u0648 \u0627\u0639\u0645\u0627\u0644 \u0641\u0648\u0631\u06CC" })] }), (0, jsx_runtime_1.jsx)("button", { type: "button", className: "btn-secondary flex-1 sm:flex-initial", disabled: pending, onClick: () => act("test"), children: "\uD83D\uDD0C \u062A\u0633\u062A \u0627\u062A\u0635\u0627\u0644 \u0632\u0646\u062F\u0647 \u0628\u0647 \u062A\u0631\u0628" }), (0, jsx_runtime_1.jsx)("button", { type: "button", className: "btn-secondary flex-1 sm:flex-initial", disabled: pending, onClick: () => act("reset_breaker"), children: "\uD83D\uDD13 \u0631\u06CC\u0633\u062A \u0642\u0641\u0644 \u06F4\u06F9\u06F0" }), (0, jsx_runtime_1.jsx)("button", { type: "button", className: "btn-danger w-full sm:w-auto", disabled: pending || status.source !== "db", onClick: () => setClearConfirmOpen(true), children: "\u067E\u0627\u06A9\u200C\u06A9\u0631\u062F\u0646 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A" })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "card space-y-3.5 bg-slate-50/70", children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-center justify-between gap-2", children: [(0, jsx_runtime_1.jsx)("h3", { className: "font-bold text-slate-900", children: "\u26A1 \u0631\u0627\u0647\u200C\u0627\u0646\u062F\u0627\u0632\u06CC \u06F1 \u062F\u0642\u06CC\u0642\u0647\u200C\u0627\u06CC \u0631\u0648\u06CC \u0648\u06CC\u0646\u062F\u0648\u0632 \u06CC\u0627 \u0644\u06CC\u0646\u0648\u06A9\u0633" }), (0, jsx_runtime_1.jsx)("a", { href: "/api/torob-relay/script", download: "torob-relay.mjs", className: "btn-secondary btn-sm", children: "\u2B07\uFE0F \u062F\u0627\u0646\u0644\u0648\u062F \u0641\u0627\u06CC\u0644 torob-relay.mjs" })] }), (0, jsx_runtime_1.jsxs)("ol", { className: "list-decimal space-y-2 pr-4 text-xs leading-6 text-slate-700", children: [(0, jsx_runtime_1.jsxs)("li", { children: ["\u0641\u0627\u06CC\u0644 ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "torob-relay.mjs" }), " \u0631\u0627 \u0628\u0627 \u062F\u06A9\u0645\u0647 \u0628\u0627\u0644\u0627 \u062F\u0627\u0646\u0644\u0648\u062F \u06A9\u0646\u06CC\u062F (\u0628\u062F\u0648\u0646 \u0646\u06CC\u0627\u0632 \u0628\u0647", " ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "npm install" }), " \u2014 \u0641\u0642\u0637 Node.js 18+ \u0644\u0627\u0632\u0645 \u0627\u0633\u062A)."] }), (0, jsx_runtime_1.jsx)("li", { children: "\u0631\u0648\u06CC \u0633\u0631\u0648\u0631 \u0645\u0633\u06A9\u0648\u0646\u06CC \u0627\u06CC\u0631\u0627\u0646\u060C \u0647\u0645\u0627\u0646 \u0641\u0627\u06CC\u0644 \u0631\u0627 \u0628\u0627 \u062F\u0633\u062A\u0648\u0631 \u0632\u06CC\u0631 \u062F\u0631 \u062A\u0631\u0645\u06CC\u0646\u0627\u0644 (PowerShell \u0648\u06CC\u0646\u062F\u0648\u0632 \u06CC\u0627 Bash \u0644\u06CC\u0646\u0648\u06A9\u0633) \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F:" })] }), (0, jsx_runtime_1.jsxs)("div", { className: "space-y-2 rounded-xl border border-slate-200 bg-slate-900 p-3 text-slate-100", children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex items-center justify-between gap-2 text-[11px] text-slate-400", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u062F\u0633\u062A\u0648\u0631 \u0627\u062C\u0631\u0627 (Windows & Linux)" }), (0, jsx_runtime_1.jsx)("button", { type: "button", onClick: copyCommand, className: "rounded bg-slate-700 px-2 py-0.5 text-slate-100 hover:bg-slate-600", children: "\u06A9\u067E\u06CC \u062F\u0633\u062A\u0648\u0631" })] }), (0, jsx_runtime_1.jsx)("pre", { dir: "ltr", className: "overflow-x-auto text-xs leading-relaxed text-emerald-300", children: runCmd })] }), (0, jsx_runtime_1.jsxs)("div", { className: "space-y-1.5 rounded-xl border border-indigo-200/80 bg-indigo-50/60 p-3 text-[11px] leading-6 text-indigo-950", children: [(0, jsx_runtime_1.jsx)("div", { className: "font-bold", children: "\u0646\u06A9\u0627\u062A \u0627\u0645\u0646\u06CC\u062A\u06CC \u0622\u0645\u0627\u062F\u0647 \u0648 \u0633\u0627\u062F\u0647:" }), (0, jsx_runtime_1.jsxs)("ul", { className: "list-disc space-y-1 pr-4", children: [(0, jsx_runtime_1.jsxs)("li", { children: ["\u067E\u0648\u0631\u062A ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: port }), " \u0631\u0648\u06CC \u0641\u0627\u06CC\u0631\u0648\u0627\u0644 \u0648\u06CC\u0646\u062F\u0648\u0632/\u0644\u06CC\u0646\u0648\u06A9\u0633 \u0633\u06CC\u0633\u062A\u0645 \u0645\u0633\u06A9\u0648\u0646\u06CC \u0628\u0627\u06CC\u062F \u0628\u0627\u0632 \u0628\u0627\u0634\u062F."] }), (0, jsx_runtime_1.jsxs)("li", { children: ["\u0628\u0631\u0627\u06CC \u0627\u0645\u0646\u06CC\u062A \u0628\u06CC\u0634\u062A\u0631 \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u06CC\u062F IP \u0633\u0631\u0648\u0631 \u067E\u0646\u0644 \u062E\u0648\u062F\u062A\u0627\u0646 \u0631\u0627 \u0647\u0645 \u0627\u0636\u0627\u0641\u0647 \u06A9\u0646\u06CC\u062F:", " ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "--allow-ip=YOUR_VPS_IP" })] }), (0, jsx_runtime_1.jsxs)("li", { children: ["\u0631\u0644\u0647 \u0641\u0642\u0637 \u062F\u0631\u062E\u0648\u0627\u0633\u062A\u200C\u0647\u0627\u06CC ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "GET" }), " \u0628\u0647 ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "api.torob.com" }), " \u0631\u0627 \u0642\u0628\u0648\u0644 \u0645\u06CC\u200C\u06A9\u0646\u062F \u0648 \u0628\u062F\u0648\u0646 \u06A9\u0644\u06CC\u062F \u06CC\u06A9\u0633\u0627\u0646 \u062D\u062A\u06CC \u0628\u0647 \u0627\u0633\u06A9\u0646\u0631\u0647\u0627 \u067E\u0627\u0633\u062E ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "404" }), " \u0645\u06CC\u200C\u062F\u0647\u062F."] })] })] })] })] }), (0, jsx_runtime_1.jsx)(ui_1.ConfirmDialog, { open: clearConfirmOpen, title: "\u062D\u0630\u0641 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0631\u0644\u0647 \u0627\u0632 \u062F\u06CC\u062A\u0627\u0628\u06CC\u0633", description: "\u0622\u06CC\u0627 \u0645\u0637\u0645\u0626\u0646 \u0647\u0633\u062A\u06CC\u062F\u061F \u067E\u0633 \u0627\u0632 \u067E\u0627\u06A9\u200C\u06A9\u0631\u062F\u0646\u060C \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062A\u0631\u0628 \u0628\u0647 \u062D\u0627\u0644\u062A \u0645\u0633\u062A\u0642\u06CC\u0645 (\u06CC\u0627 \u0645\u0642\u062F\u0627\u0631 .env \u062F\u0631 \u0635\u0648\u0631\u062A \u0648\u062C\u0648\u062F) \u0628\u0631\u0645\u06CC\u200C\u06AF\u0631\u062F\u062F.", confirmLabel: "\u067E\u0627\u06A9\u200C\u06A9\u0631\u062F\u0646", tone: "danger", busy: pending, onConfirm: () => act("clear"), onCancel: () => setClearConfirmOpen(false) })] }));
 }
 /* ---------------- زمان‌بندی ---------------- */
 function ScheduleEditor({ items }) {

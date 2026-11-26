@@ -3,6 +3,8 @@ import { parsePersianRelativeDate } from "@/lib/pricing/filters";
 import { selectBestTorobSearchMatch } from "@/lib/pricing/matcher";
 import { parsePriceToToman } from "@/lib/pricing/sourcing";
 import type { MarketPriceTrend, RawOffer, SourceResult } from "@/lib/pricing/types";
+import { getTorobRelayConfig, syncTorobRelayToMcp } from "@/lib/torob-relay/config";
+import { fetchViaEncryptedRelay } from "@/lib/torob-relay/crypto";
 import { browserHeaders, fetchWithRetry, politeDelay } from "./humanize";
 import { analyzeMcpPriceHistory, fetchViaTorobMcpServer } from "./torob-mcp-client";
 import type { PriceSourceAdapter, SourceProduct } from "./types";
@@ -11,6 +13,53 @@ const DEFAULT_TOROB_API_BASE = "https://api.torob.com";
 
 export function getTorobApiBase(): string {
   return (process.env.TOROB_API_BASE || DEFAULT_TOROB_API_BASE).replace(/\/+$/, "");
+}
+
+interface TorobTransportResponse {
+  ok: boolean;
+  status: number;
+  contentType: string;
+  bodyText: string;
+}
+
+async function torobTransportGet(
+  target: "api" | "site",
+  path: string,
+  headers: Record<string, string>,
+  opts: { retries?: number; timeoutMs?: number } = {},
+): Promise<TorobTransportResponse> {
+  const relay = await getTorobRelayConfig();
+  if (relay.enabled && relay.configured && relay.mode === "encrypted_relay") {
+    const relayed = await fetchViaEncryptedRelay({
+      relayUrl: relay.url,
+      relayKey: relay.relayKey,
+      target,
+      path,
+      headers,
+      timeoutMs: opts.timeoutMs ?? 12_000,
+    });
+    const status = relayed.status ?? 502;
+    return {
+      ok: relayed.ok && status >= 200 && status < 300,
+      status,
+      contentType: relayed.contentType ?? "",
+      bodyText: relayed.body ?? "",
+    };
+  }
+
+  const base =
+    target === "site"
+      ? "https://torob.com"
+      : relay.enabled && relay.configured && relay.mode === "plain_https_base"
+        ? relay.url
+        : getTorobApiBase();
+  const res = await fetchWithRetry(`${base}${path}`, { headers }, opts);
+  return {
+    ok: res.ok,
+    status: res.status,
+    contentType: res.headers.get("content-type") ?? "",
+    bodyText: await res.text(),
+  };
 }
 
 /** استخراج prk از URL ترب: https://torob.com/p/<prk>/<slug>/ */
@@ -192,7 +241,6 @@ export async function searchTorobProductV4(
   if (!cleanQuery) return null;
 
   try {
-    const apiBase = getTorobApiBase();
     await politeDelay("api.torob.com", 150, 400);
     const params = new URLSearchParams({
       q: cleanQuery,
@@ -200,16 +248,16 @@ export async function searchTorobProductV4(
       size: "24",
       source: "next_desktop",
     });
-    const res = await fetchWithRetry(`${apiBase}/v4/base-product/search/?${params.toString()}`, {
-      headers: browserHeaders("https://torob.com/"),
-    });
-    const bodyText = await res.text();
-    const ct = res.headers.get("content-type") ?? "";
-    if (looksLikeTorobChallenge(res.status, ct, bodyText)) {
+    const res = await torobTransportGet(
+      "api",
+      `/v4/base-product/search/?${params.toString()}`,
+      browserHeaders("https://torob.com/"),
+    );
+    if (looksLikeTorobChallenge(res.status, res.contentType, res.bodyText)) {
       return { prk: null, detailsUrl: null, title: null, challenged: true };
     }
     if (!res.ok) return null;
-    const raw = JSON.parse(bodyText) as { results?: AnyRec[] };
+    const raw = JSON.parse(res.bodyText) as { results?: AnyRec[] };
     const rows = Array.isArray(raw.results) ? raw.results : [];
     if (!rows.length) return null;
 
@@ -283,14 +331,14 @@ export async function searchTorobProductV4(
 
 export async function fetchTorobPriceTrendV4(prk: string): Promise<MarketPriceTrend | null> {
   try {
-    const apiBase = getTorobApiBase();
-    const res = await fetchWithRetry(
-      `${apiBase}/v4/base-product/price-chart/?prk=${encodeURIComponent(prk)}`,
-      { headers: browserHeaders(`https://torob.com/p/${prk}/`) },
+    const res = await torobTransportGet(
+      "api",
+      `/v4/base-product/price-chart/?prk=${encodeURIComponent(prk)}`,
+      browserHeaders(`https://torob.com/p/${prk}/`),
       { retries: 0, timeoutMs: 4000 },
     );
     if (!res.ok) return null;
-    const raw = (await res.json()) as {
+    const raw = JSON.parse(res.bodyText) as {
       labels?: unknown[];
       dataSets?: { label?: string; entries?: { i?: number; val?: number }[] }[];
     };
@@ -348,6 +396,7 @@ export const torobAdapter: PriceSourceAdapter = {
     // --- لایه ۰: اتصال به سرور Torob MCP در صورت تنظیم متغیر محیطی TOROB_MCP_URL
     const mcpUrl = process.env.TOROB_MCP_URL?.trim();
     if (mcpUrl) {
+      await syncTorobRelayToMcp().catch(() => undefined);
       const mcpResult = await fetchViaTorobMcpServer({
         mcpUrl,
         prk,
@@ -416,20 +465,19 @@ export const torobAdapter: PriceSourceAdapter = {
     }
 
     const pageUrl = product.torobUrl ?? `https://torob.com/p/${prk}/`;
-    const apiBase = getTorobApiBase();
+    const apiPath = (() => {
+      if (detailsUrl && detailsUrl.startsWith("http")) {
+        const m = detailsUrl.match(/^https?:\/\/api\.torob\.com(\/.*)$/);
+        if (m) return m[1];
+      }
+      return `/v4/base-product/details/?prk=${encodeURIComponent(prk)}&source=next_desktop`;
+    })();
 
     try {
       await politeDelay("api.torob.com", 150, 400);
-      const targetApiUrl =
-        detailsUrl && detailsUrl.startsWith("http")
-          ? detailsUrl.replace(/^https?:\/\/api\.torob\.com/, apiBase)
-          : `${apiBase}/v4/base-product/details/?prk=${encodeURIComponent(prk)}&source=next_desktop`;
+      const res = await torobTransportGet("api", apiPath, browserHeaders(pageUrl));
 
-      const res = await fetchWithRetry(targetApiUrl, { headers: browserHeaders(pageUrl) });
-      const bodyText = await res.text();
-      const ct = res.headers.get("content-type") ?? "";
-
-      if (looksLikeTorobChallenge(res.status, ct, bodyText)) {
+      if (looksLikeTorobChallenge(res.status, res.contentType, res.bodyText)) {
         return {
           source: "torob",
           prk,
@@ -438,13 +486,13 @@ export const torobAdapter: PriceSourceAdapter = {
           fetchedAt,
           ok: false,
           error:
-            "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای رفع آن از پروکسی/Relay ایرانی (TOROB_API_BASE) استفاده کنید.",
+            "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای رفع آن رله ایران را در تنظیمات پنل پیکربندی کنید.",
           meta: { challenged: true },
         };
       }
 
       if (res.ok) {
-        const json = JSON.parse(bodyText) as AnyRec;
+        const json = JSON.parse(res.bodyText) as AnyRec;
         const parsed = parseTorobJson(json, fetchedAt);
         if (parsed.offers.length) {
           const priceTrend = await fetchTorobPriceTrendV4(prk);
@@ -452,7 +500,7 @@ export const torobAdapter: PriceSourceAdapter = {
             source: "torob",
             productTitle: parsed.title ?? undefined,
             prk: parsed.prk ?? prk,
-            detailsUrl: targetApiUrl,
+            detailsUrl: detailsUrl ?? `https://api.torob.com${apiPath}`,
             offers: parsed.offers,
             totalSellerCount: parsed.total,
             inPersonSellerCount: parsed.inPersonCount,
@@ -471,19 +519,19 @@ export const torobAdapter: PriceSourceAdapter = {
     let html = "";
     try {
       await politeDelay("torob.com", 150, 400);
-      const res = await fetchWithRetry(
-        pageUrl,
+      const sitePath = `/p/${encodeURIComponent(prk)}/`;
+      const res = await torobTransportGet(
+        "site",
+        sitePath,
         {
-          headers: {
-            ...browserHeaders(),
-            Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-          },
+          ...browserHeaders(),
+          Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
         },
         { retries: 0, timeoutMs: 5000 },
       );
-      html = await res.text();
+      html = res.bodyText;
       const nd = extractNextData(html);
       const details = nd ? findDetailsInNextData(nd) : null;
       if (details) {

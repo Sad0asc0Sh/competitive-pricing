@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { getAIStatus } from "@/lib/ai/config";
 import { getStoreStatus } from "@/lib/store/connectors";
+import { getTorobRelayConfig, syncTorobRelayToMcp } from "@/lib/torob-relay/config";
 import { sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,10 @@ export async function GET() {
   }
 
   const torobMcpUrl = (process.env.TOROB_MCP_URL ?? "").trim();
+  const relayCfg = await getTorobRelayConfig().catch(() => null);
+  if (relayCfg && torobMcpUrl) {
+    await syncTorobRelayToMcp(relayCfg).catch(() => undefined);
+  }
   const torob = torobMcpUrl ? await checkUrl(torobMcpUrl, 4000) : { reachable: false as const };
   const storeBase = store?.baseUrl || (process.env.SGEOOOLE_API_URL ?? "");
   const storeCheck = storeBase ? await checkUrl(`${storeBase.replace(/\/$/, "")}/api/products/pricing-sync`, 4000) : null;
@@ -59,6 +64,8 @@ export async function GET() {
     torob: {
       configured: Boolean(torobMcpUrl),
       reachable: torobMcpUrl ? torob.reachable : null,
+      relayConfigured: Boolean(relayCfg?.configured && relayCfg?.enabled),
+      relayMode: relayCfg?.mode ?? "direct",
     },
     ai: {
       enabled: ai.ai.enabled,

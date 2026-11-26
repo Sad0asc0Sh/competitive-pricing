@@ -13,100 +13,117 @@
 // long idle. A 490 is therefore the answer, not a blip - it is never retried,
 // and the gate below stops the calls behind it from spending a request to
 // rediscover it.
-
-import {
-CHALLENGED_MSG,
-DEMO_NOTE,
-FETCH_TIMEOUT_MS,
-MAX_RETRIES,
-MIN_GAP_MS,
-RETRY_DELAY_MS,
-SOURCE,
-TOROB_API,
-UA } from
-"./config.js";
+import { CHALLENGED_MSG, DEMO_NOTE, FETCH_TIMEOUT_MS, MAX_RETRIES, MIN_GAP_MS, RETRY_DELAY_MS, SOURCE, TOROB_API, UA, } from "./config.js";
 import { storeGet, storeSet } from "./store.js";
-
 // Tests stub fetch with fake challenge pages; waiting 2s x N retries per test
 // would make the suite crawl. Tests set this to a few ms.
 let testRetryDelay = null;
 export function setRetryDelayForTests(ms) {
-  testRetryDelay = ms;
+    testRetryDelay = ms;
 }
-const retryDelay = (attempt) =>
-testRetryDelay ?? RETRY_DELAY_MS * (attempt + 1);
-
+const retryDelay = (attempt) => testRetryDelay ?? RETRY_DELAY_MS * (attempt + 1);
 // Tests also shrink the pacing gap.
 let testGapMs = null;
 export function setPaceForTests(ms) {
-  testGapMs = ms;
+    testGapMs = ms;
 }
-
-// Where upstream calls go. The default is Torob's own API; an operator can point
-// a deployment at a relay of their own with TOROB_API_BASE.
-//
-// The reason this exists, measured 2026-10-09: Torob's edge scores a client by
-// *where it comes from*, not by what it sends. From an ordinary connection, five
-// request shapes - the headers this server ships, a full Chrome header set, the
-// site's own page cookies and no cookies at all - all answered JSON, and twelve
-// searches 1.5s apart were all answered too. From Cloudflare's network the same
-// calls were challenged after three: a scratch Worker running `wrangler dev
-// --remote` got HTTP 490 with a 274KB arCAPTCHA page on its third search of the
-// minute, while the identical next call from the machine beside it returned
-// 49KB of JSON. A Worker subrequest also carries Cloudflare's own `Cf-Worker`
-// header, which names the worker and cannot be removed (a header of the same
-// name set in the fetch options arrives unchanged, beside it). Nothing here can
-// hide that, so the honest escape hatch is a relay on a connection that is not
-// scored as a bot: point this variable at it and every upstream call - and the
-// `details_url` handed to callers - goes there instead.
-//
-// Worth saying plainly, measured 2026-10-12: this lever changes which address
-// Torob sees, and that is all. From a Hetzner datacenter address one request
-// came back 200 with 70KB of results and the next one 40 seconds later came
-// back 490 - still 490 after five idle minutes. Some addresses are simply
-// blocked, no header or setting fixes them, and a relay on the address that is
-// already blocked buys nothing. Which is why the message above says so instead
-// of promising a configuration that works.
+let encryptedRelayTransport = null;
+let relayConfig = {
+    enabled: false,
+    mode: "direct",
+    url: "",
+    key: "",
+    digest: "",
+};
+export function setEncryptedRelayTransport(fn) {
+    encryptedRelayTransport = fn;
+}
+export function setRelayRuntimeConfig(next) {
+    const enabled = Boolean(next.enabled);
+    const rawUrl = (next.url ?? "").trim();
+    const key = (next.key ?? "").trim();
+    const mode = !enabled || !rawUrl
+        ? "direct"
+        : key
+            ? "encrypted_relay"
+            : "plain_https_base";
+    if (mode === "plain_https_base") {
+        setUpstreamBase(rawUrl);
+        relayConfig = { enabled: true, mode, url: upstreamBaseUrl(), key: "", digest: next.digest ?? "" };
+    }
+    else if (mode === "encrypted_relay") {
+        const clean = rawUrl.replace(/\/+$/, "");
+        const check = new URL(clean);
+        if (check.protocol !== "http:" && check.protocol !== "https:") {
+            throw new Error(`Invalid relay protocol: ${check.protocol}`);
+        }
+        setUpstreamBase(null);
+        relayConfig = {
+            enabled: true,
+            mode,
+            url: `${check.origin}${check.pathname.replace(/\/+$/, "")}`,
+            key,
+            digest: next.digest ?? "",
+        };
+    }
+    else {
+        setUpstreamBase(null);
+        relayConfig = { enabled: false, mode: "direct", url: "", key: "", digest: next.digest ?? "" };
+    }
+}
+export function getRelayRuntimeSummary() {
+    return {
+        enabled: relayConfig.enabled,
+        mode: relayConfig.mode,
+        url: relayConfig.url || upstreamBaseUrl(),
+        hasKey: Boolean(relayConfig.key),
+        digest: relayConfig.digest,
+        breakerRemainingMs: breakerRemainingMs(),
+    };
+}
+function relayPathForTorobApi(path) {
+    if (!path.startsWith("http"))
+        return path;
+    const match = path.match(/^https?:\/\/api\.torob\.com(\/.*)$/);
+    return match ? match[1] : null;
+}
 let upstreamBase = null;
-
 export const UPSTREAM_BASE_ENV = "TOROB_API_BASE";
-
 /** Returns the message when `value` is not usable, null when it is. */
 function upstreamBaseProblem(value) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    return `${UPSTREAM_BASE_ENV} must be an absolute URL, got '${value}'.`;
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    return `${UPSTREAM_BASE_ENV} must use https: a plain-http relay would put every search, price and product id on the wire in the clear.`;
-  }
-  return null;
+    let url;
+    try {
+        url = new URL(value);
+    }
+    catch {
+        return `${UPSTREAM_BASE_ENV} must be an absolute URL, got '${value}'.`;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+        return `${UPSTREAM_BASE_ENV} must use https: a plain-http relay would put every search, price and product id on the wire in the clear.`;
+    }
+    return null;
 }
-
 /**
  * Point upstream calls at `value`, or back at Torob's own API with null/empty.
  * Throws on a value that cannot be used, so a misconfigured deployment fails at
  * the first request with the reason instead of quietly calling Torob anyway.
  */
 export function setUpstreamBase(value) {
-  const raw = (value ?? "").trim();
-  if (!raw) {
-    upstreamBase = null;
-    return;
-  }
-  const problem = upstreamBaseProblem(raw);
-  if (problem) throw new Error(problem);
-  const url = new URL(raw);
-  upstreamBase = `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+    const raw = (value ?? "").trim();
+    if (!raw) {
+        upstreamBase = null;
+        return;
+    }
+    const problem = upstreamBaseProblem(raw);
+    if (problem)
+        throw new Error(problem);
+    const url = new URL(raw);
+    upstreamBase = `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
-
 /** The base every upstream call is built on: the relay when one is set, else Torob. */
 export function upstreamBaseUrl() {
-  return upstreamBase ?? TOROB_API;
+    return upstreamBase ?? TOROB_API;
 }
-
 /**
  * The URL for one path, which may itself be a URL this server handed out
  * earlier - a card's `details_url` is exactly that, and a caller passes it back
@@ -115,25 +132,24 @@ export function upstreamBaseUrl() {
  * hand the challenge back to the single call the relay was configured for.
  */
 function upstreamUrlFor(path) {
-  if (!path.startsWith("http")) return `${upstreamBaseUrl()}${path}`;
-  if (upstreamBase && /^https?:\/\/api\.torob\.com(\/|$)/.test(path)) {
-    return path.replace(/^https?:\/\/api\.torob\.com/, upstreamBase);
-  }
-  return path;
+    if (!path.startsWith("http"))
+        return `${upstreamBaseUrl()}${path}`;
+    if (upstreamBase && /^https?:\/\/api\.torob\.com(\/|$)/.test(path)) {
+        return path.replace(/^https?:\/\/api\.torob\.com/, upstreamBase);
+    }
+    return path;
 }
-
 export class UpstreamError extends Error {
-
-
-  constructor(message, kind, opts) {
-    super(message);
-    this.kind = kind;
-    if (opts?.status !== undefined) this.status = opts.status;
-  }
+    kind;
+    status;
+    constructor(message, kind, opts) {
+        super(message);
+        this.kind = kind;
+        if (opts?.status !== undefined)
+            this.status = opts.status;
+    }
 }
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 // One upstream call at a time, and the slot is held until that attempt ends.
 //
 // A pacing gap alone was not enough. A gap shorter than a response time still
@@ -144,43 +160,43 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // an agent fires several calls at once.
 let tail = Promise.resolve();
 let nextSlot = 0;
-
 async function acquireSlot() {
-  const previous = tail;
-  let release;
-  tail = new Promise((resolve) => release = resolve);
-  try {
-    await previous;
-    const now = Date.now();
-    const wait = Math.max(0, nextSlot - now);
-    nextSlot = Math.max(now, nextSlot) + (testGapMs ?? MIN_GAP_MS);
-    if (wait > 0) await sleep(wait);
-    // Checked here rather than only before the queue: by the time this caller
-    // holds the slot, the call ahead of it may already have been challenged.
-    const waiting = await wallRemainingMs();
-    if (waiting > 0) throw wallClosed(waiting);
-    return release;
-  } catch (err) {
-    // The tail was advanced above, so it has to be resolved here or every
-    // caller queued behind this one waits forever.
-    release();
-    throw err;
-  }
+    const previous = tail;
+    let release;
+    tail = new Promise((resolve) => (release = resolve));
+    try {
+        await previous;
+        const now = Date.now();
+        const wait = Math.max(0, nextSlot - now);
+        nextSlot = Math.max(now, nextSlot) + (testGapMs ?? MIN_GAP_MS);
+        if (wait > 0)
+            await sleep(wait);
+        // Checked here rather than only before the queue: by the time this caller
+        // holds the slot, the call ahead of it may already have been challenged.
+        const waiting = await wallRemainingMs();
+        if (waiting > 0)
+            throw wallClosed(waiting);
+        return release;
+    }
+    catch (err) {
+        // The tail was advanced above, so it has to be resolved here or every
+        // caller queued behind this one waits forever.
+        release();
+        throw err;
+    }
 }
-
-const errText = (err) =>
-err instanceof Error ? err.message : String(err);
-
+const errText = (err) => err instanceof Error ? err.message : String(err);
 // Torob identifies its JSON API by the content type it answers with. A 200 that
 // returns HTML is a challenge wearing a success code, so the body is checked,
 // not just the status.
-function looksLikeChallenge(res, body) {
-  if (res.status === 490) return true;
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
-  if (ct.includes("json")) return false;
-  return /arcaptcha|ربات هستید|captcha/i.test(body.slice(0, 4000));
+function looksLikeChallenge(status, contentType, body) {
+    if (status === 490)
+        return true;
+    const ct = (contentType || "").toLowerCase();
+    if (ct.includes("json"))
+        return false;
+    return /arcaptcha|ربات هستید|captcha/i.test(body.slice(0, 4000));
 }
-
 // ------------------------------------------------------------ the wall
 //
 // Measured 2026-09-24: Torob's edge answers a client that calls too often with
@@ -220,221 +236,223 @@ const WALL_KEY = "wall";
 // which is exactly the wasted probe this gate exists to prevent. So it lives
 // comfortably past the longest stage.
 const WALL_TTL_SECONDS = Math.ceil(STAGE2_MS / 1000) + 600;
-
-
-
-
-
-
-
-
-
-
 const WALL_OPEN = { until: 0, openedAt: 0, strikes: 0 };
 let wall = { ...WALL_OPEN };
-
 /** The gate's remaining time from this process's own view. Synchronous by design. */
 export function breakerRemainingMs() {
-  return Math.max(0, wall.until - Date.now());
+    return Math.max(0, wall.until - Date.now());
 }
-
 /**
  * Forget only this process's view of the gate and leave the shared copy alone -
  * which is precisely what a fresh isolate, or the next run of the local server,
  * starts with.
  */
 export function forgetLocalWallForTests() {
-  wall = { ...WALL_OPEN };
+    wall = { ...WALL_OPEN };
 }
-
 /**
  * Forget the gate completely - the local state and the shared copy. The shared
  * copy matters: leaving it behind would have the next test, or the next
  * isolate, refuse to spend a request that something else needs to make.
  */
 export async function resetBreakerForTests() {
-  wall = { ...WALL_OPEN };
-  await storeSet(WALL_KEY, wall, 60);
+    wall = { ...WALL_OPEN };
+    await storeSet(WALL_KEY, wall, 60);
 }
-
 /**
  * Let the gate lapse without forgetting what it learned - the state after a
  * stage has run out on its own. Without it the second stage could only be
  * reached by waiting half an hour.
  */
 export async function expireWallForTests() {
-  wall = { ...wall, until: 0 };
-  await storeSet(WALL_KEY, wall, 60);
+    wall = { ...wall, until: 0 };
+    await storeSet(WALL_KEY, wall, 60);
 }
-
 /** The gate's remaining time after consulting the shared store. */
 async function wallRemainingMs() {
-  const now = Date.now();
-  if (wall.until <= now) {
-    // Locally open - ask, because another isolate or the last run of this
-    // process may know otherwise. Only an open gate is worth asking about: a
-    // closed one is already the answer, and the check runs before every
-    // upstream request.
-    const shared = await storeGet(WALL_KEY);
-    // Adopt on *recency*, not on whether it is still blocking. A stage that has
-    // lapsed still carries the strikes, and a rule of `until` alone discarded it
-    // the moment it mattered - the probe after a stage then counted as a first
-    // challenge and restarted the short stage forever.
-    if (shared && typeof shared.until === "number" && typeof shared.openedAt === "number" && shared.openedAt > wall.openedAt) {
-      wall = shared;
+    const now = Date.now();
+    if (wall.until <= now) {
+        // Locally open - ask, because another isolate or the last run of this
+        // process may know otherwise. Only an open gate is worth asking about: a
+        // closed one is already the answer, and the check runs before every
+        // upstream request.
+        const shared = await storeGet(WALL_KEY);
+        // Adopt on *recency*, not on whether it is still blocking. A stage that has
+        // lapsed still carries the strikes, and a rule of `until` alone discarded it
+        // the moment it mattered - the probe after a stage then counted as a first
+        // challenge and restarted the short stage forever.
+        if (shared && typeof shared.until === "number" && typeof shared.openedAt === "number" && shared.openedAt > wall.openedAt) {
+            wall = shared;
+        }
     }
-  }
-  return Math.max(0, wall.until - now);
+    return Math.max(0, wall.until - now);
 }
-
 // Set by the Worker entry point alone. The hosted copy is a quick-test one, and
 // the two messages a caller can stop at say so and name where the unlimited
 // version is; a local run is that version, so it never sets this.
 let hostedDemo = false;
 export function setHostedDemo(value) {
-  hostedDemo = value;
+    hostedDemo = value;
 }
-const demoNote = () => hostedDemo ? DEMO_NOTE : "";
-
+const demoNote = () => (hostedDemo ? DEMO_NOTE : "");
 function wallClosed(waiting) {
-  return new UpstreamError(
-  `Torob challenged this server recently, so no call was made. It clears on its own - retry in ` +
-  `about ${Math.ceil(waiting / 60_000)} minute(s). Nothing was searched, so no result below is ` +
-  `missing because of this.` +
-  demoNote(),
-  "challenged");
-
+    return new UpstreamError(`Torob challenged this server recently, so no call was made. It clears on its own - retry in ` +
+        `about ${Math.ceil(waiting / 60_000)} minute(s). Nothing was searched, so no result below is ` +
+        `missing because of this.` +
+        demoNote(), "challenged");
 }
-
 async function openWall() {
-  const now = Date.now();
-  const strikes = wall.strikes + 1;
-  const ms = strikes <= 1 ? STAGE1_MS : STAGE2_MS;
-  wall = { until: now + ms, openedAt: now, strikes };
-  await storeSet(WALL_KEY, wall, WALL_TTL_SECONDS);
+    const now = Date.now();
+    const strikes = wall.strikes + 1;
+    const ms = strikes <= 1 ? STAGE1_MS : STAGE2_MS;
+    wall = { until: now + ms, openedAt: now, strikes };
+    await storeSet(WALL_KEY, wall, WALL_TTL_SECONDS);
 }
-
 async function closeWallIfEarned(startedAt) {
-  if (wall.until === 0 && wall.strikes === 0) return;
-  // A response that was already in flight when the challenge arrived proves
-  // nothing about today's wall - only a call that started after it closed does.
-  if (wall.openedAt > startedAt) return;
-  wall = { ...WALL_OPEN };
-  await storeSet(WALL_KEY, wall, 60 * 60);
+    if (wall.until === 0 && wall.strikes === 0)
+        return;
+    // A response that was already in flight when the challenge arrived proves
+    // nothing about today's wall - only a call that started after it closed does.
+    if (wall.openedAt > startedAt)
+        return;
+    wall = { ...WALL_OPEN };
+    await storeSet(WALL_KEY, wall, 60 * 60);
 }
-
 /**
  * Call the Torob API and return parsed JSON.
  *
  * @param path Absolute URL, or a path relative to the API base.
  */
 export async function torobGet(path, opts) {
-  const url = upstreamUrlFor(path);
-  const retries = opts?.retries ?? MAX_RETRIES;
-  let lastError = null;
-
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    // Waits for the call ahead, holds the pacing gap and re-checks the gate
-    // while holding it - so a caller queued behind a challenge never reaches
-    // fetch, and one challenged burst costs exactly one upstream request.
-    const release = await acquireSlot();
-    // Set when this attempt's answer is the caller's problem rather than a blip
-    // - a 4xx. The `throw` below happens inside this same `try`, so without the
-    // flag the catch would treat it as a retryable failure and spend the whole
-    // retry budget on an answer that will not change (measured: a 404 costing
-    // four round trips and twelve seconds).
-    let fatal = false;
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-      try {
-        const startedAt = Date.now();
-        const res = await fetch(url, {
-          headers: {
-            "User-Agent": UA,
-            Accept: "application/json",
-            Referer: "https://torob.com/",
-            Origin: "https://torob.com",
-            source: SOURCE
-          },
-          signal: controller.signal
-        });
-        const body = await res.text();
-
-        // A challenge is never retried: solving it is not this server's job and
-        // hammering the endpoint while it is up is how a temporary block becomes
-        // a permanent one. The first one also closes the gate, so the calls
-        // behind it in a burst fail without spending an upstream request.
-        if (looksLikeChallenge(res, body)) {
-          await openWall();
-          throw new UpstreamError(CHALLENGED_MSG + demoNote(), "challenged", { status: res.status });
-        }
-
-        // An answer that is not a challenge is the edge letting us through, so
-        // the gate opens again - but only for a call that started after it shut.
-        await closeWallIfEarned(startedAt);
-
-        if (!res.ok) {
-          lastError = new UpstreamError(
-          `Torob answered HTTP ${res.status}. ${res.status === 404 ? "That product or category does not exist upstream." : "Retry shortly."}`,
-          "http",
-          { status: res.status });
-
-          // 4xx is the caller's fault, not a blip: 404 for a deleted product must
-          // not be retried three times, and other 4xx are the same class.
-          if (res.status < 500 && res.status !== 429) {
-            fatal = true;
-            throw lastError;
-          }
-          if (attempt < retries) {
-            // Back off without holding the slot: the slot is there so two
-            // fetches cannot overlap, not so one caller's retry delay can stall
-            // every other call behind it. Resolving twice is a no-op, so the
-            // finally below stays correct.
-            release();
-            await sleep(retryDelay(attempt));
-            continue;
-          }
-          throw lastError;
-        }
-
+    const url = upstreamUrlFor(path);
+    const retries = opts?.retries ?? MAX_RETRIES;
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        // Waits for the call ahead, holds the pacing gap and re-checks the gate
+        // while holding it - so a caller queued behind a challenge never reaches
+        // fetch, and one challenged burst costs exactly one upstream request.
+        const release = await acquireSlot();
+        // Set when this attempt's answer is the caller's problem rather than a blip
+        // - a 4xx. The `throw` below happens inside this same `try`, so without the
+        // flag the catch would treat it as a retryable failure and spend the whole
+        // retry budget on an answer that will not change (measured: a 404 costing
+        // four round trips and twelve seconds).
+        let fatal = false;
         try {
-          return JSON.parse(body);
-        } catch {
-          throw new UpstreamError(
-          "Torob returned a success status with a body that is not JSON. The API shape may have changed.",
-          "http",
-          { status: res.status });
-
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+            try {
+                const startedAt = Date.now();
+                const reqHeaders = {
+                    "User-Agent": UA,
+                    Accept: "application/json",
+                    Referer: "https://torob.com/",
+                    Origin: "https://torob.com",
+                    source: SOURCE,
+                };
+                const relayApiPath = relayConfig.enabled &&
+                    relayConfig.mode === "encrypted_relay" &&
+                    relayConfig.url &&
+                    relayConfig.key &&
+                    encryptedRelayTransport
+                    ? relayPathForTorobApi(path)
+                    : null;
+                let resStatus;
+                let resOk;
+                let resContentType;
+                let body;
+                if (relayApiPath && encryptedRelayTransport) {
+                    const relayed = await encryptedRelayTransport({
+                        url: relayConfig.url,
+                        key: relayConfig.key,
+                        path: relayApiPath,
+                        headers: reqHeaders,
+                        timeoutMs: FETCH_TIMEOUT_MS,
+                    });
+                    resStatus = relayed.status;
+                    resOk = resStatus >= 200 && resStatus < 300;
+                    resContentType = relayed.contentType;
+                    body = relayed.body;
+                }
+                else {
+                    const res = await fetch(url, {
+                        headers: reqHeaders,
+                        signal: controller.signal,
+                    });
+                    resStatus = res.status;
+                    resOk = res.ok;
+                    resContentType = res.headers.get("content-type") || "";
+                    body = await res.text();
+                }
+                // A challenge is never retried: solving it is not this server's job and
+                // hammering the endpoint while it is up is how a temporary block becomes
+                // a permanent one. The first one also closes the gate, so the calls
+                // behind it in a burst fail without spending an upstream request.
+                if (looksLikeChallenge(resStatus, resContentType, body)) {
+                    await openWall();
+                    throw new UpstreamError(CHALLENGED_MSG + demoNote(), "challenged", { status: resStatus });
+                }
+                // An answer that is not a challenge is the edge letting us through, so
+                // the gate opens again - but only for a call that started after it shut.
+                await closeWallIfEarned(startedAt);
+                if (!resOk) {
+                    lastError = new UpstreamError(`Torob answered HTTP ${resStatus}. ${resStatus === 404 ? "That product or category does not exist upstream." : "Retry shortly."}`, "http", { status: resStatus });
+                    // 4xx is the caller's fault, not a blip: 404 for a deleted product must
+                    // not be retried three times, and other 4xx are the same class.
+                    if (resStatus < 500 && resStatus !== 429) {
+                        fatal = true;
+                        throw lastError;
+                    }
+                    if (attempt < retries) {
+                        // Back off without holding the slot: the slot is there so two
+                        // fetches cannot overlap, not so one caller's retry delay can stall
+                        // every other call behind it. Resolving twice is a no-op, so the
+                        // finally below stays correct.
+                        release();
+                        await sleep(retryDelay(attempt));
+                        continue;
+                    }
+                    throw lastError;
+                }
+                try {
+                    return JSON.parse(body);
+                }
+                catch {
+                    throw new UpstreamError("Torob returned a success status with a body that is not JSON. The API shape may have changed.", "http", { status: resStatus });
+                }
+            }
+            finally {
+                clearTimeout(timer);
+            }
         }
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch (err) {
-      if (fatal) throw err;
-      if (err instanceof UpstreamError && (err.kind === "challenged" || err.kind === "usage")) throw err;
-      lastError = err;
-      if (attempt < retries) {
-        // Same as the 5xx path above: the backoff is this caller's problem, not
-        // the whole isolate's.
-        release();
-        await sleep(retryDelay(attempt));
-        continue;
-      }
-    } finally {
-      // Always, including when the attempt above was abandoned mid-flight: the
-      // next caller is queued behind this promise, and never resolving it would
-      // hang every call that follows.
-      release();
+        catch (err) {
+            if (fatal)
+                throw err;
+            if (err && typeof err === "object" && err.fatalRelayAuth) {
+                throw new UpstreamError(errText(err), "usage");
+            }
+            if (err instanceof UpstreamError && (err.kind === "challenged" || err.kind === "usage"))
+                throw err;
+            lastError = err;
+            if (attempt < retries) {
+                // Same as the 5xx path above: the backoff is this caller's problem, not
+                // the whole isolate's.
+                release();
+                await sleep(retryDelay(attempt));
+                continue;
+            }
+        }
+        finally {
+            // Always, including when the attempt above was abandoned mid-flight: the
+            // next caller is queued behind this promise, and never resolving it would
+            // hang every call that follows.
+            release();
+        }
     }
-  }
-
-  if (lastError instanceof UpstreamError) throw lastError;
-  const aborted = errText(lastError).includes("abort");
-  throw new UpstreamError(
-  aborted ?
-  `Torob did not answer within ${FETCH_TIMEOUT_MS / 1000}s. Retry shortly.` :
-  `Could not reach Torob: ${errText(lastError)}`,
-  "network");
-
+    if (lastError instanceof UpstreamError)
+        throw lastError;
+    const aborted = errText(lastError).includes("abort");
+    throw new UpstreamError(aborted
+        ? `Torob did not answer within ${FETCH_TIMEOUT_MS / 1000}s. Retry shortly.`
+        : `Could not reach Torob: ${errText(lastError)}`, "network");
 }

@@ -6,6 +6,7 @@ import { campaignColor, campaignLabel, faDate, faNum, pct, statusColor, statusLa
 import { ensureDefaults } from "@/lib/services/bootstrap";
 import { getAIStatus } from "@/lib/ai/config";
 import { getStoreStatus } from "@/lib/store/connectors";
+import { getTorobRelayStatus } from "@/lib/torob-relay/config";
 import { count, desc, eq, sql } from "drizzle-orm";
 import Link from "next/link";
 
@@ -34,7 +35,7 @@ export default async function DashboardPage() {
     ]);
 
   const nextRun = sch.map((s) => s.nextRunAt).filter(Boolean).sort((a, b) => a!.getTime() - b!.getTime())[0];
-  const aiStatus = await getAIStatus();
+  const [aiStatus, torobRelayStatus] = await Promise.all([getAIStatus(), getTorobRelayStatus()]);
   let storeStatus = null;
   try {
     storeStatus = await getStoreStatus();
@@ -118,6 +119,29 @@ export default async function DashboardPage() {
                 {aiStatus.subq.configured
                   ? `${aiStatus.subq.model} (${aiStatus.subq.source === "db" ? "پنل" : ".env"})`
                   : "موتور آنی محلی"}
+              </span>
+            </Link>
+
+            <Link
+              href="/settings?tab=torob"
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 transition ${
+                torobRelayStatus.configured && torobRelayStatus.enabled
+                  ? "border-emerald-200 bg-emerald-50/70 text-emerald-800"
+                  : "border-slate-200 bg-white text-slate-600"
+              }`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  torobRelayStatus.configured && torobRelayStatus.enabled ? "bg-emerald-500" : "bg-slate-400"
+                }`}
+              />
+              <span>
+                رله ترب:{" "}
+                {torobRelayStatus.configured && torobRelayStatus.enabled
+                  ? torobRelayStatus.mode === "encrypted_relay"
+                    ? "رمزنگاری‌شده (ایران)"
+                    : "رله HTTPS"
+                  : "اتصال مستقیم"}
               </span>
             </Link>
 
