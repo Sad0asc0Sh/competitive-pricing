@@ -26,8 +26,8 @@ function deriveImportPrice(p) {
     basePrice = Math.max(0, Math.round(Number(p && p.price) || 0));
   }
   const finalPrice = discount > 0 ? Math.round(basePrice * (1 - discount / 100)) : basePrice;
-  // محصول بدون قیمت خرید یا متغیر: هرگز خودکار اعمال نمی‌شود (فقط رصد/پیشنهاد)
-  const autoApply = costPrice > 0 && !isVariable;
+  // نظارت اجباری انسانی: محصولات جدید با autoApply = false ایمپورت می‌شوند تا هیچ قیمتی بدون تایید مدیر اعمال نشود
+  const autoApply = false;
   return { costPrice, basePrice, finalPrice, discount, autoApply, isVariable };
 }
 

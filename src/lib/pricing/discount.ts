@@ -189,12 +189,20 @@ export function pickDiscountReference(
     return { kind: "none", refPrice: null };
   }
 
-  if (baseMode !== "ceiling" && baseMode !== "market_upper" && hasOwn) {
-    return { kind: "own_price_7d", refPrice: ownHigh };
-  }
+  if (cfg?.referencePriority === "market_first") {
+    const pRefFirst = marketReferenceP75(offers, cfg);
+    if (pRefFirst != null && pRefFirst > finalPrice) return { kind: "market_p75", refPrice: pRefFirst };
+    if (baseMode !== "ceiling" && baseMode !== "market_upper" && hasOwn) {
+      return { kind: "own_price_7d", refPrice: ownHigh };
+    }
+  } else {
+    if (baseMode !== "ceiling" && baseMode !== "market_upper" && hasOwn) {
+      return { kind: "own_price_7d", refPrice: ownHigh };
+    }
 
-  const pRef = marketReferenceP75(offers, cfg);
-  if (pRef != null && pRef > finalPrice) return { kind: "market_p75", refPrice: pRef };
+    const pRef = marketReferenceP75(offers, cfg);
+    if (pRef != null && pRef > finalPrice) return { kind: "market_p75", refPrice: pRef };
+  }
 
   // اگر کاربر صراحتاً markupPct را تغییر داده باشد و مرجع بازار بالاتر از کف نبود، از markup استفاده کن
   if (cfg?.markupPct != null && cfg.markupPct !== 12 && markupPct > 0) {
@@ -264,6 +272,14 @@ export function buildDiscount(
   rounding: PricingProfileConfig["rounding"],
   opts?: DiscountSourceConfig & { ceilingOverride?: number | null },
 ): DiscountOutcome {
+  if (cfg?.enabled === false) {
+    return noDiscountOutcome(
+      finalPrice,
+      offers,
+      "تخفیف نمایشی در پروفایل غیرفعال است — اعمال مستقیم قیمت نهایی یوزر بدون قیمت خط‌خورده",
+    );
+  }
+
   const allPositivePrices = offers.filter((o) => o.price > 0).map((o) => o.price);
   const rawLowestPrice = allPositivePrices.length ? Math.min(...allPositivePrices) : null;
   const rawHighestPrice = allPositivePrices.length ? Math.max(...allPositivePrices) : null;

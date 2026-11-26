@@ -47,7 +47,7 @@ async function register() {
     if (g.__pricingSchedulerStarted)
         return;
     g.__pricingSchedulerStarted = true;
-    const { tickScheduler } = await Promise.resolve().then(() => __importStar(require("@/lib/services/scheduler")));
+    const { tickScheduler } = await Promise.resolve().then(() => __importStar(require("./lib/services/scheduler")));
     const tick = async () => {
         try {
             await tickScheduler();

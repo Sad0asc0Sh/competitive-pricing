@@ -153,10 +153,12 @@ export function buildSgeoooleRequestPayload(p: PricePushPayload) {
       ? Math.max(1, Math.min(99, Math.round(p.discountPct)))
       : 0;
 
-  const isFlash = p.campaignType === "flash" && intDiscountPct > 0;
-  const isSpecial = p.campaignType === "featured" && intDiscountPct > 0;
-  const isTimedSale = p.campaignType === "timed_sale" && intDiscountPct > 0;
+  const hasDisplayDiscount = intDiscountPct > 0 && p.basePrice > p.finalPrice;
+  const isFlash = p.campaignType === "flash" && hasDisplayDiscount;
+  const isSpecial = p.campaignType === "featured" && hasDisplayDiscount;
+  const isTimedSale = p.campaignType === "timed_sale" && hasDisplayDiscount;
   const hasDirectProductPromo = isFlash || isSpecial;
+  const hasDirectProductDiscount = hasDisplayDiscount && !isTimedSale;
   const hasAnyPromo = hasDirectProductPromo || isTimedSale;
 
   const defaultHours = isFlash ? 12 : isSpecial ? 48 : 72;
@@ -182,10 +184,11 @@ export function buildSgeoooleRequestPayload(p: PricePushPayload) {
     idempotencyKey,
     ...(belowCostOverride ? { belowCostOverride } : {}),
     // فیلدهای استاندارد مدل Product در sgeooole:
-    // نکته کلیدی: در timed_sale قیمت پایه روی Product برابر سقف معیار (basePrice) قرار می‌گیرد و تخفیف از طریق مدل Sale اعمال می‌شود
-    price: hasAnyPromo ? p.basePrice : p.finalPrice,
-    compareAtPrice: hasDirectProductPromo ? p.basePrice : null,
-    discount: hasDirectProductPromo ? intDiscountPct : 0,
+    // نکته کلیدی: در timed_sale قیمت پایه روی Product برابر سقف معیار (basePrice) قرار می‌گیرد و تخفیف از طریق مدل Sale اعمال می‌شود؛
+    // اگر تخفیف نمایشی بدون کمپین خاص فعال باشد (campaignType="none" با discountPct > 0) نیز سقف و درصد تخفیف حفظ می‌شود.
+    price: hasDisplayDiscount ? p.basePrice : p.finalPrice,
+    compareAtPrice: hasDirectProductDiscount ? p.basePrice : null,
+    discount: hasDirectProductDiscount ? intDiscountPct : 0,
     isFlashDeal: isFlash,
     flashDealEndTime: isFlash ? endIso : null,
     isSpecialOffer: isSpecial,

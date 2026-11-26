@@ -5,6 +5,7 @@ import { applyRecencyWeights, applyValidityFilters } from "./filters";
 import { applyGuards } from "./guards";
 import { evaluateTorobCandidate } from "./matcher";
 import { detectOwnPriceEcho, makeOwnShopMatcher } from "./own-shop";
+import { detectIsolatedLiquidationOffers } from "./liquidation";
 import { removeOutliers } from "./outliers";
 import {
   deriveSafeMarketConsensusSupply,
@@ -15,8 +16,9 @@ import { decideTargetPrice, evaluateCompetitivePosition } from "./strategy";
 import { ceilToStep, percentile } from "./stats";
 import { assessValidity, type ValidityReport } from "./validity";
 import { analyzeDecisionScenarios, calibratedConfidence, type ScenarioAnalysis } from "./robustness";
-import { evaluateSystemOneSupervisorSync } from "./systemone-supervisor";
+import { evaluateSystemOneSupervisorSync, formatSupervisorRejectMessage } from "./systemone-supervisor";
 import type {
+  AIIdentityCheckMeta,
   CompetitivePositionReport,
   DecisionStepLog,
   OfferEvaluation,
@@ -182,26 +184,55 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     // ادغام کرده یا عنوان محصول ما نادرست است، و هر دو نیازمند بازبینی انسانی‌اند (اندازه‌گیری: eval/market، سناریوی wrongself).
     // رابطهٔ «نسخهٔ متفاوت» (پسوند اضافه/کم، هم‌خانواده) یعنی شواهدِ محصول دیگر؛ نه فقط کمبود اطلاعات
     const variantRelations = new Set(["ext_seg", "ext_chars", "sibling"]);
-    const hardIdentityReject = identityCheck.verdict === "reject";
+    const aiIdCheck = (source.meta?.aiIdentityCheck as AIIdentityCheckMeta | undefined) ?? undefined;
+    if (aiIdCheck) {
+      log({
+        step: "ai_identity",
+        title: "تطبیق پنل‌های ادغام ترب با هوش مصنوعی",
+        message:
+          aiIdCheck.verdict === "match"
+            ? `تایید پنل ادغام (${aiIdCheck.matchedPrks.length || 1} پنل مرتبط): ${aiIdCheck.reasoning}`
+            : aiIdCheck.verdict === "no_match"
+              ? `عدم تطابق پنل ترب با محصول سایت: ${aiIdCheck.reasoning}`
+              : `نتیجهٔ مبهم در بررسی پنل ترب: ${aiIdCheck.reasoning}`,
+        level: aiIdCheck.verdict === "no_match" ? "error" : aiIdCheck.verdict === "uncertain" ? "warn" : "info",
+        data: { ...aiIdCheck, mergedPanelPrks: source.meta?.mergedPanelPrks ?? null },
+      });
+    }
+
+    const hardIdentityReject = identityCheck.verdict === "reject" || aiIdCheck?.verdict === "no_match";
     const variantConflict = Boolean(identityCheck.codeRelation && variantRelations.has(identityCheck.codeRelation));
+    const aiConfirmsAmbiguous =
+      aiIdCheck?.verdict === "match" && identityCheck.verdict === "review" && !variantConflict;
     const selfConfirms = selfShopInListing && !hardIdentityReject && !variantConflict;
     selfConfirmsIdentity = selfConfirms;
-    identityMatchScorePct = selfConfirms ? Math.max(95, identityCheck.score) : identityCheck.score;
+    identityMatchScorePct =
+      aiIdCheck?.verdict === "no_match"
+        ? Math.min(identityCheck.score, 25)
+        : selfConfirms
+          ? Math.max(95, identityCheck.score)
+          : aiConfirmsAmbiguous
+            ? Math.max(88, identityCheck.score)
+            : identityCheck.score;
 
     if (hardIdentityReject) {
+      const rejWhy =
+        aiIdCheck?.verdict === "no_match"
+          ? `رد پنل توسط هوش مصنوعی: ${aiIdCheck.reasoning}`
+          : identityCheck.rejectReason;
       reviewReasons.push(
         selfShopInListing
-          ? `رد در گیت ورودی هویت کالا (${identityCheck.score}% < ${idRej}%) با وجود حضور فروشگاه خودمان در لیستینگ — ترب کارت را احتمالاً اشتباه ادغام کرده یا عنوان محصول ما نادرست است: ${identityCheck.rejectReason}`
-          : `رد در گیت ورودی هویت کالا (${identityCheck.score}% < ${idRej}%): ${identityCheck.rejectReason}`,
+          ? `رد در گیت ورودی هویت کالا (${identityMatchScorePct}% < ${idRej}%) با وجود حضور فروشگاه خودمان در لیستینگ — ترب کارت را احتمالاً اشتباه ادغام کرده یا عنوان محصول ما نادرست است: ${rejWhy}`
+          : `رد در گیت ورودی هویت کالا (${identityMatchScorePct}% < ${idRej}%): ${rejWhy}`,
       );
       log({
         step: "identity",
         title: "گیت ۱ (ورودی): راستی‌آزمایی هویت کالا با ناظر SystemOne",
-        message: `رد شد (امتیاز ${identityCheck.score}% / noul=${identityCheck.noul.toFixed(2)} < ${idRej}%): «${source.productTitle}» در برابر «${ctx.productName}» — ${identityCheck.rejectReason}${selfShopInListing ? " — حضور فروشگاه خودمان در لیستینگ، رد هویتی را نمی‌پوشاند" : ""}`,
+        message: `رد شد (امتیاز ${identityMatchScorePct}% / noul=${(identityMatchScorePct / 100).toFixed(2)} < ${idRej}%): «${source.productTitle}» در برابر «${ctx.productName}» — ${rejWhy}${selfShopInListing ? " — حضور فروشگاه خودمان در لیستینگ، رد هویتی را نمی‌پوشاند" : ""}`,
         level: "error",
-        data: { score: identityCheck.score, noul: identityCheck.noul, verdict: identityCheck.verdict, selfShopInListing, codeRelation: identityCheck.codeRelation ?? null },
+        data: { score: identityMatchScorePct, noul: identityMatchScorePct / 100, verdict: "reject", selfShopInListing, codeRelation: identityCheck.codeRelation ?? null },
       });
-    } else if (identityCheck.verdict === "review" && !selfConfirms) {
+    } else if (identityCheck.verdict === "review" && !selfConfirms && !aiConfirmsAmbiguous) {
       reviewReasons.push(
         `امتیاز تطابق هویت کالا در بازه ریویو (${identityCheck.score}% بین ${idRej}% و ${idApp}%)` +
           (identityCheck.blockers?.length ? ` — ${identityCheck.blockers[0]}` : ""),
@@ -220,6 +251,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         message:
           `تایید خودکار ورودی با امتیاز ${identityMatchScorePct}% (noul=${(identityMatchScorePct / 100).toFixed(2)} ≥ ${idApp}%)` +
           (selfConfirms ? " + تأیید متقاطع (حضور فروشگاه خودمان در همین لیستینگ ادغام‌شده ترب)" : "") +
+          (aiConfirmsAmbiguous ? " + تایید تطبیق پنل ادغام توسط هوش مصنوعی" : "") +
           (identityCheck.notes.length ? ` · ${identityCheck.notes.join(" · ")}` : ""),
         level: "info",
         data: { score: identityMatchScorePct, noul: identityMatchScorePct / 100, verdict: "approve", selfShopInListing, codeRelation: identityCheck.codeRelation ?? null },
@@ -371,6 +403,35 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     data: { ...outlierReport },
   });
 
+  // ۳.۵) فیلتر ریاضی فروشنده منفرد نقدکننده انبار / حراجی (بدون AI)
+  const liquidationSet = new Set<OfferEvaluation>();
+  if (v2 && cfg.outliers.liquidationGuard !== false) {
+    const liq = detectIsolatedLiquidationOffers(offers, {
+      effectiveCostPrice: supply.effectiveCostPrice,
+      minBodySellers: cfg.outliers.liquidationMinBodySellers ?? 4,
+      stepGapPct: cfg.outliers.liquidationStepGapPct ?? 6,
+      bodyGapPct: cfg.outliers.liquidationBodyGapPct ?? 8,
+    });
+    if (liq.excluded.length > 0) {
+      for (const o of offers) {
+        if (o.cls === "liquidation_low") liquidationSet.add(o);
+      }
+      for (const x of liq.excluded) {
+        outlierReport.suspectLows.push({ price: x.price, shopName: x.shopName, cls: "liquidation_low" });
+        outlierReport.removed++;
+      }
+      log({
+        step: "liquidation_guard",
+        title: "فیلتر ریاضی فروشنده منفرد نقدکننده انبار / حراجی",
+        message: liq.excluded
+          .map((x) => `«${x.shopName}» (${fa(x.price)} تومان — ${x.stepGapPct}٪ زیر نفر بعدی و ${x.bodyGapPct}٪ زیر میانه بازار ${fa(liq.bodyMedian)}) کنار گذاشته شد`)
+          .join("؛ "),
+        level: "warn",
+        data: { excluded: liq.excluded, bodyMedian: liq.bodyMedian },
+      });
+    }
+  }
+
   // ---------- 4) وزن‌دهی و تجمیع (نسخه ۴.۱: suspectLows + ceiling مستقیماً وارد بازار می‌شوند)
   const weighOffers = (arr: OfferEvaluation[]) => {
     applyRecencyWeights(arr, cfg.aggregation.recencyHalfLifeDays, now);
@@ -482,14 +543,38 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         data: { provisional, poolSize: poolPrices.length, desiredMinProfit: supply.hardFloorPrice },
       });
     } else {
-      // داده کافی نیست → تصمیم واقعی تنها با استعلام مجدد/انبار ممکن است (no_data)
-      target = null;
-      log({
-        step: "provisional",
-        title: "مسیر بی‌هزینه Provisional غیرفعال",
-        message: `فقط ${credibleFresh.length} فروشنده به‌روز و معتبر (حداقل لازم: ${minCredibleNeeded}) — بدون پیشنهاد Provisional`,
-        level: "warn",
-      });
+      const validIncluded = offers.filter((o) => o.included && o.price > 0);
+      const minFallbackNeeded = Math.max(2, cfg.guards.minValidOffers);
+      if (v2 && validIncluded.length >= minFallbackNeeded && market.reference != null) {
+        const poolPrices = validIncluded.map((o) => o.price);
+        const fallbackPct = Math.max(40, cfg.costless.provisionalPercentile ?? 30);
+        const rawProv = percentile(poolPrices, fallbackPct);
+        const provisional = ceilToStep(rawProv, Math.max(1, cfg.rounding.finalStep));
+        strategy = "provisional_market_percentile";
+        competitionTier = "provisional_market_percentile";
+        target = provisional;
+        isProvisional = true;
+        reviewReasons.push(
+          `بدون قیمت خرید و کمبود فروشندگان خوش‌امتیاز تازه (${credibleFresh.length} < ${minCredibleNeeded}) — قیمت پیشنهادی موقت (${fa(provisional)} = صدک ${fallbackPct} از ${poolPrices.length} پیشنهاد معتبر ترب) نیازمند بازبینی دستی است`,
+        );
+        log({
+          step: "provisional",
+          title: "مسیر بی‌هزینه Provisional (جایگزین از کل پیشنهادهای معتبر ترب)",
+          message:
+            `فروشنده خوش‌امتیاز تازه کافی نبود (${credibleFresh.length} < ${minCredibleNeeded})، اما ${poolPrices.length} پیشنهاد معتبر در ترب موجود است → قیمت پیشنهادی موقت ${fa(provisional)} تومان (صدک ${fallbackPct}) برای بازبینی مدیر`,
+          level: "warn",
+          data: { provisional, poolSize: poolPrices.length, credibleFreshCount: credibleFresh.length },
+        });
+      } else {
+        // داده کافی نیست → تصمیم واقعی تنها با استعلام مجدد/انبار ممکن است (no_data)
+        target = null;
+        log({
+          step: "provisional",
+          title: "مسیر بی‌هزینه Provisional غیرفعال",
+          message: `فقط ${credibleFresh.length} فروشنده به‌روز و معتبر (حداقل لازم: ${minCredibleNeeded}) — بدون پیشنهاد Provisional`,
+          level: "warn",
+        });
+      }
     }
   }
 
@@ -729,10 +814,16 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       });
       return { finalPrice: g.price, strategy: st.strategy };
     };
-    scenarioAnalysis = analyzeDecisionScenarios(validity, finalPrice, (o) => !highOutlierSet.has(o), decideWith, {
-      minIncludeProb: est.validity?.minIncludeProb ?? 0.15,
-      ...(est.scenario ?? {}),
-    });
+    scenarioAnalysis = analyzeDecisionScenarios(
+      validity,
+      finalPrice,
+      (o) => !highOutlierSet.has(o) && !liquidationSet.has(o),
+      decideWith,
+      {
+        minIncludeProb: est.validity?.minIncludeProb ?? 0.15,
+        ...(est.scenario ?? {}),
+      },
+    );
     log({
       step: "robustness",
       title: "پایداری تصمیم نسبت به عدم‌قطعیتِ اعتبار پیشنهادها (v2)",
@@ -805,7 +896,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     ceilingOverride: market.ceiling,
   });
   const basePrice = disc.basePrice;
-  if (disc.referenceKind === "none" && disc.discountPct === 0 && market.reference != null && finalPrice < market.reference) {
+  if (!v2 && disc.referenceKind === "none" && disc.discountPct === 0 && market.reference != null && finalPrice < market.reference) {
     reviewReasons.push(
       `مرجع معتبر تخفیف (own_price_7d / market_p75) یافت نشد؛ کف ما زیر مرجع است → گیت تخفیف نیاز به بازبینی تاریخ قیمت خودی`,
     );
@@ -893,9 +984,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   if (supervisor.enabled) {
     if (supervisor.verdict === "reject") {
       rejectedBySupervisor = true;
-      reviewReasons.push(
-        `رد توسط ناظر بالاسر SystemOne (امتیاز ${supervisor.overallScorePct}% < ${supervisor.rejectBelowPct}%)`,
-      );
+      reviewReasons.push(formatSupervisorRejectMessage(supervisor));
     } else if (supervisor.verdict === "review") {
       reviewReasons.push(
         `ناظر بالاسر SystemOne تصمیم را در بازه ریویو قرار داد (${supervisor.overallScorePct}% بین ${supervisor.rejectBelowPct}% و ${supervisor.approveAbovePct}%)`,
@@ -947,7 +1036,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     step: "decision",
     title: "نتیجه نهایی",
     message: rejectedBySupervisor
-      ? `⛔ رد کامل توسط ناظر SystemOne (${supervisor.overallScorePct}% < ${supervisor.rejectBelowPct}%): داده یا قیمت شرایط ایمنی را ندارد و متوقف شد`
+      ? `⛔ ${formatSupervisorRejectMessage(supervisor)}: داده یا قیمت شرایط ایمنی را ندارد و متوقف شد`
       : needsReview
         ? `⏳ ارسال به بخش ریویو (بازبینی): ${reviewReasons.join("؛ ")} (پیشنهاد: سقف ${fa(basePrice)} با ${disc.discountPct}% تخفیف → کف ${fa(finalPrice)} تومان)`
         : `✅ تایید ناظر SystemOne (${supervisor.overallScorePct}% ≥ ${supervisor.approveAbovePct}%) و اعمال خودکار: سقف معیار ${fa(basePrice)} با ${disc.discountPct}% تخفیف → کف قطعی ${fa(finalPrice)} تومان | ${

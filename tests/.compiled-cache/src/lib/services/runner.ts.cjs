@@ -4,6 +4,7 @@ exports.applyDecisionToStore = void 0;
 exports.recoverStuckAppliedDecisions = recoverStuckAppliedDecisions;
 exports.runPricing = runPricing;
 exports.isSupervisorRejected = isSupervisorRejected;
+exports.applyHumanOverrideToDecision = applyHumanOverrideToDecision;
 exports.applyDecision = applyDecision;
 exports.retryDecisionSync = retryDecisionSync;
 exports.reconcilePendingDecisions = reconcilePendingDecisions;
@@ -15,8 +16,10 @@ const client_1 = require("../ai/client");
 const config_1 = require("../ai/config");
 const approval_1 = require("../pricing/approval");
 const campaigns_1 = require("../pricing/campaigns");
+const discount_1 = require("../pricing/discount");
 const engine_1 = require("../pricing/engine");
 const own_price_history_1 = require("../pricing/own-price-history");
+const sourcing_1 = require("../pricing/sourcing");
 const systemone_supervisor_1 = require("../pricing/systemone-supervisor");
 const registry_1 = require("../sources/registry");
 const connectors_1 = require("../store/connectors");
@@ -397,13 +400,15 @@ async function runExpiryGuard(targets, appliedProductIds, intervalMinutes, runId
 }
 const SUPERVISOR_REASON_PREFIXES = [
     "رد توسط ناظر بالاسر SystemOne",
+    "رد توسط ناظر SystemOne",
+    "رد توسط ناظر به دلیل وتوی",
     "ناظر بالاسر SystemOne تصمیم را در بازه ریویو قرار داد",
 ];
 function syncSupervisorAfterEnrichment(result, sourceOk, allowCostlessAutoApply = false) {
     const sup = result.supervisor;
     result.reviewReasons = result.reviewReasons.filter((r) => !SUPERVISOR_REASON_PREFIXES.some((p) => r.startsWith(p)));
     if (sup.verdict === "reject") {
-        result.reviewReasons.push(`رد توسط ناظر بالاسر SystemOne (امتیاز ${sup.overallScorePct}% < ${sup.rejectBelowPct}%)`);
+        result.reviewReasons.push((0, systemone_supervisor_1.formatSupervisorRejectMessage)(sup));
     }
     else if (sup.verdict === "review") {
         result.reviewReasons.push(`ناظر بالاسر SystemOne تصمیم را در بازه ریویو قرار داد (${sup.overallScorePct}% بین ${sup.rejectBelowPct}% و ${sup.approveAbovePct}%)`);
@@ -467,6 +472,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         id: product.id,
         sku: product.sku,
         name: product.name,
+        category: product.category,
         sourceType: product.sourceType,
         torobUrl: product.torobUrl,
         torobPrk: product.torobPrk,
@@ -474,6 +480,12 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         costPrice: product.costPrice,
         supplierQuotes,
         currentFinalPrice: product.currentFinalPrice,
+        matchConfig: {
+            rejectBelowPct: config.supervisor?.gates?.identity_match?.rejectBelowPct ?? config.supervisor?.rejectBelowPct ?? 45,
+            approveAbovePct: config.supervisor?.gates?.identity_match?.approveAbovePct ?? config.supervisor?.approveAbovePct ?? 80,
+            minSellerCount: config.filters.minSellerCount,
+            aiIdentityEnabled: config.ai.enabled,
+        },
     }, manualOffers);
     const ownRecentPrices = await loadOwnRecentPrices(product.id, product.currentFinalPrice);
     const result = (0, engine_1.runPricingPipeline)(source, {
@@ -490,6 +502,73 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         config,
         discountContext,
     });
+    const allowCostless = (0, sourcing_1.isMarketMakerWithoutCostEnabled)(config);
+    // اگر PRK از قبل قفل بوده و گیت هویت در بازه مبهم (review) افتاده، از AI فقط برای تایید/رد تطابق پنل ترب استفاده کن (نه قیمت!)
+    if (source.ok &&
+        source.prk &&
+        source.productTitle &&
+        !source.meta?.aiIdentityCheck &&
+        result.supervisor.gates.identity_match?.verdict === "review" &&
+        config.ai.enabled &&
+        (await (0, client_1.aiEnabled)())) {
+        const prices = source.offers.map((o) => o.price).filter((p) => Number.isFinite(p) && p > 0).sort((a, b) => a - b);
+        const repPrice = prices.length ? prices[Math.floor((prices.length - 1) / 2)] : null;
+        const aiCheck = await (0, client_1.verifyTorobMatchesWithAI)({
+            productName: product.name,
+            sku: product.sku,
+            category: product.category,
+            anchorPriceToman: result.supply.effectiveCostPrice > 0 ? result.supply.effectiveCostPrice : product.currentFinalPrice,
+            candidates: [
+                {
+                    prk: source.prk,
+                    titleFa: source.productTitle,
+                    titleEn: source.productTitleEn ?? null,
+                    sellerCount: source.totalSellerCount,
+                    priceToman: repPrice,
+                    available: true,
+                },
+            ],
+        });
+        if (aiCheck) {
+            result.steps.push({
+                step: "ai_identity",
+                title: "تطبیق پنل ادغام ترب با هوش مصنوعی",
+                message: aiCheck.verdict === "match"
+                    ? `تایید پنل ادغام ترب توسط AI: ${aiCheck.reasoning}`
+                    : aiCheck.verdict === "no_match"
+                        ? `عدم تطابق پنل قفل‌شده ترب: ${aiCheck.reasoning}`
+                        : `نظر مبهم AI در مورد پنل ترب: ${aiCheck.reasoning}`,
+                level: aiCheck.verdict === "no_match" ? "error" : aiCheck.verdict === "uncertain" ? "warn" : "info",
+                data: { ...aiCheck },
+            });
+            const idGate = result.supervisor.gates.identity_match;
+            if (aiCheck.verdict === "no_match") {
+                idGate.scorePct = Math.min(idGate.scorePct, 25);
+                idGate.noul = Math.round((idGate.scorePct / 100) * 100) / 100;
+                idGate.verdict = "reject";
+                idGate.reason = `رد پنل ترب توسط هوش مصنوعی: ${aiCheck.reasoning}`;
+                result.supervisor.verdict = "reject";
+                result.rejectedBySupervisor = true;
+                result.needsReview = true;
+                result.reviewReasons.push(`رد پنل قفل‌شده ترب توسط هوش مصنوعی: ${aiCheck.reasoning}`);
+            }
+            else if (aiCheck.verdict === "match") {
+                idGate.scorePct = Math.max(idGate.scorePct, 88);
+                idGate.noul = Math.round((idGate.scorePct / 100) * 100) / 100;
+                idGate.verdict = (0, systemone_supervisor_1.classifyThreeZoneScore)(idGate.scorePct, idGate.rejectBelowPct, idGate.approveAbovePct);
+                idGate.reason = `تایید پنل ادغام ترب با هوش مصنوعی (${idGate.scorePct}%)`;
+                result.reviewReasons = result.reviewReasons.filter((r) => !r.startsWith("امتیاز تطابق هویت کالا در بازه ریویو"));
+                const allGates = Object.values(result.supervisor.gates);
+                const totalW = allGates.reduce((s, g) => s + (g.weight || 0.25), 0) || 1;
+                const wPct = Math.round(allGates.reduce((s, g) => s + g.scorePct * (g.weight || 0.25), 0) / totalW);
+                result.supervisor.overallScorePct = wPct;
+                result.supervisor.overallNoul = Math.round((wPct / 100) * 100) / 100;
+                result.supervisor.verdict = allGates.some((g) => g.verdict === "review")
+                    ? "review"
+                    : (0, systemone_supervisor_1.classifyThreeZoneScore)(wPct, result.supervisor.rejectBelowPct, result.supervisor.approveAbovePct);
+            }
+        }
+    }
     if (config.supervisor.enabled) {
         const subqRuntime = await (0, config_1.resolveSubqRuntime)(config.supervisor);
         result.supervisor = await (0, systemone_supervisor_1.enrichSupervisorWithSubqApi)(result.supervisor, {
@@ -498,7 +577,6 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             baseUrl: subqRuntime.baseUrl,
             model: subqRuntime.model,
         });
-        const allowCostless = Boolean(config.sourcing?.allowAutoApplyWithoutCost && config.costless?.autoApply);
         syncSupervisorAfterEnrichment(result, source.ok, allowCostless);
     }
     const sourceExt = source;
@@ -514,57 +592,6 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         const reason = "منبع استعلام ترب در وضعیت چالش ضدربات یا داده ناقص (degraded/challenged) قرار دارد — نیازمند بازبینی انسانی";
         if (!result.reviewReasons.includes(reason)) {
             result.reviewReasons.push(reason);
-        }
-    }
-    if (config.ai.enabled && result.finalPrice && result.confidence < config.ai.reviewBelowConfidence) {
-        // محرمانگی (۴.۲.۰): قیمت خرید/تمام‌شده/کف سود هرگز به LLM بیرونی فرستاده نمی‌شود؛ آن‌ها فقط برای
-        // پاک‌سازی عددهای محرمانه از متن‌ها به کار می‌روند (نگاه کنید به src/lib/ai/review-payload.ts).
-        const review = await (0, client_1.reviewDecisionWithAI)({
-            productName: product.name,
-            offers: result.offers.map((o) => ({
-                shopName: o.shopName,
-                price: o.price,
-                included: o.included,
-                excludeReason: o.excludeReason,
-            })),
-            referencePrice: result.referencePrice,
-            finalPrice: result.finalPrice,
-            basePrice: result.basePrice,
-            reviewReasons: result.reviewReasons,
-            alternative: result.decisionScenarios?.alternative ?? null,
-            confidence: result.confidence,
-        }, [
-            result.supply.effectiveCostPrice,
-            result.supply.hardFloorPrice,
-            result.supply.baseBuyPrice,
-            product.costPrice,
-        ]);
-        if (review) {
-            result.steps.push({
-                step: "ai_review",
-                title: "بازبینی هوش مصنوعی مکمل",
-                message: review.verdict === "adjust" && review.suggestedFinalPrice
-                    ? `adjust (پیشنهاد AI: ${review.suggestedFinalPrice.toLocaleString("fa-IR")} تومان): ${review.reasoning}`
-                    : `${review.verdict}: ${review.reasoning}`,
-                level: review.verdict === "approve" ? "info" : "warn",
-                data: review.suggestedFinalPrice ? { suggestedFinalPrice: review.suggestedFinalPrice } : undefined,
-            });
-            if (review.verdict === "reject") {
-                result.needsReview = true;
-                result.reviewReasons.push(`AI تصمیم را رد کرد: ${review.reasoning}`);
-            }
-            else if (review.verdict === "adjust") {
-                const suggested = review.suggestedFinalPrice;
-                const floor = result.supply.hardFloorPrice;
-                const cost = result.supply.effectiveCostPrice;
-                const unsafe = suggested == null || (floor > 0 && suggested < floor) || (cost > 0 && suggested <= cost);
-                result.needsReview = true;
-                result.reviewReasons.push(suggested != null
-                    ? unsafe
-                        ? `پیشنهاد AI (${suggested.toLocaleString("fa-IR")} تومان) زیر خط قرمز سود است و مردود شد`
-                        : `AI اصلاح قیمت را پیشنهاد داد (${suggested.toLocaleString("fa-IR")} تومان): ${review.reasoning}`
-                    : `AI نیاز به اصلاح دید: ${review.reasoning}`);
-            }
         }
     }
     // گارد امنیتی مضاعف برای جلوگیری از تشخیص اشتباه کارت و اعمال خودکار کالاهای بدون قیمت خرید:
@@ -597,10 +624,16 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         if (marginGate.reason)
             result.reviewReasons.push(marginGate.reason);
     }
-    const costlessPolicyAuthorized = Boolean(config.sourcing?.allowAutoApplyWithoutCost === true &&
-        config.costless?.autoApply === true &&
+    const costlessPolicyAuthorized = Boolean(allowCostless &&
         (product.torobPrk || product.torobUrl) &&
         result.confidence >= Math.max(0.9, config.costless?.minConfidence ?? 0.9));
+    // نظارت اجباری انسانی: اگر requireHumanApproval (پیش‌فرض true) فعال باشد، هیچ تصمیمی خودکار به فروشگاه ارسال نمی‌شود
+    const humanSupervisionRequired = config.guards?.requireHumanApproval !== false;
+    const readyForApproval = Boolean(!result.rejectedBySupervisor &&
+        result.finalPrice != null &&
+        !result.needsReview &&
+        !result.isProvisional &&
+        (strictlyAboveCost || costlessPolicyAuthorized));
     let status;
     if (result.rejectedBySupervisor) {
         status = "rejected";
@@ -612,8 +645,23 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         // در حالت shadow یا simulate هرگز پوش خودکار به فروشگاه انجام نمی‌شود
         status = "pending_review";
     }
+    else if (humanSupervisionRequired) {
+        status = "pending_review";
+        result.steps.push({
+            step: "supervision_gate",
+            title: "نظارت اجباری مدیر پیش از اعمال قیمت",
+            message: readyForApproval
+                ? "آماده تأیید سریع: محاسبات ریاضی، کف سود و تطابق کارت سالم است — منتظر تأیید شما در صف بازبینی"
+                : "نیازمند بررسی هشدارها: پیش از اعمال روی سایت، دلایل بازبینی و رقبای ترب را بررسی یا قیمت را ویرایش کنید",
+            level: readyForApproval ? "info" : "warn",
+            data: {
+                readyForApproval,
+                reviewReasons: result.reviewReasons,
+            },
+        });
+    }
     else if (result.isProvisional) {
-        // به صورت پیش‌فرض کالاهای بدون قیمت خرید نیازمند بازبینی انسانی‌اند مگر هر دو سیاست صریح فعال باشند
+        // به صورت پیش‌فرض کالاهای بدون قیمت خرید نیازمند بازبینی انسانی‌اند مگر سیاست صریح فعال باشد
         status =
             costlessPolicyAuthorized && !result.needsReview && product.autoApply
                 ? "pending_sync"
@@ -691,7 +739,6 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             campaignEndsAt = product.currentCampaignEndsAt;
             // تایمرِ فعلی حفظ شد → showInFeatured فعلی هم حفظ می‌شود (S3)
             pickShowInFeatured = product.currentShowInFeatured ?? pickShowInFeatured;
-            result.reviewReasons.push(`کمپین فعلی (${pick.type}) هنوز سالم فعال است و تایمر آن (تا ${product.currentCampaignEndsAt.toLocaleString("fa-IR")}) ریست نشد`);
         }
         result.steps.push({
             step: "campaign",
@@ -740,7 +787,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         totalSellersIncludingSuspect: safeInt(result.position.totalSellersIncludingSuspect) ?? 0,
         netProfitToman: safeInt(result.position.netProfitToman),
         netMarginPct: safeReal(result.position.netMarginPct),
-        confidence: safeReal(result.supervisor.enabled ? result.supervisor.overallNoul : result.confidence),
+        confidence: safeReal(result.confidence),
         engineVersion: config.engine?.version ?? "4.2.0",
         marketConflict: result.marketConflict ?? false,
         referenceKind: result.discountReferenceKind ?? "none",
@@ -767,6 +814,16 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         .update(schema_1.priceDecisions)
         .set({ idempotencyKey })
         .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decision.id));
+    // حذف تکرار در صف بازبینی: تصمیم‌های pending_review قدیمی‌ترِ همین محصول جایگزین می‌شوند تا هر محصول فقط ۱ کارت فعال داشته باشد
+    if (status === "pending_review") {
+        await index_ts_1.db
+            .update(schema_1.priceDecisions)
+            .set({
+            status: "superseded",
+            pushError: `جایگزین شده با تصمیم جدیدتر #${decision.id}`,
+        })
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.productId, product.id), (0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "pending_review"), (0, drizzle_orm_1.lt)(schema_1.priceDecisions.id, decision.id)));
+    }
     if (result.offers.length) {
         await index_ts_1.db.insert(schema_1.competitorOffers).values(result.offers.map((o) => ({
             decisionId: decision.id,
@@ -862,6 +919,109 @@ function resolveApplyOptions(campaignEndsAtOrOpts, opts) {
         campaignEndsAt: campaignEndsAtOrOpts ?? opts?.campaignEndsAt ?? null,
         opts: opts ?? {},
     };
+}
+/**
+ * اعمال ویرایش دستی مدیر (اصلاح قیمت نهایی یوزر و روشن/خاموش کردن تخفیف نمایشی خط‌خورده) روی تصمیم پیش از ارسال به فروشگاه.
+ * خط قرمز کف سود پس از این تابع همچنان در `applyDecision` به‌صورت قطعی کنترل می‌شود.
+ */
+async function applyHumanOverrideToDecision(decisionId, override) {
+    const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
+    if (!d)
+        return { ok: false, finalPrice: 0, message: "تصمیم یافت نشد" };
+    const [p] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId)).limit(1);
+    if (!p)
+        return { ok: false, finalPrice: 0, message: "محصول یافت نشد" };
+    const nextFinal = override.finalPrice != null && Number.isFinite(Number(override.finalPrice)) && Number(override.finalPrice) > 0
+        ? Math.round(Number(override.finalPrice))
+        : Math.round(d.finalPrice ?? 0);
+    if (nextFinal <= 0) {
+        return { ok: false, finalPrice: 0, message: "قیمت نهایی یوزر نامعتبر است" };
+    }
+    let nextBase = nextFinal;
+    let nextPct = 0;
+    let nextCampaign = d.campaignType ?? "none";
+    let nextCampaignName = d.campaignName;
+    let nextBadge = d.badgeTheme ?? "green-orange";
+    let floorConfirmed = false;
+    const disableDiscount = override.useDisplayDiscount === false ||
+        (override.discountPct != null && Number.isFinite(Number(override.discountPct)) && Number(override.discountPct) <= 0);
+    if (disableDiscount) {
+        nextBase = nextFinal;
+        nextPct = 0;
+        nextCampaign = "none";
+        nextCampaignName = null;
+    }
+    else {
+        const wantsDiscount = override.useDisplayDiscount === true ||
+            (override.discountPct != null && Number(override.discountPct) > 0) ||
+            (override.basePrice != null && Number(override.basePrice) > nextFinal) ||
+            ((d.discountPct ?? 0) > 0 && (d.basePrice ?? 0) > nextFinal);
+        if (wantsDiscount) {
+            let pct = override.discountPct != null && Number.isFinite(Number(override.discountPct)) && Number(override.discountPct) > 0
+                ? Math.max(1, Math.min(90, Math.round(Number(override.discountPct))))
+                : override.basePrice != null && Number.isFinite(Number(override.basePrice)) && Number(override.basePrice) > nextFinal
+                    ? Math.max(1, Math.min(90, Math.floor(((Number(override.basePrice) - nextFinal) / Number(override.basePrice)) * 100)))
+                    : Math.max(1, Math.min(90, Math.round(d.discountPct ?? 10)));
+            nextBase = (0, discount_1.calibrateBaseForPct)(nextFinal, pct);
+            nextPct = pct;
+            floorConfirmed = Math.round(nextBase * (1 - nextPct / 100)) === nextFinal;
+            if (override.campaignType && ["none", "flash", "featured", "timed_sale"].includes(override.campaignType)) {
+                nextCampaign = override.campaignType;
+                nextCampaignName =
+                    nextCampaign === "flash"
+                        ? "پیشنهاد لحظه‌ای"
+                        : nextCampaign === "featured"
+                            ? "پیشنهاد شگفت‌انگیز"
+                            : nextCampaign === "timed_sale"
+                                ? "فرصت زمان‌دار"
+                                : null;
+                nextBadge =
+                    nextCampaign === "flash" ? "gold-red" : nextCampaign === "featured" ? "red-purple" : "green-orange";
+            }
+        }
+    }
+    const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, p.costPrice ?? 0);
+    const netProfitToman = effectiveCost > 0 ? nextFinal - effectiveCost : 0;
+    const netMarginPct = effectiveCost > 0 ? Math.round(((nextFinal - effectiveCost) / effectiveCost) * 10000) / 100 : 0;
+    const idempotencyKey = (0, connectors_1.buildIdempotencyKey)({
+        productId: p.id,
+        sku: p.sku,
+        basePrice: nextBase,
+        finalPrice: nextFinal,
+        discountPct: nextPct,
+        campaignType: nextCampaign,
+        decisionId: d.id,
+        confidence: d.confidence,
+    });
+    const nextSteps = [
+        ...(Array.isArray(d.steps) ? d.steps : []),
+        {
+            step: "human_edit",
+            title: "ویرایش دستی مدیر پیش از تأیید",
+            message: nextPct > 0
+                ? `قیمت نهایی یوزر به ${nextFinal.toLocaleString("fa-IR")} تومان با ${nextPct}% تخفیف نمایشی (سقف ${nextBase.toLocaleString("fa-IR")} تومان · کمپین: ${nextCampaign}) تنظیم شد`
+                : `قیمت مستقیم نهایی یوزر به ${nextFinal.toLocaleString("fa-IR")} تومان بدون تخفیف نمایشی تنظیم شد`,
+            level: "info",
+            data: { finalPrice: nextFinal, basePrice: nextBase, discountPct: nextPct, campaignType: nextCampaign },
+        },
+    ];
+    await index_ts_1.db
+        .update(schema_1.priceDecisions)
+        .set({
+        finalPrice: nextFinal,
+        basePrice: nextBase,
+        discountPct: nextPct,
+        campaignType: nextCampaign,
+        campaignName: nextCampaignName,
+        badgeTheme: nextBadge,
+        floorConfirmed,
+        netProfitToman,
+        netMarginPct,
+        idempotencyKey,
+        steps: nextSteps,
+    })
+        .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
+    return { ok: true, finalPrice: nextFinal };
 }
 async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
     const { campaignEndsAt, opts: resolvedOpts } = resolveApplyOptions(campaignEndsAtOrOpts, opts);

@@ -90,6 +90,10 @@ async function run() {
           name = EXCLUDED.name,
           category = EXCLUDED.category,
           store_external_id = EXCLUDED.store_external_id,
+          cost_price = CASE WHEN EXCLUDED.cost_price > 0 THEN EXCLUDED.cost_price ELSE products.cost_price END,
+          current_base_price = CASE WHEN products.last_decision_id IS NULL THEN EXCLUDED.current_base_price ELSE products.current_base_price END,
+          current_final_price = CASE WHEN products.last_decision_id IS NULL THEN EXCLUDED.current_final_price ELSE products.current_final_price END,
+          current_discount_pct = CASE WHEN products.last_decision_id IS NULL THEN EXCLUDED.current_discount_pct ELSE products.current_discount_pct END,
           auto_apply = CASE WHEN EXCLUDED.auto_apply THEN products.auto_apply ELSE false END,
           updated_at = NOW()
         RETURNING id;

@@ -50,6 +50,10 @@ const labels: Record<string, string> = {
   suspectLowBandPct: "باند بدگمانی پایین R1 زیر مرجع ٪ (تشخیص دام قیمتی)",
   freshCutoffDays: "آستانه تازگی «به‌روز» برای طبقه‌بندی R0/R1 (روز)",
   minClusterMembers: "حداقل اعضای خوشه برای تایید هسته R0",
+  liquidationGuard: "فیلتر ریاضی فروشنده منفرد نقدکننده انبار / حراجی",
+  liquidationMinBodySellers: "حداقل فروشندگان بدنه بازار برای فیلتر حراجی",
+  liquidationStepGapPct: "حداقل شکاف پله‌ای تک‌فروشنده حراجی با نفر دوم ٪",
+  liquidationBodyGapPct: "حداقل فاصله تک‌فروشنده حراجی با میانه بازار ٪",
   aggregation: "۳) تجمیع و کشف قیمت معیار بازار",
   trimPct: "درصد برش دو سر بازار (trimmed mean)",
   recencyHalfLifeDays: "نیمه‌عمر وزن تازگی (روز)",
@@ -87,7 +91,10 @@ const labels: Record<string, string> = {
   hysteresisPct: "آستانه هیسترزیس (جلوگیری از نوسان جزئی) ٪",
   minFreshRatio: "حداقل نسبت پیشنهادهای به‌روز از کل معتبرها (0-1)",
   profitApproveMarginPct: "حداقل حاشیه سود برای اعمال خودکار ٪ (۰ = هر قیمت بالای کف سود؛ بیشتر = ریویو)",
+  requireHumanApproval: "نظارت اجباری مدیر پیش از اعمال قیمت روی فروشگاه (صف بازبینی)",
   discount: "۷) کشف سقف واقعی بازار (معیار تخفیف) و اعمال درصد تخفیف روی کف",
+  "discount.enabled": "فعال بودن تخفیف نمایشی (قیمت خط‌خورده و درصد تخفیف)",
+  referencePriority: "اولویت مرجع تخفیف نمایشی (سقف بازار یا سابقه قیمت خودی)",
   mode: "روش کشف سقف قیمت بازار (معیار تخفیف)",
   basePriceMode: "روش پایه کشف سقف (basePriceMode)",
   marketUpperPercentile: "صدک سقف بازار تحت رصد (مثلاً ۸۵ یعنی صدک ۸۵ فروشندگان معتبر بدون پرت)",
@@ -130,6 +137,11 @@ const labels: Record<string, string> = {
   anchorOverrideMinProb: "حداقل احتمال اعتبار لنگر برای عبور از سقف فاصله (0-1)",
   anchorOverrideMaxGapPct: "حداکثر فاصله مجاز لنگر تاییدشده از مرجع ٪",
   adaptiveClusterRadius: "شعاع خوشه‌بندی تطبیقی بر اساس پراکندگی بازار",
+  chaseConfirmedLow: "رقابت مستقیم با ارزان‌ترین فروشنده تاییدشده (chaseConfirmedLow)",
+  calibratedConfidence: "اعتماد کالیبره‌شده v2",
+  minCalibratedConfidence: "حداقل اعتماد کالیبره‌شده برای اعمال (0-1)",
+  conflictGateWhenCalibrated: "حساسیت دروازه تعارض در حالت کالیبره",
+  supervisorMarketCalibrated: "ارزیابی بازار کالیبره‌شده در ناظر",
 };
 
 const gateTitles: Record<string, string> = {
@@ -173,6 +185,10 @@ const selectOptions: Record<string, { value: string; label: string }[]> = {
     { value: "market_upper", label: "صدک بالای بازار (market_upper)" },
     { value: "cluster_ceiling", label: "سقف خوشه بالایی (cluster_ceiling)" },
     { value: "markup", label: "افزایش درصدی روی کف (markup)" },
+  ],
+  "discount.referencePriority": [
+    { value: "market_first", label: "اولویت سقف واقعی بازار ترب (پیشنهادی برای رقابت)" },
+    { value: "own_price_first", label: "اولویت سابقه قیمت خودی سایت (سازگار با ۴.۲.۱)" },
   ],
   "supervisor.mode": [
     { value: "hybrid_subq_and_local", label: "ترکیبی SubQ SystemOne API + موتور آنی محلی (پیشنهادی)" },
@@ -443,14 +459,14 @@ export function ProfileEditor({ profiles }: { profiles: PricingProfile[] }) {
             !q ||
             sectionTitle.toLowerCase().includes(q) ||
             sec.toLowerCase().includes(q) ||
-            entries.some(([k]) => (labels[k] ?? k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
+            entries.some(([k]) => (labels[`${sec}.${k}`] ?? labels[k] ?? k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
 
           if (!sectionMatches) return null;
 
           const visibleEntries =
             !q || sectionTitle.toLowerCase().includes(q) || sec.toLowerCase().includes(q)
               ? entries
-              : entries.filter(([k]) => (labels[k] ?? k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
+              : entries.filter(([k]) => (labels[`${sec}.${k}`] ?? labels[k] ?? k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
 
           const isOpen = q ? true : Boolean(openMap[sec]);
 
@@ -610,20 +626,21 @@ export function ProfileEditor({ profiles }: { profiles: PricingProfile[] }) {
                 <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
                   {visibleEntries.map(([k, v]) => {
                     const opts = selectOptions[`${sec}.${k}`] ?? selectOptions[k];
+                    const fieldLabel = labels[`${sec}.${k}`] ?? labels[k] ?? k;
                     if (typeof v === "boolean") {
                       return (
                         <div key={k} className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-3">
                           <Switch
                             checked={v}
                             onChange={(next) => setField(sec, k, next)}
-                            label={labels[k] ?? k}
+                            label={fieldLabel}
                           />
                         </div>
                       );
                     }
                     return (
                       <div key={k}>
-                        <label className="label">{labels[k] ?? k}</label>
+                        <label className="label">{fieldLabel}</label>
                         {Array.isArray(v) ? (
                           <input
                             className="input"
@@ -914,8 +931,8 @@ export function AISettingsPanel({ initial }: { initial: AIStatus }) {
       )}
       <div className="grid gap-4 lg:grid-cols-2">
         <ProviderCard
-          title="هوش مصنوعی مکمل (OpenAI-compatible)"
-          desc="برای استخراج پیشنهادها از HTML، نظر دوم روی تصمیم‌های کم‌اعتماد و تأیید تطابق کالا. با هر سرویس سازگار با OpenAI (OpenAI, OpenRouter, Groq, Ollama و ...) کار می‌کند."
+          title="هوش مصنوعی تطبیق پنل ترب (OpenAI-compatible)"
+          desc="هوش مصنوعی فقط برای تشخیص و ادغام پنل‌های هم‌سان در ترب و استخراج HTML استفاده می‌شود و هیچ‌گونه نقشی در تعیین، تغییر یا رد قیمت ندارد."
           status={status.ai}
           draft={ai}
           onChange={setAi}
@@ -926,8 +943,8 @@ export function AISettingsPanel({ initial }: { initial: AIStatus }) {
           keyPlaceholder="sk-..."
         />
         <ProviderCard
-          title="ناظر و تصمیم‌گیرنده بالاسر SubQ SystemOne"
-          desc="تصمیم‌گیرنده اصلی موتور (قانون ۳ بازه‌ای رد/ریویو/تأیید خودکار). توکن از این‌جا در دیتابیس ذخیره می‌شود و همان لحظه در همه استعلام‌ها (اجرای زمان‌بندی، دستی و API) استفاده می‌شود."
+          title="ناظر هویتی SubQ SystemOne (محرمانه)"
+          desc="محاسبه قیمت ۱۰۰٪ با ریاضیات قطعی انجام می‌شود؛ این سرویس در صورت فعال‌بودن فقط به تأیید تطابق عنوان محصول با پنل ترب کمک می‌کند و هرگز قیمت پیشنهادشده را تغییر یا رد نمی‌کند."
           status={status.subq}
           draft={subq}
           onChange={setSubq}

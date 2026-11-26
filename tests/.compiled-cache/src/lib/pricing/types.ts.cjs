@@ -47,6 +47,10 @@ exports.DEFAULT_PROFILE_CONFIG = {
         suspectLowBandPct: 12,
         freshCutoffDays: 5,
         minClusterMembers: 2,
+        liquidationGuard: true,
+        liquidationMinBodySellers: 4,
+        liquidationStepGapPct: 6,
+        liquidationBodyGapPct: 8,
     },
     aggregation: {
         method: "modal_consensus",
@@ -93,8 +97,11 @@ exports.DEFAULT_PROFILE_CONFIG = {
         minFreshRatio: 0.3,
         // ۰ = سازگاری کامل با ۴.۱.۱؛ برای محافظه‌کاری بیشتر مثلاً ۵ بگذارید.
         profitApproveMarginPct: 0,
+        requireHumanApproval: true,
     },
     discount: {
+        enabled: true,
+        referencePriority: "own_price_first",
         mode: "market_percentile_ceiling",
         basePriceMode: "market_ceiling",
         marketUpperPercentile: 85,

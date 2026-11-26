@@ -3,9 +3,9 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 const { deriveImportPrice } = require('../scripts/lib/import-price.cjs')
 
-test('I1. محصول ساده: قیمت/تخفیف/autoApply مثل قبل', () => {
+test('I1. محصول ساده: قیمت/تخفیف درست است و autoApply پیش‌فرض برای نظارت انسانی false است', () => {
   const r = deriveImportPrice({ productType: 'simple', price: 2600000, discount: 10, costPrice: 2300000 })
-  assert.deepEqual(r, { costPrice: 2300000, basePrice: 2600000, finalPrice: 2340000, discount: 10, autoApply: true, isVariable: false })
+  assert.deepEqual(r, { costPrice: 2300000, basePrice: 2600000, finalPrice: 2340000, discount: 10, autoApply: false, isVariable: false })
 })
 
 test('I2. بدون قیمت خرید ⇒ autoApply=false', () => {

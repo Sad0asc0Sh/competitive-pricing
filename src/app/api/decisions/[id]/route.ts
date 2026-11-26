@@ -2,6 +2,7 @@ import { db } from "@/db";
 import { competitorOffers, priceDecisions, products } from "@/db/schema";
 import { requireAdminAuth } from "@/lib/auth";
 import * as runnerService from "@/lib/services/runner";
+import { extractPrk } from "@/lib/sources/torob";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -22,11 +23,17 @@ export async function GET(req: Request, { params }: Ctx) {
 /**
  * POST /api/decisions/:id
  * body: {
- *   action: 'approve' | 'reject' | 'retry_sync',
+ *   action: 'approve' | 'reject' | 'retry_sync' | 'relink_torob',
  *   force?: boolean,
  *   allowBelowCost?: boolean,
  *   belowCostReason?: string,
- *   authorizedBy?: string
+ *   authorizedBy?: string,
+ *   finalPrice?: number | null,
+ *   useDisplayDiscount?: boolean | null,
+ *   basePrice?: number | null,
+ *   discountPct?: number | null,
+ *   campaignType?: string | null,
+ *   torobUrl?: string
  * }
  */
 export async function POST(req: Request, { params }: Ctx) {
@@ -45,6 +52,12 @@ export async function POST(req: Request, { params }: Ctx) {
     allowBelowCost?: boolean;
     belowCostReason?: string;
     authorizedBy?: string;
+    finalPrice?: number | null;
+    useDisplayDiscount?: boolean | null;
+    basePrice?: number | null;
+    discountPct?: number | null;
+    campaignType?: string | null;
+    torobUrl?: string;
   };
   const action = body.action;
   const force = body.force === true;
@@ -55,6 +68,55 @@ export async function POST(req: Request, { params }: Ctx) {
   if (action === "reject") {
     await runnerService.rejectDecision(decisionId);
     return NextResponse.json({ ok: true, message: "تصمیم رد شد" });
+  }
+
+  if (action === "relink_torob") {
+    const [d] = await db.select().from(priceDecisions).where(eq(priceDecisions.id, decisionId)).limit(1);
+    if (!d) {
+      return NextResponse.json({ ok: false, error: "تصمیم یافت نشد", message: "تصمیم یافت نشد" }, { status: 404 });
+    }
+    const rawUrl = typeof body.torobUrl === "string" ? body.torobUrl.trim() : "";
+    const isHttp = /^https?:\/\//i.test(rawUrl);
+    if (!rawUrl || (isHttp && !/^https?:\/\/([^/]+\.)?torob\.com\//i.test(rawUrl))) {
+      const msg = "لینک معتبر صفحه محصول ترب (torob.com/p/...) وارد کنید";
+      return NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
+    }
+    const prk = extractPrk(rawUrl, isHttp ? null : rawUrl);
+    if (!prk || prk.length < 3) {
+      const msg = "شناسه محصول ترب (prk) در لینک واردشده یافت نشد";
+      return NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
+    }
+    const normalizedUrl = isHttp ? rawUrl : `https://torob.com/p/${prk}/`;
+    await db
+      .update(products)
+      .set({
+        torobUrl: normalizedUrl,
+        torobPrk: prk,
+        torobDetailsUrl: null,
+        lockedUntil: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(products.id, d.productId));
+
+    if (d.status === "rejected" || d.status === "pending_review") {
+      await db
+        .update(priceDecisions)
+        .set({ status: "superseded", pushStatus: "superseded" })
+        .where(eq(priceDecisions.id, d.id));
+    }
+
+    const summary = await runnerService.runPricing({
+      trigger: "manual",
+      productIds: [d.productId],
+      runMode: "live",
+    });
+    return NextResponse.json({
+      ok: true,
+      message: `لینک ترب به شناسه ${prk} متصل شد و استعلام جدید در صف قرار گرفت`,
+      prk,
+      torobUrl: normalizedUrl,
+      summary,
+    });
   }
 
   if (action !== "approve" && action !== "retry_sync") {
@@ -86,7 +148,24 @@ export async function POST(req: Request, { params }: Ctx) {
   }
   const [p] = await db.select().from(products).where(eq(products.id, d.productId)).limit(1);
 
-  const finalPrice = d.finalPrice ?? 0;
+  const hasHumanOverride =
+    action === "approve" &&
+    (body.finalPrice != null ||
+      body.useDisplayDiscount != null ||
+      body.basePrice != null ||
+      body.discountPct != null ||
+      body.campaignType != null);
+
+  if (hasHumanOverride && body.finalPrice != null) {
+    const n = Number(body.finalPrice);
+    if (!Number.isFinite(n) || Math.round(n) <= 0) {
+      const msg = "قیمت نهایی یوزر نامعتبر است";
+      return NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
+    }
+  }
+
+  const finalPrice =
+    hasHumanOverride && body.finalPrice != null ? Math.round(Number(body.finalPrice)) : (d.finalPrice ?? 0);
   const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, p?.costPrice ?? 0);
   const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p?.currentHardFloorPrice ?? 0, effectiveCost);
 
@@ -118,6 +197,7 @@ export async function POST(req: Request, { params }: Ctx) {
   };
 
   type ExtendedRunner = typeof runnerService & {
+    applyHumanOverrideToDecision?: typeof runnerService.applyHumanOverrideToDecision;
     applyDecision: (
       id: number,
       campaignEndsAt?: Date | null,
@@ -144,6 +224,21 @@ export async function POST(req: Request, { params }: Ctx) {
   };
 
   const extRunner = runnerService as ExtendedRunner;
+
+  if (hasHumanOverride && typeof extRunner.applyHumanOverrideToDecision === "function") {
+    const ov = await extRunner.applyHumanOverrideToDecision(decisionId, {
+      finalPrice: body.finalPrice,
+      useDisplayDiscount: body.useDisplayDiscount,
+      basePrice: body.basePrice,
+      discountPct: body.discountPct,
+      campaignType: body.campaignType,
+    });
+    if (!ov.ok) {
+      const msg = ov.message || "خطا در ثبت ویرایش دستی";
+      return NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
+    }
+  }
+
   const r =
     action === "retry_sync" && typeof extRunner.retryDecisionSync === "function"
       ? await extRunner.retryDecisionSync(decisionId, applyOpts)

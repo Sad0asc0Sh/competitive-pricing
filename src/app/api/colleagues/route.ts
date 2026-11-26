@@ -149,7 +149,7 @@ export async function POST(req: Request) {
       .update(products)
       .set({
         supplierQuotes: existingQuotes,
-        costPrice: resolution.effectiveCostPrice > 0 ? resolution.effectiveCostPrice : product.costPrice,
+        // هزینه انبار (costPrice) با قیمت همکار بازنویسی یا با سربار باد نمی‌شود؛ قیمت جایگزینی در replacementCost ذخیره می‌شود
         ...(resolution.lowestQuoteCost && resolution.lowestQuoteCost > 0
           ? {
               replacementCost: Math.round(resolution.lowestQuoteCost),
@@ -172,7 +172,7 @@ export async function POST(req: Request) {
   );
 
   let runSummary = null;
-  if (body.triggerRun !== false && updatedProductIds.size > 0) {
+  if (body.triggerRun === true && updatedProductIds.size > 0) {
     runSummary = await runPricing({
       trigger: "api",
       productIds: [...updatedProductIds],

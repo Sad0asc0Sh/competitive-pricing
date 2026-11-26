@@ -50,6 +50,10 @@ const labels = {
     suspectLowBandPct: "باند بدگمانی پایین R1 زیر مرجع ٪ (تشخیص دام قیمتی)",
     freshCutoffDays: "آستانه تازگی «به‌روز» برای طبقه‌بندی R0/R1 (روز)",
     minClusterMembers: "حداقل اعضای خوشه برای تایید هسته R0",
+    liquidationGuard: "فیلتر ریاضی فروشنده منفرد نقدکننده انبار / حراجی",
+    liquidationMinBodySellers: "حداقل فروشندگان بدنه بازار برای فیلتر حراجی",
+    liquidationStepGapPct: "حداقل شکاف پله‌ای تک‌فروشنده حراجی با نفر دوم ٪",
+    liquidationBodyGapPct: "حداقل فاصله تک‌فروشنده حراجی با میانه بازار ٪",
     aggregation: "۳) تجمیع و کشف قیمت معیار بازار",
     trimPct: "درصد برش دو سر بازار (trimmed mean)",
     recencyHalfLifeDays: "نیمه‌عمر وزن تازگی (روز)",
@@ -87,7 +91,10 @@ const labels = {
     hysteresisPct: "آستانه هیسترزیس (جلوگیری از نوسان جزئی) ٪",
     minFreshRatio: "حداقل نسبت پیشنهادهای به‌روز از کل معتبرها (0-1)",
     profitApproveMarginPct: "حداقل حاشیه سود برای اعمال خودکار ٪ (۰ = هر قیمت بالای کف سود؛ بیشتر = ریویو)",
+    requireHumanApproval: "نظارت اجباری مدیر پیش از اعمال قیمت روی فروشگاه (صف بازبینی)",
     discount: "۷) کشف سقف واقعی بازار (معیار تخفیف) و اعمال درصد تخفیف روی کف",
+    "discount.enabled": "فعال بودن تخفیف نمایشی (قیمت خط‌خورده و درصد تخفیف)",
+    referencePriority: "اولویت مرجع تخفیف نمایشی (سقف بازار یا سابقه قیمت خودی)",
     mode: "روش کشف سقف قیمت بازار (معیار تخفیف)",
     basePriceMode: "روش پایه کشف سقف (basePriceMode)",
     marketUpperPercentile: "صدک سقف بازار تحت رصد (مثلاً ۸۵ یعنی صدک ۸۵ فروشندگان معتبر بدون پرت)",
@@ -130,6 +137,11 @@ const labels = {
     anchorOverrideMinProb: "حداقل احتمال اعتبار لنگر برای عبور از سقف فاصله (0-1)",
     anchorOverrideMaxGapPct: "حداکثر فاصله مجاز لنگر تاییدشده از مرجع ٪",
     adaptiveClusterRadius: "شعاع خوشه‌بندی تطبیقی بر اساس پراکندگی بازار",
+    chaseConfirmedLow: "رقابت مستقیم با ارزان‌ترین فروشنده تاییدشده (chaseConfirmedLow)",
+    calibratedConfidence: "اعتماد کالیبره‌شده v2",
+    minCalibratedConfidence: "حداقل اعتماد کالیبره‌شده برای اعمال (0-1)",
+    conflictGateWhenCalibrated: "حساسیت دروازه تعارض در حالت کالیبره",
+    supervisorMarketCalibrated: "ارزیابی بازار کالیبره‌شده در ناظر",
 };
 const gateTitles = {
     identity_match: "مقیاس ۱ (ورودی): تطابق هویت و کد مدل کالا در ترب",
@@ -171,6 +183,10 @@ const selectOptions = {
         { value: "market_upper", label: "صدک بالای بازار (market_upper)" },
         { value: "cluster_ceiling", label: "سقف خوشه بالایی (cluster_ceiling)" },
         { value: "markup", label: "افزایش درصدی روی کف (markup)" },
+    ],
+    "discount.referencePriority": [
+        { value: "market_first", label: "اولویت سقف واقعی بازار ترب (پیشنهادی برای رقابت)" },
+        { value: "own_price_first", label: "اولویت سابقه قیمت خودی سایت (سازگار با ۴.۲.۱)" },
     ],
     "supervisor.mode": [
         { value: "hybrid_subq_and_local", label: "ترکیبی SubQ SystemOne API + موتور آنی محلی (پیشنهادی)" },
@@ -334,12 +350,12 @@ function ProfileEditor({ profiles }) {
                     const sectionMatches = !q ||
                         sectionTitle.toLowerCase().includes(q) ||
                         sec.toLowerCase().includes(q) ||
-                        entries.some(([k]) => (labels[k] ?? k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
+                        entries.some(([k]) => (labels[`${sec}.${k}`] ?? labels[k] ?? k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
                     if (!sectionMatches)
                         return null;
                     const visibleEntries = !q || sectionTitle.toLowerCase().includes(q) || sec.toLowerCase().includes(q)
                         ? entries
-                        : entries.filter(([k]) => (labels[k] ?? k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
+                        : entries.filter(([k]) => (labels[`${sec}.${k}`] ?? labels[k] ?? k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
                     const isOpen = q ? true : Boolean(openMap[sec]);
                     return ((0, jsx_runtime_1.jsx)(ui_1.CollapsibleSection, { title: sectionTitle, open: isOpen, onOpenChange: (next) => setOpenMap((m) => ({ ...m, [sec]: next })), className: sec === "supervisor"
                             ? "border-2 border-indigo-300 bg-indigo-50/15"
@@ -350,10 +366,11 @@ function ProfileEditor({ profiles }) {
                                                 return ((0, jsx_runtime_1.jsxs)("div", { className: "rounded-xl border border-slate-200 bg-slate-50/70 p-3", children: [(0, jsx_runtime_1.jsx)("div", { className: "mb-2 text-xs font-bold text-slate-800", children: gateTitles[gKey] ?? gKey }), (0, jsx_runtime_1.jsxs)("div", { className: "grid grid-cols-1 gap-2 sm:grid-cols-3", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label text-[11px] text-rose-700", children: "\u0631\u062F \u0632\u06CC\u0631 (\u066A)" }), (0, jsx_runtime_1.jsx)("input", { className: "input num text-xs", type: "number", min: 5, max: 90, value: g.rejectBelowPct, onChange: (e) => setGateField(gKey, "rejectBelowPct", Number(e.target.value)) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label text-[11px] text-emerald-700", children: "\u062A\u0627\u06CC\u06CC\u062F \u0628\u0627\u0644\u0627\u06CC (\u066A)" }), (0, jsx_runtime_1.jsx)("input", { className: "input num text-xs", type: "number", min: 20, max: 99, value: g.approveAbovePct, onChange: (e) => setGateField(gKey, "approveAbovePct", Number(e.target.value)) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label text-[11px]", children: "\u0648\u0632\u0646 (0..1)" }), (0, jsx_runtime_1.jsx)("input", { className: "input num text-xs", type: "number", step: 0.05, min: 0.05, max: 1, value: g.weight, onChange: (e) => setGateField(gKey, "weight", Number(e.target.value)) })] })] })] }, gKey));
                                             }) })] })] })) : ((0, jsx_runtime_1.jsx)("div", { className: "grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-3", children: visibleEntries.map(([k, v]) => {
                                 const opts = selectOptions[`${sec}.${k}`] ?? selectOptions[k];
+                                const fieldLabel = labels[`${sec}.${k}`] ?? labels[k] ?? k;
                                 if (typeof v === "boolean") {
-                                    return ((0, jsx_runtime_1.jsx)("div", { className: "rounded-xl border border-slate-200/80 bg-slate-50/50 p-3", children: (0, jsx_runtime_1.jsx)(ui_1.Switch, { checked: v, onChange: (next) => setField(sec, k, next), label: labels[k] ?? k }) }, k));
+                                    return ((0, jsx_runtime_1.jsx)("div", { className: "rounded-xl border border-slate-200/80 bg-slate-50/50 p-3", children: (0, jsx_runtime_1.jsx)(ui_1.Switch, { checked: v, onChange: (next) => setField(sec, k, next), label: fieldLabel }) }, k));
                                 }
-                                return ((0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: labels[k] ?? k }), Array.isArray(v) ? ((0, jsx_runtime_1.jsx)("input", { className: "input", value: v.join(","), onChange: (e) => setField(sec, k, e.target.value
+                                return ((0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("label", { className: "label", children: fieldLabel }), Array.isArray(v) ? ((0, jsx_runtime_1.jsx)("input", { className: "input", value: v.join(","), onChange: (e) => setField(sec, k, e.target.value
                                                 .split(",")
                                                 .map((s) => s.trim())
                                                 .filter(Boolean)) })) : opts ? ((0, jsx_runtime_1.jsx)("select", { className: "input", value: String(v), onChange: (e) => setField(sec, k, e.target.value), children: opts.map((o) => ((0, jsx_runtime_1.jsx)("option", { value: o.value, children: o.label }, o.value))) })) : typeof v === "string" ? ((0, jsx_runtime_1.jsx)("input", { className: "input", value: v, onChange: (e) => setField(sec, k, e.target.value) })) : ((0, jsx_runtime_1.jsx)("input", { className: "input num", type: "number", step: "any", value: v, onChange: (e) => setField(sec, k, Number(e.target.value)) }))] }, k));
@@ -440,7 +457,7 @@ function AISettingsPanel({ initial }) {
         setSubq((s) => ({ ...s, apiKey: "" }));
         router.refresh();
     });
-    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-3", children: [msg && ((0, jsx_runtime_1.jsxs)("div", { className: `rounded-xl border px-3.5 py-2.5 text-xs font-medium ${msg.ok ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-rose-300 bg-rose-50 text-rose-800"}`, children: [msg.ok ? "✅ " : "❌ ", msg.text] })), (0, jsx_runtime_1.jsxs)("div", { className: "grid gap-4 lg:grid-cols-2", children: [(0, jsx_runtime_1.jsx)(ProviderCard, { title: "\u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC \u0645\u06A9\u0645\u0644 (OpenAI-compatible)", desc: "\u0628\u0631\u0627\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u067E\u06CC\u0634\u0646\u0647\u0627\u062F\u0647\u0627 \u0627\u0632 HTML\u060C \u0646\u0638\u0631 \u062F\u0648\u0645 \u0631\u0648\u06CC \u062A\u0635\u0645\u06CC\u0645\u200C\u0647\u0627\u06CC \u06A9\u0645\u200C\u0627\u0639\u062A\u0645\u0627\u062F \u0648 \u062A\u0623\u06CC\u06CC\u062F \u062A\u0637\u0627\u0628\u0642 \u06A9\u0627\u0644\u0627. \u0628\u0627 \u0647\u0631 \u0633\u0631\u0648\u06CC\u0633 \u0633\u0627\u0632\u06AF\u0627\u0631 \u0628\u0627 OpenAI (OpenAI, OpenRouter, Groq, Ollama \u0648 ...) \u06A9\u0627\u0631 \u0645\u06CC\u200C\u06A9\u0646\u062F.", status: status.ai, draft: ai, onChange: setAi, onSave: () => call("ai", "save", ai), onTest: () => call("ai", "test", ai), onClear: () => setClearTarget("ai"), pending: pending, keyPlaceholder: "sk-..." }), (0, jsx_runtime_1.jsx)(ProviderCard, { title: "\u0646\u0627\u0638\u0631 \u0648 \u062A\u0635\u0645\u06CC\u0645\u200C\u06AF\u06CC\u0631\u0646\u062F\u0647 \u0628\u0627\u0644\u0627\u0633\u0631 SubQ SystemOne", desc: "\u062A\u0635\u0645\u06CC\u0645\u200C\u06AF\u06CC\u0631\u0646\u062F\u0647 \u0627\u0635\u0644\u06CC \u0645\u0648\u062A\u0648\u0631 (\u0642\u0627\u0646\u0648\u0646 \u06F3 \u0628\u0627\u0632\u0647\u200C\u0627\u06CC \u0631\u062F/\u0631\u06CC\u0648\u06CC\u0648/\u062A\u0623\u06CC\u06CC\u062F \u062E\u0648\u062F\u06A9\u0627\u0631). \u062A\u0648\u06A9\u0646 \u0627\u0632 \u0627\u06CC\u0646\u200C\u062C\u0627 \u062F\u0631 \u062F\u06CC\u062A\u0627\u0628\u06CC\u0633 \u0630\u062E\u06CC\u0631\u0647 \u0645\u06CC\u200C\u0634\u0648\u062F \u0648 \u0647\u0645\u0627\u0646 \u0644\u062D\u0638\u0647 \u062F\u0631 \u0647\u0645\u0647 \u0627\u0633\u062A\u0639\u0644\u0627\u0645\u200C\u0647\u0627 (\u0627\u062C\u0631\u0627\u06CC \u0632\u0645\u0627\u0646\u200C\u0628\u0646\u062F\u06CC\u060C \u062F\u0633\u062A\u06CC \u0648 API) \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u0645\u06CC\u200C\u0634\u0648\u062F.", status: status.subq, draft: subq, onChange: setSubq, onSave: () => call("subq", "save", subq), onTest: () => call("subq", "test", subq), onClear: () => setClearTarget("subq"), pending: pending, keyPlaceholder: "SUBQ_API_KEY" })] }), (0, jsx_runtime_1.jsx)(ui_1.ConfirmDialog, { open: Boolean(clearTarget), title: "\u062D\u0630\u0641 \u062A\u0648\u06A9\u0646 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u0627\u0632 \u062F\u06CC\u062A\u0627\u0628\u06CC\u0633", description: "\u0622\u06CC\u0627 \u0627\u0632 \u062D\u0630\u0641 \u062A\u0648\u06A9\u0646 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u0627\u06CC\u0646 \u0633\u0631\u0648\u06CC\u0633 \u0645\u0637\u0645\u0626\u0646 \u0647\u0633\u062A\u06CC\u062F\u061F \u067E\u0633 \u0627\u0632 \u062D\u0630\u0641\u060C \u062F\u0631 \u0635\u0648\u0631\u062A \u0648\u062C\u0648\u062F \u0645\u0642\u062F\u0627\u0631 \u062F\u0631 \u0641\u0627\u06CC\u0644 .env \u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 \u0645\u06CC\u200C\u0634\u0648\u062F.", confirmLabel: "\u067E\u0627\u06A9\u200C\u06A9\u0631\u062F\u0646 \u062A\u0648\u06A9\u0646", tone: "danger", busy: pending, onConfirm: () => {
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-3", children: [msg && ((0, jsx_runtime_1.jsxs)("div", { className: `rounded-xl border px-3.5 py-2.5 text-xs font-medium ${msg.ok ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-rose-300 bg-rose-50 text-rose-800"}`, children: [msg.ok ? "✅ " : "❌ ", msg.text] })), (0, jsx_runtime_1.jsxs)("div", { className: "grid gap-4 lg:grid-cols-2", children: [(0, jsx_runtime_1.jsx)(ProviderCard, { title: "\u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC \u062A\u0637\u0628\u06CC\u0642 \u067E\u0646\u0644 \u062A\u0631\u0628 (OpenAI-compatible)", desc: "\u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC \u0641\u0642\u0637 \u0628\u0631\u0627\u06CC \u062A\u0634\u062E\u06CC\u0635 \u0648 \u0627\u062F\u063A\u0627\u0645 \u067E\u0646\u0644\u200C\u0647\u0627\u06CC \u0647\u0645\u200C\u0633\u0627\u0646 \u062F\u0631 \u062A\u0631\u0628 \u0648 \u0627\u0633\u062A\u062E\u0631\u0627\u062C HTML \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u0645\u06CC\u200C\u0634\u0648\u062F \u0648 \u0647\u06CC\u0686\u200C\u06AF\u0648\u0646\u0647 \u0646\u0642\u0634\u06CC \u062F\u0631 \u062A\u0639\u06CC\u06CC\u0646\u060C \u062A\u063A\u06CC\u06CC\u0631 \u06CC\u0627 \u0631\u062F \u0642\u06CC\u0645\u062A \u0646\u062F\u0627\u0631\u062F.", status: status.ai, draft: ai, onChange: setAi, onSave: () => call("ai", "save", ai), onTest: () => call("ai", "test", ai), onClear: () => setClearTarget("ai"), pending: pending, keyPlaceholder: "sk-..." }), (0, jsx_runtime_1.jsx)(ProviderCard, { title: "\u0646\u0627\u0638\u0631 \u0647\u0648\u06CC\u062A\u06CC SubQ SystemOne (\u0645\u062D\u0631\u0645\u0627\u0646\u0647)", desc: "\u0645\u062D\u0627\u0633\u0628\u0647 \u0642\u06CC\u0645\u062A \u06F1\u06F0\u06F0\u066A \u0628\u0627 \u0631\u06CC\u0627\u0636\u06CC\u0627\u062A \u0642\u0637\u0639\u06CC \u0627\u0646\u062C\u0627\u0645 \u0645\u06CC\u200C\u0634\u0648\u062F\u061B \u0627\u06CC\u0646 \u0633\u0631\u0648\u06CC\u0633 \u062F\u0631 \u0635\u0648\u0631\u062A \u0641\u0639\u0627\u0644\u200C\u0628\u0648\u062F\u0646 \u0641\u0642\u0637 \u0628\u0647 \u062A\u0623\u06CC\u06CC\u062F \u062A\u0637\u0627\u0628\u0642 \u0639\u0646\u0648\u0627\u0646 \u0645\u062D\u0635\u0648\u0644 \u0628\u0627 \u067E\u0646\u0644 \u062A\u0631\u0628 \u06A9\u0645\u06A9 \u0645\u06CC\u200C\u06A9\u0646\u062F \u0648 \u0647\u0631\u06AF\u0632 \u0642\u06CC\u0645\u062A \u067E\u06CC\u0634\u0646\u0647\u0627\u062F\u0634\u062F\u0647 \u0631\u0627 \u062A\u063A\u06CC\u06CC\u0631 \u06CC\u0627 \u0631\u062F \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F.", status: status.subq, draft: subq, onChange: setSubq, onSave: () => call("subq", "save", subq), onTest: () => call("subq", "test", subq), onClear: () => setClearTarget("subq"), pending: pending, keyPlaceholder: "SUBQ_API_KEY" })] }), (0, jsx_runtime_1.jsx)(ui_1.ConfirmDialog, { open: Boolean(clearTarget), title: "\u062D\u0630\u0641 \u062A\u0648\u06A9\u0646 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u0627\u0632 \u062F\u06CC\u062A\u0627\u0628\u06CC\u0633", description: "\u0622\u06CC\u0627 \u0627\u0632 \u062D\u0630\u0641 \u062A\u0648\u06A9\u0646 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u0627\u06CC\u0646 \u0633\u0631\u0648\u06CC\u0633 \u0645\u0637\u0645\u0626\u0646 \u0647\u0633\u062A\u06CC\u062F\u061F \u067E\u0633 \u0627\u0632 \u062D\u0630\u0641\u060C \u062F\u0631 \u0635\u0648\u0631\u062A \u0648\u062C\u0648\u062F \u0645\u0642\u062F\u0627\u0631 \u062F\u0631 \u0641\u0627\u06CC\u0644 .env \u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 \u0645\u06CC\u200C\u0634\u0648\u062F.", confirmLabel: "\u067E\u0627\u06A9\u200C\u06A9\u0631\u062F\u0646 \u062A\u0648\u06A9\u0646", tone: "danger", busy: pending, onConfirm: () => {
                     if (clearTarget === "ai")
                         call("ai", "clear", ai);
                     else if (clearTarget === "subq")

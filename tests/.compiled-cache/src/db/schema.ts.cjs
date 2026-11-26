@@ -64,7 +64,7 @@ exports.products = (0, pg_core_1.pgTable)("products", {
     showInFeatured: (0, pg_core_1.boolean)("show_in_featured").default(true).notNull(),
     profileId: (0, pg_core_1.integer)("profile_id").references(() => exports.pricingProfiles.id, { onDelete: "set null" }),
     /** اگر false باشد، هر تصمیم نیاز به تأیید انسانی دارد */
-    autoApply: (0, pg_core_1.boolean)("auto_apply").default(true).notNull(),
+    autoApply: (0, pg_core_1.boolean)("auto_apply").default(false).notNull(),
     status: (0, pg_core_1.varchar)("status", { length: 30 }).default("active").notNull(), // active | paused | needs_review
     currentBasePrice: (0, pg_core_1.integer)("current_base_price"),
     currentFinalPrice: (0, pg_core_1.integer)("current_final_price"),

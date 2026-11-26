@@ -119,7 +119,7 @@ async function POST(req) {
             .update(schema_1.products)
             .set({
             supplierQuotes: existingQuotes,
-            costPrice: resolution.effectiveCostPrice > 0 ? resolution.effectiveCostPrice : product.costPrice,
+            // هزینه انبار (costPrice) با قیمت همکار بازنویسی یا با سربار باد نمی‌شود؛ قیمت جایگزینی در replacementCost ذخیره می‌شود
             ...(resolution.lowestQuoteCost && resolution.lowestQuoteCost > 0
                 ? {
                     replacementCost: Math.round(resolution.lowestQuoteCost),
@@ -135,7 +135,7 @@ async function POST(req) {
     }
     await (0, bootstrap_1.logActivity)("colleagues", `لیست قیمت همکاران برای ${updatedProductIds.size} محصول بروزرسانی شد`, { updatedCount: updatedProductIds.size, notFoundSkus });
     let runSummary = null;
-    if (body.triggerRun !== false && updatedProductIds.size > 0) {
+    if (body.triggerRun === true && updatedProductIds.size > 0) {
         runSummary = await (0, runner_1.runPricing)({
             trigger: "api",
             productIds: [...updatedProductIds],

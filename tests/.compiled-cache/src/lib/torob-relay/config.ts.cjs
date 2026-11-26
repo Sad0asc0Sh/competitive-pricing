@@ -76,7 +76,7 @@ async function readStoredTorobRelay() {
     }
     let value = null;
     try {
-        const { pool } = await Promise.resolve().then(() => __importStar(require("@/db")));
+        const { pool } = await Promise.resolve().then(() => __importStar(require("../../db/index.ts")));
         const res = await pool.query("select value from settings where key = $1 limit 1", [
             exports.TOROB_RELAY_SETTINGS_KEY,
         ]);
@@ -92,7 +92,7 @@ async function readStoredTorobRelay() {
     return value;
 }
 async function writeStoredTorobRelay(value) {
-    const { pool } = await Promise.resolve().then(() => __importStar(require("@/db")));
+    const { pool } = await Promise.resolve().then(() => __importStar(require("../../db/index.ts")));
     await pool.query(`insert into settings (key, value, updated_at)
      values ($1, $2::jsonb, now())
      on conflict (key) do update set value = excluded.value, updated_at = now()`, [exports.TOROB_RELAY_SETTINGS_KEY, JSON.stringify(value)]);

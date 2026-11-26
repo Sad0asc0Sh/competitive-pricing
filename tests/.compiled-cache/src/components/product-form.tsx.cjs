@@ -26,7 +26,7 @@ const empty = {
     minProfitAmount: "",
     preferredCampaignType: "auto",
     colleagueListText: "",
-    autoApply: true,
+    autoApply: false,
     showInFeatured: false,
 };
 function ProductForm({ initial, initialQuotes, onDone, }) {

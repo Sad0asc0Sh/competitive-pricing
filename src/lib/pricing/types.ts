@@ -88,6 +88,14 @@ export interface RawOffer {
   mergedSellerCount?: number;
 }
 
+export interface AIIdentityCheckMeta {
+  verdict: "match" | "no_match" | "uncertain";
+  primaryPrk: string | null;
+  matchedPrks: string[];
+  rejectedPrks: string[];
+  reasoning: string;
+}
+
 export interface MarketPriceTrend {
   direction: "falling" | "rising" | "stable" | "unknown";
   changePct30d: number;
@@ -140,10 +148,16 @@ export interface OfferEvaluation extends RawOffer {
   ageDays?: number | null;
 }
 
-export type OfferClass = "ok" | "confirmed_low" | "suspect_low" | "stale_low" | "high_outlier";
+export type OfferClass =
+  | "ok"
+  | "confirmed_low"
+  | "suspect_low"
+  | "stale_low"
+  | "liquidation_low"
+  | "high_outlier";
 
 export type OutlierMethod = "iqr" | "mad" | "band";
-export type AggregationMethod = "median" | "trimmed_mean" | "weighted_mean" | "modal_consensus";
+export type AggregationMethod = "median" | "trimmed_mean" | "weighted_mean" | "trimmed_weighted_mean" | "modal_consensus";
 export type SupplierSelectionMode = "priority_then_lowest" | "lowest_valid" | "conservative_high" | "weighted_priority";
 
 export type SgeoooleCampaignType = "flash" | "featured" | "timed_sale" | "none";
@@ -317,6 +331,14 @@ export interface PricingProfileConfig {
     freshCutoffDays: number;
     /** حداقل تعداد اعضای گروه برای تشخیص cluster در R0 */
     minClusterMembers: number;
+    /** فیلتر ریاضی فروشنده منفرد نقدکننده انبار / حراجی (بدون همراه) */
+    liquidationGuard?: boolean;
+    /** حداقل تعداد کل فروشندگان معتبر برای تشخیص بدنه بازار در گارد نقدکننده انبار */
+    liquidationMinBodySellers?: number;
+    /** حداقل شکاف با دومین فروشنده (٪) برای تشخیص فروشنده منفرد نقدکننده انبار */
+    liquidationStepGapPct?: number;
+    /** حداقل شکاف با میانه بدنه بازار (٪) برای تشخیص فروشنده منفرد نقدکننده انبار */
+    liquidationBodyGapPct?: number;
   };
   /** ---------- ۳) تجمیع و کشف قیمت معیار بازار ---------- */
   aggregation: {
@@ -380,9 +402,18 @@ export interface PricingProfileConfig {
      * اگر مثبت باشد، تصمیم‌های با حاشیه‌ی کمتر از این عدد به‌جای applied به pending_review می‌روند.
      */
     profitApproveMarginPct: number;
+    /**
+     * نظارت اجباری انسانی (پیش‌فرض true): هیچ تصمیمی در اجراهای لایو خودکار روی فروشگاه
+     * اعمال نمی‌شود و تمام تصمیم‌ها برای بازبینی/تایید به صف بازبینی می‌روند.
+     */
+    requireHumanApproval?: boolean;
   };
   /** ---------- ۷) کشف «سقف و کف اصولی بازار» و سیستم تخفیف سهگانه sgeooole ---------- */
   discount: {
+    /** آیا تخفیف نمایشی (قیمت خط‌خورده + درصد تخفیف) محاسبه و اعمال شود؟ */
+    enabled?: boolean;
+    /** اولویت مرجع سقف خط‌خورده: بازار ترب اول (market_first) یا تاریخچه خودی ۷ روزه (own_price_first) */
+    referencePriority?: "market_first" | "own_price_first";
     mode?: CeilingDiscoveryMode;
     basePriceMode: CeilingDiscoveryMode;
     marketUpperPercentile: number;
@@ -514,6 +545,10 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     suspectLowBandPct: 12,
     freshCutoffDays: 5,
     minClusterMembers: 2,
+    liquidationGuard: true,
+    liquidationMinBodySellers: 4,
+    liquidationStepGapPct: 6,
+    liquidationBodyGapPct: 8,
   },
   aggregation: {
     method: "modal_consensus",
@@ -560,8 +595,11 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     minFreshRatio: 0.3,
     // ۰ = سازگاری کامل با ۴.۱.۱؛ برای محافظه‌کاری بیشتر مثلاً ۵ بگذارید.
     profitApproveMarginPct: 0,
+    requireHumanApproval: true,
   },
   discount: {
+    enabled: true,
+    referencePriority: "own_price_first",
     mode: "market_percentile_ceiling",
     basePriceMode: "market_ceiling",
     marketUpperPercentile: 85,

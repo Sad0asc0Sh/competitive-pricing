@@ -1,13 +1,13 @@
-import { extractOffersWithAI } from "@/lib/ai/client";
+import { aiEnabled, extractOffersWithAI, verifyTorobMatchesWithAI } from "@/lib/ai/client";
 import { parsePersianRelativeDate } from "@/lib/pricing/filters";
 import { selectBestTorobSearchMatch } from "@/lib/pricing/matcher";
 import { parsePriceToToman } from "@/lib/pricing/sourcing";
-import type { MarketPriceTrend, RawOffer, SourceResult } from "@/lib/pricing/types";
+import type { AIIdentityCheckMeta, MarketPriceTrend, RawOffer, SourceResult } from "@/lib/pricing/types";
 import { getTorobRelayConfig, syncTorobRelayToMcp } from "@/lib/torob-relay/config";
 import { fetchViaEncryptedRelay } from "@/lib/torob-relay/crypto";
 import { browserHeaders, fetchWithRetry, politeDelay } from "./humanize";
-import { analyzeMcpPriceHistory, fetchViaTorobMcpServer } from "./torob-mcp-client";
-import type { PriceSourceAdapter, SourceProduct } from "./types";
+import { analyzeMcpPriceHistory, fetchViaTorobMcpServer, mergeTorobPanelOffers } from "./torob-mcp-client";
+import type { PriceSourceAdapter, SourceMatchConfig, SourceProduct } from "./types";
 
 const DEFAULT_TOROB_API_BASE = "https://api.torob.com";
 
@@ -227,11 +227,18 @@ export function parseTorobJson(
 export async function searchTorobProductV4(
   query: string,
   targetPrk?: string | null,
-  opts?: { sku?: string | null; anchorPriceToman?: number | null },
+  opts?: {
+    sku?: string | null;
+    category?: string | null;
+    anchorPriceToman?: number | null;
+    matchConfig?: SourceMatchConfig;
+  },
 ): Promise<{
   prk: string | null;
   detailsUrl: string | null;
   title: string | null;
+  extraMatchedPrks?: string[];
+  aiIdentityCheck?: AIIdentityCheckMeta | null;
   matchScore?: number;
   matchExplanation?: string;
   challenged?: boolean;
@@ -303,15 +310,73 @@ export async function searchTorobProductV4(
         productName: cleanQuery,
         sku: opts?.sku,
         anchorPriceToman: opts?.anchorPriceToman,
+        rejectBelowPct: opts?.matchConfig?.rejectBelowPct,
+        approveAbovePct: opts?.matchConfig?.approveAbovePct,
       },
       candidates,
+      opts?.matchConfig?.minSellerCount ?? 1,
     );
+
+    let aiIdentityCheck: AIIdentityCheckMeta | null = null;
+    const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
+    if (
+      opts?.matchConfig?.aiIdentityEnabled !== false &&
+      candidates.length > 0 &&
+      (!outcome.confident || nonRejectedCount > 1) &&
+      (await aiEnabled())
+    ) {
+      const aiRes = await verifyTorobMatchesWithAI({
+        productName: cleanQuery,
+        sku: opts?.sku,
+        category: opts?.category,
+        anchorPriceToman: opts?.anchorPriceToman,
+        candidates: outcome.allRanked.slice(0, 10).map((r) => ({
+          prk: r.candidate.prk,
+          titleFa: r.candidate.titleFa,
+          titleEn: r.candidate.titleEn,
+          sellerCount: r.candidate.sellerCount,
+          priceToman: r.candidate.priceToman,
+          available: r.candidate.available,
+        })),
+      });
+      if (aiRes) {
+        aiIdentityCheck = aiRes;
+        if (aiRes.verdict === "no_match") {
+          return {
+            prk: null,
+            detailsUrl: null,
+            title: null,
+            aiIdentityCheck,
+            rejectedAll: true,
+            matchExplanation: `هوش مصنوعی هیچ پنل ادغام مرتبطی در ترب پیدا نکرد: ${aiRes.reasoning}`,
+          };
+        }
+        if (aiRes.verdict === "match" && aiRes.primaryPrk) {
+          const picked = candidates.find((c) => c.prk === aiRes.primaryPrk);
+          if (picked) {
+            const extraMatchedPrks = aiRes.matchedPrks
+              .filter((id) => id !== picked.prk && candidates.some((c) => c.prk === id))
+              .slice(0, 2);
+            return {
+              prk: picked.prk,
+              detailsUrl: picked.detailsUrl ?? null,
+              title: picked.titleFa || null,
+              extraMatchedPrks,
+              aiIdentityCheck,
+              matchScore: outcome.allRanked.find((x) => x.candidate.prk === picked.prk)?.score ?? outcome.best?.score ?? 85,
+              matchExplanation: `تطبیق پنل ادغام با هوش مصنوعی (${1 + extraMatchedPrks.length} پنل): ${aiRes.reasoning}`,
+            };
+          }
+        }
+      }
+    }
 
     if (!outcome.best) {
       return {
         prk: null,
         detailsUrl: null,
         title: null,
+        aiIdentityCheck,
         rejectedAll: true,
         matchExplanation: outcome.explanation,
       };
@@ -321,6 +386,7 @@ export async function searchTorobProductV4(
       prk: outcome.best.candidate.prk,
       detailsUrl: outcome.best.candidate.detailsUrl ?? null,
       title: outcome.best.candidate.titleFa || null,
+      aiIdentityCheck,
       matchScore: outcome.best.score,
       matchExplanation: outcome.explanation,
     };
@@ -403,7 +469,9 @@ export const torobAdapter: PriceSourceAdapter = {
         detailsUrl,
         productName: product.name,
         sku: product.sku,
+        category: product.category,
         anchorPriceToman,
+        matchConfig: product.matchConfig,
         now: fetchedAt,
       });
       if (mcpResult) {
@@ -415,10 +483,13 @@ export const torobAdapter: PriceSourceAdapter = {
 
     // --- لایه ۱: موتور مستقیم Torob API v4 با تطبیق هویت ۷ لایه
     let matchMeta: Record<string, unknown> = {};
+    let extraMatchedPrks: string[] = [];
     if ((!prk || !detailsUrl) && product.name) {
       const discovered = await searchTorobProductV4(product.name, prk, {
         sku: product.sku,
+        category: product.category,
         anchorPriceToman,
+        matchConfig: product.matchConfig,
       });
       if (discovered?.challenged) {
         return {
@@ -441,14 +512,17 @@ export const torobAdapter: PriceSourceAdapter = {
           fetchedAt,
           ok: false,
           error: discovered.matchExplanation ?? "هیچ کارتی در ترب با مشخصات و کد مدل محصول مطابقت نداشت",
+          meta: discovered.aiIdentityCheck ? { aiIdentityCheck: discovered.aiIdentityCheck } : undefined,
         };
       }
       if (discovered && discovered.prk) {
         prk = prk ?? discovered.prk;
         detailsUrl = detailsUrl ?? discovered.detailsUrl;
+        extraMatchedPrks = discovered.extraMatchedPrks ?? [];
         matchMeta = {
           matchScore: discovered.matchScore,
           matchExplanation: discovered.matchExplanation,
+          ...(discovered.aiIdentityCheck ? { aiIdentityCheck: discovered.aiIdentityCheck } : {}),
         };
       }
     }
@@ -495,19 +569,62 @@ export const torobAdapter: PriceSourceAdapter = {
         const json = JSON.parse(res.bodyText) as AnyRec;
         const parsed = parseTorobJson(json, fetchedAt);
         if (parsed.offers.length) {
+          const panelList = [
+            {
+              prk: parsed.prk ?? prk,
+              offers: parsed.offers,
+              totalSellerCount: parsed.total,
+              inPersonSellerCount: parsed.inPersonCount,
+              offersTruncated: false,
+              onlineOfferCount: parsed.offers.filter((o) => o.sellerType !== "in_person").length,
+            },
+          ];
+          const mergedPanelPrks = [parsed.prk ?? prk];
+          for (const extraPrk of extraMatchedPrks) {
+            try {
+              await politeDelay("api.torob.com", 120, 300);
+              const extraRes = await torobTransportGet(
+                "api",
+                `/v4/base-product/details/?prk=${encodeURIComponent(extraPrk)}&source=next_desktop`,
+                browserHeaders(`https://torob.com/p/${extraPrk}/`),
+              );
+              if (extraRes.ok) {
+                const extraJson = JSON.parse(extraRes.bodyText) as AnyRec;
+                const extraParsed = parseTorobJson(extraJson, fetchedAt);
+                if (extraParsed.offers.length) {
+                  panelList.push({
+                    prk: extraParsed.prk ?? extraPrk,
+                    offers: extraParsed.offers,
+                    totalSellerCount: extraParsed.total,
+                    inPersonSellerCount: extraParsed.inPersonCount,
+                    offersTruncated: false,
+                    onlineOfferCount: extraParsed.offers.filter((o) => o.sellerType !== "in_person").length,
+                  });
+                  mergedPanelPrks.push(extraParsed.prk ?? extraPrk);
+                }
+              }
+            } catch {
+              // ادامه با پنل اصلی
+            }
+          }
+          const merged = mergeTorobPanelOffers(panelList);
           const priceTrend = await fetchTorobPriceTrendV4(prk);
           return {
             source: "torob",
             productTitle: parsed.title ?? undefined,
             prk: parsed.prk ?? prk,
             detailsUrl: detailsUrl ?? `https://api.torob.com${apiPath}`,
-            offers: parsed.offers,
-            totalSellerCount: parsed.total,
-            inPersonSellerCount: parsed.inPersonCount,
+            offers: merged.offers,
+            totalSellerCount: merged.totalSellerCount,
+            inPersonSellerCount: merged.inPersonSellerCount,
             priceTrend,
             fetchedAt,
             ok: true,
-            meta: { via: detailsUrl ? "torob_v4_details_url" : "torob_v4_api", ...matchMeta },
+            meta: {
+              via: detailsUrl ? "torob_v4_details_url" : "torob_v4_api",
+              ...matchMeta,
+              ...(mergedPanelPrks.length > 1 ? { mergedPanelPrks } : {}),
+            },
           };
         }
       }

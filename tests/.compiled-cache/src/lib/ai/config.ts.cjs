@@ -81,7 +81,7 @@ async function readStoredProvider(key) {
         return hit.value;
     let value = null;
     try {
-        const { pool } = await Promise.resolve().then(() => __importStar(require("@/db")));
+        const { pool } = await Promise.resolve().then(() => __importStar(require("../../db/index.ts")));
         const res = await pool.query("select value from settings where key = $1 limit 1", [key]);
         const raw = res.rows[0]?.value;
         if (raw && typeof raw === "object" && !Array.isArray(raw)) {
@@ -96,7 +96,7 @@ async function readStoredProvider(key) {
 }
 /** ذخیره پیکربندی در جدول settings (upsert) */
 async function writeStoredProvider(key, value) {
-    const { pool } = await Promise.resolve().then(() => __importStar(require("@/db")));
+    const { pool } = await Promise.resolve().then(() => __importStar(require("../../db/index.ts")));
     await pool.query(`insert into settings (key, value, updated_at)
      values ($1, $2::jsonb, now())
      on conflict (key) do update set value = excluded.value, updated_at = now()`, [key, JSON.stringify(value)]);
@@ -133,6 +133,15 @@ async function getSubqConfig() {
 }
 /** ترکیب توکن/آدرس/مدل واقعی ناظر با پروفایل قیمت‌گذاری برای اجرای درون‌خطی (runner) */
 async function resolveSubqRuntime(profile) {
+    const stored = await readStoredProvider(exports.SUBQ_SETTINGS_KEY);
+    // اگر کاربر صراحتاً سوئیچ SubQ را در پنل خاموش کرده باشد، حتی با وجود کلید در env نیز فراخوانی نشود
+    if (stored?.enabled === false) {
+        return {
+            apiKey: "",
+            baseUrl: cleanUrl(stored.baseUrl) || cleanUrl(profile.baseUrl) || systemone_supervisor_1.DEFAULT_SUBQ_BASE_URL,
+            model: (stored.model ?? "").trim() || profile.model || systemone_supervisor_1.DEFAULT_SUBQ_MODEL,
+        };
+    }
     const cfg = await getSubqConfig();
     const envKey = (process.env.SUBQ_API_KEY ?? "").trim();
     const envBase = cleanUrl(process.env.SUBQ_BASE_URL);

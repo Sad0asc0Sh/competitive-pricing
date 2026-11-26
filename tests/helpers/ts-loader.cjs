@@ -122,6 +122,18 @@ function loadTsModule(relPath) {
     const target = path.resolve(pricingRoot, 'src/db/index.ts')
     return `from "${toImportPath(fullPath, target)}"`
   })
+  code = code.replace(/import\(\s*["']@\/lib\/([^"']+)["']\s*\)/g, (_, p1) => {
+    const target = path.resolve(pricingRoot, 'src/lib', p1)
+    return `import("${toImportPath(fullPath, target)}")`
+  })
+  code = code.replace(/import\(\s*["']@\/db\/([^"']+)["']\s*\)/g, (_, p1) => {
+    const target = path.resolve(pricingRoot, 'src/db', p1)
+    return `import("${toImportPath(fullPath, target)}")`
+  })
+  code = code.replace(/import\(\s*["']@\/db["']\s*\)/g, () => {
+    const target = path.resolve(pricingRoot, 'src/db/index.ts')
+    return `import("${toImportPath(fullPath, target)}")`
+  })
 
   const transformed = { code: transpileTsToCjs(code, fullPath) }
 

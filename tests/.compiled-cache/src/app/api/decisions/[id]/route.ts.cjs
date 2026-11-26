@@ -40,6 +40,7 @@ const index_ts_1 = require("../../../../db/index.ts");
 const schema_1 = require("../../../../db/schema");
 const auth_1 = require("../../../../lib/auth");
 const runnerService = __importStar(require("../../../../lib/services/runner"));
+const torob_1 = require("../../../../lib/sources/torob");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
@@ -57,11 +58,17 @@ async function GET(req, { params }) {
 /**
  * POST /api/decisions/:id
  * body: {
- *   action: 'approve' | 'reject' | 'retry_sync',
+ *   action: 'approve' | 'reject' | 'retry_sync' | 'relink_torob',
  *   force?: boolean,
  *   allowBelowCost?: boolean,
  *   belowCostReason?: string,
- *   authorizedBy?: string
+ *   authorizedBy?: string,
+ *   finalPrice?: number | null,
+ *   useDisplayDiscount?: boolean | null,
+ *   basePrice?: number | null,
+ *   discountPct?: number | null,
+ *   campaignType?: string | null,
+ *   torobUrl?: string
  * }
  */
 async function POST(req, { params }) {
@@ -82,6 +89,52 @@ async function POST(req, { params }) {
     if (action === "reject") {
         await runnerService.rejectDecision(decisionId);
         return server_1.NextResponse.json({ ok: true, message: "تصمیم رد شد" });
+    }
+    if (action === "relink_torob") {
+        const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
+        if (!d) {
+            return server_1.NextResponse.json({ ok: false, error: "تصمیم یافت نشد", message: "تصمیم یافت نشد" }, { status: 404 });
+        }
+        const rawUrl = typeof body.torobUrl === "string" ? body.torobUrl.trim() : "";
+        const isHttp = /^https?:\/\//i.test(rawUrl);
+        if (!rawUrl || (isHttp && !/^https?:\/\/([^/]+\.)?torob\.com\//i.test(rawUrl))) {
+            const msg = "لینک معتبر صفحه محصول ترب (torob.com/p/...) وارد کنید";
+            return server_1.NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
+        }
+        const prk = (0, torob_1.extractPrk)(rawUrl, isHttp ? null : rawUrl);
+        if (!prk || prk.length < 3) {
+            const msg = "شناسه محصول ترب (prk) در لینک واردشده یافت نشد";
+            return server_1.NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
+        }
+        const normalizedUrl = isHttp ? rawUrl : `https://torob.com/p/${prk}/`;
+        await index_ts_1.db
+            .update(schema_1.products)
+            .set({
+            torobUrl: normalizedUrl,
+            torobPrk: prk,
+            torobDetailsUrl: null,
+            lockedUntil: null,
+            updatedAt: new Date(),
+        })
+            .where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId));
+        if (d.status === "rejected" || d.status === "pending_review") {
+            await index_ts_1.db
+                .update(schema_1.priceDecisions)
+                .set({ status: "superseded", pushStatus: "superseded" })
+                .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
+        }
+        const summary = await runnerService.runPricing({
+            trigger: "manual",
+            productIds: [d.productId],
+            runMode: "live",
+        });
+        return server_1.NextResponse.json({
+            ok: true,
+            message: `لینک ترب به شناسه ${prk} متصل شد و استعلام جدید در صف قرار گرفت`,
+            prk,
+            torobUrl: normalizedUrl,
+            summary,
+        });
     }
     if (action !== "approve" && action !== "retry_sync") {
         return server_1.NextResponse.json({ ok: false, error: "action نامعتبر" }, { status: 400 });
@@ -105,7 +158,20 @@ async function POST(req, { params }) {
         return server_1.NextResponse.json({ ok: false, error: "تصمیم یافت نشد", message: "تصمیم یافت نشد" }, { status: 404 });
     }
     const [p] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId)).limit(1);
-    const finalPrice = d.finalPrice ?? 0;
+    const hasHumanOverride = action === "approve" &&
+        (body.finalPrice != null ||
+            body.useDisplayDiscount != null ||
+            body.basePrice != null ||
+            body.discountPct != null ||
+            body.campaignType != null);
+    if (hasHumanOverride && body.finalPrice != null) {
+        const n = Number(body.finalPrice);
+        if (!Number.isFinite(n) || Math.round(n) <= 0) {
+            const msg = "قیمت نهایی یوزر نامعتبر است";
+            return server_1.NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
+        }
+    }
+    const finalPrice = hasHumanOverride && body.finalPrice != null ? Math.round(Number(body.finalPrice)) : (d.finalPrice ?? 0);
     const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, p?.costPrice ?? 0);
     const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p?.currentHardFloorPrice ?? 0, effectiveCost);
     const isBelowCostOrFloor = (effectiveCost > 0 && finalPrice <= effectiveCost) ||
@@ -129,6 +195,19 @@ async function POST(req, { params }) {
         authorizedBy: allowBelowCost ? authorizedBy : undefined,
     };
     const extRunner = runnerService;
+    if (hasHumanOverride && typeof extRunner.applyHumanOverrideToDecision === "function") {
+        const ov = await extRunner.applyHumanOverrideToDecision(decisionId, {
+            finalPrice: body.finalPrice,
+            useDisplayDiscount: body.useDisplayDiscount,
+            basePrice: body.basePrice,
+            discountPct: body.discountPct,
+            campaignType: body.campaignType,
+        });
+        if (!ov.ok) {
+            const msg = ov.message || "خطا در ثبت ویرایش دستی";
+            return server_1.NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
+        }
+    }
     const r = action === "retry_sync" && typeof extRunner.retryDecisionSync === "function"
         ? await extRunner.retryDecisionSync(decisionId, applyOpts)
         : await extRunner.applyDecision(decisionId, null, applyOpts);

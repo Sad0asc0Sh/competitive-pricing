@@ -269,6 +269,8 @@ export function summarizeMarket(
         return median(p);
       case "trimmed_mean":
         return trimmedMean(p, cfg.trimPct);
+      case "trimmed_weighted_mean":
+        return trimW ?? weightedMean(p, w);
       case "modal_consensus":
         // ترکیب ۶۰٪ هسته چگال فروشندگان به‌روز + ۴۰٪ میانگین وزنی بریده برای بالاترین دقت و پایداری
         return modal != null && trimW != null

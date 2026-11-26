@@ -141,6 +141,15 @@ export async function getSubqConfig(): Promise<ProviderConfig> {
 export async function resolveSubqRuntime(
   profile: SystemOneSupervisorConfig,
 ): Promise<{ apiKey: string; baseUrl: string; model: string }> {
+  const stored = await readStoredProvider(SUBQ_SETTINGS_KEY);
+  // اگر کاربر صراحتاً سوئیچ SubQ را در پنل خاموش کرده باشد، حتی با وجود کلید در env نیز فراخوانی نشود
+  if (stored?.enabled === false) {
+    return {
+      apiKey: "",
+      baseUrl: cleanUrl(stored.baseUrl) || cleanUrl(profile.baseUrl) || DEFAULT_SUBQ_BASE_URL,
+      model: (stored.model ?? "").trim() || profile.model || DEFAULT_SUBQ_MODEL,
+    };
+  }
   const cfg = await getSubqConfig();
   const envKey = (process.env.SUBQ_API_KEY ?? "").trim();
   const envBase = cleanUrl(process.env.SUBQ_BASE_URL);

@@ -87,10 +87,18 @@ async function PATCH(req, { params }) {
         minProfitAmountOverride: minProfitAmount,
         config,
     });
+    if (supply.lowestQuoteCost != null && supply.lowestQuoteCost > 0) {
+        patch.replacementCost = Math.round(supply.lowestQuoteCost);
+        patch.replacementCostAt = new Date();
+    }
     if (supply.effectiveCostPrice > 0) {
-        patch.costPrice = supply.effectiveCostPrice;
+        // costPrice (هزینه موجودی انبار) نباید با سربار ۰.۵٪ بازنویسی و در هر ذخیره باد شود؛ فقط همکار منتخب و کف سود آپدیت می‌شوند
         patch.selectedSupplierName = supply.selectedQuote?.supplierName ?? null;
         patch.currentHardFloorPrice = supply.hardFloorPrice;
+    }
+    else if ("costPrice" in patch) {
+        patch.selectedSupplierName = null;
+        patch.currentHardFloorPrice = null;
     }
     patch.updatedAt = new Date();
     try {

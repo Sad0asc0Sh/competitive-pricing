@@ -97,7 +97,7 @@ async function ensureDefaults() {
         await index_ts_1.db.insert(schema_1.schedules).values({
             name: "استعلام خودکار هر ۳ ساعت (ترب و مشهد)",
             intervalMinutes: 180,
-            active: true,
+            active: false,
             filter: {},
             nextRunAt: new Date(Date.now() + 180 * 60000),
         });

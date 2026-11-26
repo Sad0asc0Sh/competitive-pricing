@@ -57,14 +57,20 @@ async function POST(req) {
             torobUrl: body.torobUrl || null,
             torobPrk: body.torobPrk || null,
             torobDetailsUrl: body.torobDetailsUrl || null,
-            costPrice: supply.effectiveCostPrice > 0 ? supply.effectiveCostPrice : manualCost,
+            costPrice: Math.max(0, Math.round(manualCost)),
+            ...(supply.lowestQuoteCost && supply.lowestQuoteCost > 0
+                ? {
+                    replacementCost: Math.round(supply.lowestQuoteCost),
+                    replacementCostAt: new Date(),
+                }
+                : {}),
             supplierQuotes,
             selectedSupplierName: supply.selectedQuote?.supplierName ?? null,
             currentHardFloorPrice: supply.hardFloorPrice > 0 ? supply.hardFloorPrice : null,
             minMarginPct,
             minProfitAmount,
             preferredCampaignType: body.preferredCampaignType ? String(body.preferredCampaignType) : "auto",
-            autoApply: body.autoApply !== false,
+            autoApply: body.autoApply === true,
             showInFeatured: Boolean(body.showInFeatured ?? false),
             profileId: body.profileId ? Number(body.profileId) : null,
         })

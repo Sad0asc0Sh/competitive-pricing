@@ -78,7 +78,7 @@ export const products = pgTable(
     showInFeatured: boolean("show_in_featured").default(true).notNull(),
     profileId: integer("profile_id").references(() => pricingProfiles.id, { onDelete: "set null" }),
     /** اگر false باشد، هر تصمیم نیاز به تأیید انسانی دارد */
-    autoApply: boolean("auto_apply").default(true).notNull(),
+    autoApply: boolean("auto_apply").default(false).notNull(),
     status: varchar("status", { length: 30 }).default("active").notNull(), // active | paused | needs_review
     currentBasePrice: integer("current_base_price"),
     currentFinalPrice: integer("current_final_price"),

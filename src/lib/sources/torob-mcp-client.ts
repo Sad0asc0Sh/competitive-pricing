@@ -1,8 +1,11 @@
+import { aiEnabled, verifyTorobMatchesWithAI } from "@/lib/ai/client";
 import { parsePersianRelativeDate } from "@/lib/pricing/filters";
 import { selectBestTorobSearchMatch, type BestMatchOutcome } from "@/lib/pricing/matcher";
 import { parseTitle } from "@/lib/pricing/match/parse";
+import { compactShopKey } from "@/lib/pricing/own-shop";
 import { parsePriceToToman } from "@/lib/pricing/sourcing";
-import type { MarketPriceTrend, RawOffer, SourceResult } from "@/lib/pricing/types";
+import type { AIIdentityCheckMeta, MarketPriceTrend, RawOffer, SourceResult } from "@/lib/pricing/types";
+import type { SourceMatchConfig } from "./types";
 
 /**
  * کلاینت اختصاصی اتصال به سرور `torob-mcp` (از طریق پروتکل استاندارد MCP JSON-RPC 2.0 روی HTTP)
@@ -341,12 +344,75 @@ export async function callTorobMcpTool<T = unknown>(
   return out.data;
 }
 
+export function mergeTorobPanelOffers(
+  panels: Array<{
+    prk: string;
+    offers: RawOffer[];
+    totalSellerCount: number;
+    inPersonSellerCount: number;
+    offersTruncated: boolean;
+    onlineOfferCount: number;
+  }>,
+): {
+  offers: RawOffer[];
+  totalSellerCount: number;
+  inPersonSellerCount: number;
+  offersTruncated: boolean;
+  onlineOfferCount: number;
+} {
+  if (panels.length === 1) {
+    const p = panels[0];
+    return {
+      offers: p.offers,
+      totalSellerCount: p.totalSellerCount,
+      inPersonSellerCount: p.inPersonSellerCount,
+      offersTruncated: p.offersTruncated,
+      onlineOfferCount: p.onlineOfferCount,
+    };
+  }
+
+  const byShop = new Map<string, RawOffer>();
+  for (const panel of panels) {
+    for (const offer of panel.offers) {
+      const idPart = offer.shopId ? `id:${compactShopKey(offer.shopId)}` : `name:${compactShopKey(offer.shopName)}`;
+      const key = `${idPart || offer.shopName}|${offer.sellerType ?? "online"}`;
+      const prev = byShop.get(key);
+      if (!prev) {
+        byShop.set(key, offer);
+      } else {
+        const prevTime = prev.lastChangedAt instanceof Date ? prev.lastChangedAt.getTime() : 0;
+        const curTime = offer.lastChangedAt instanceof Date ? offer.lastChangedAt.getTime() : 0;
+        if (curTime > prevTime || (curTime === prevTime && offer.price < prev.price)) {
+          byShop.set(key, offer);
+        }
+      }
+    }
+  }
+
+  const mergedOffers = Array.from(byShop.values()).sort((a, b) => a.price - b.price);
+  const primary = panels[0];
+  const extraCount = Math.max(0, mergedOffers.length - primary.offers.length);
+  return {
+    offers: mergedOffers,
+    totalSellerCount: Math.max(primary.totalSellerCount + extraCount, mergedOffers.length),
+    inPersonSellerCount: Math.max(
+      primary.inPersonSellerCount,
+      mergedOffers.filter((o) => o.sellerType === "in_person").length,
+    ),
+    offersTruncated: panels.some((p) => p.offersTruncated),
+    onlineOfferCount: Math.max(
+      primary.onlineOfferCount + extraCount,
+      mergedOffers.filter((o) => o.sellerType !== "in_person").length,
+    ),
+  };
+}
+
 /**
  * واکشی کامل پیشنهادهای یک محصول از طریق سرور `torob-mcp` با فیلتر ۷ لایه تطبیق هویت محصول.
  *
  * مسیر جستجو (وقتی prk شناخته‌شده نیست) چندمرحله‌ای است: نام کامل ← فقط کد مدل ← برند+کد. نتایج مراحل روی هم
  * انباشته و دوباره با تطبیق‌دهنده رتبه‌بندی می‌شوند؛ به محض اینکه یک کارت «تایید خودکار» شد جستجو متوقف می‌شود.
- * اطلاعات بریدگی خروجی (offers_truncated / offer_count / price_range_toman) و عنوان انگلیسی کارت به موتور داده می‌شود.
+ * در صورت فعال بودن هوش مصنوعی و وجود چند پنل یا ابهام، AI پنل‌های ادغام مرتبط را تایید/ادغام می‌کند (بدون دخالت در قیمت).
  */
 export async function fetchViaTorobMcpServer(opts: {
   mcpUrl: string;
@@ -354,7 +420,9 @@ export async function fetchViaTorobMcpServer(opts: {
   detailsUrl?: string | null;
   productName: string;
   sku?: string | null;
+  category?: string | null;
   anchorPriceToman?: number | null;
+  matchConfig?: SourceMatchConfig;
   now?: Date;
 }): Promise<SourceResult | null> {
   const now = opts.now ?? new Date();
@@ -362,6 +430,8 @@ export async function fetchViaTorobMcpServer(opts: {
   let detailsUrl = opts.detailsUrl?.trim() || null;
   let matchExplanation: string | null = null;
   let matchScore: number | null = null;
+  let aiIdentityCheck: AIIdentityCheckMeta | null = null;
+  let extraMatchedPrks: string[] = [];
   const searchLog: { query: string; cards: number; error?: string }[] = [];
   const challengedResult = (where: string, errorText?: string): SourceResult => ({
     source: "torob",
@@ -379,6 +449,10 @@ export async function fetchViaTorobMcpServer(opts: {
   if (!prk && opts.productName) {
     const cardsByPrk = new Map<string, TorobMcpSearchCard>();
     let outcome: BestMatchOutcome | null = null;
+    const minSellers = opts.matchConfig?.minSellerCount ?? 1;
+    const rejectBelowPct = opts.matchConfig?.rejectBelowPct;
+    const approveAbovePct = opts.matchConfig?.approveAbovePct;
+
     for (const query of buildSearchQueries(opts.productName, opts.sku)) {
       const searchOut = await callTorobMcpToolWithDiag<{ products?: TorobMcpSearchCard[] }>(
         opts.mcpUrl,
@@ -391,7 +465,13 @@ export async function fetchViaTorobMcpServer(opts: {
       for (const c of found) if (!cardsByPrk.has(c.prk)) cardsByPrk.set(c.prk, c);
       if (!cardsByPrk.size) continue;
       outcome = selectBestTorobSearchMatch(
-        { productName: opts.productName, sku: opts.sku, anchorPriceToman: opts.anchorPriceToman },
+        {
+          productName: opts.productName,
+          sku: opts.sku,
+          anchorPriceToman: opts.anchorPriceToman,
+          rejectBelowPct,
+          approveAbovePct,
+        },
         [...cardsByPrk.values()].map((c) => ({
           prk: c.prk,
           titleFa: c.name_fa ?? "",
@@ -402,26 +482,77 @@ export async function fetchViaTorobMcpServer(opts: {
           detailsUrl: c.details_url,
           shopName: c.shop_name,
         })),
+        minSellers,
       );
       if (outcome.confident) break;
     }
 
     if (outcome) {
-      if (outcome.best) {
-        prk = outcome.best.candidate.prk;
-        detailsUrl = outcome.best.candidate.detailsUrl ?? detailsUrl;
-        matchExplanation = outcome.explanation;
-        matchScore = outcome.best.score;
-      } else {
-        return {
-          source: "torob",
-          offers: [],
-          totalSellerCount: 0,
-          fetchedAt: now,
-          ok: false,
-          error: outcome.explanation,
-          meta: { rejectedInSearch: true, searchQueries: searchLog },
-        };
+      const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
+      const shouldAskAiForPanels =
+        opts.matchConfig?.aiIdentityEnabled !== false &&
+        cardsByPrk.size > 0 &&
+        (!outcome.confident || nonRejectedCount > 1) &&
+        (await aiEnabled());
+
+      if (shouldAskAiForPanels) {
+        const aiRes = await verifyTorobMatchesWithAI({
+          productName: opts.productName,
+          sku: opts.sku,
+          category: opts.category,
+          anchorPriceToman: opts.anchorPriceToman,
+          candidates: outcome.allRanked.slice(0, 10).map((r) => ({
+            prk: r.candidate.prk,
+            titleFa: r.candidate.titleFa,
+            titleEn: r.candidate.titleEn,
+            sellerCount: r.candidate.sellerCount,
+            priceToman: r.candidate.priceToman,
+            available: r.candidate.available,
+          })),
+        });
+        if (aiRes) {
+          aiIdentityCheck = aiRes;
+          if (aiRes.verdict === "no_match") {
+            return {
+              source: "torob",
+              offers: [],
+              totalSellerCount: 0,
+              fetchedAt: now,
+              ok: false,
+              error: `هوش مصنوعی هیچ پنل ادغام مرتبطی در ترب پیدا نکرد: ${aiRes.reasoning}`,
+              meta: { rejectedInSearch: true, searchQueries: searchLog, aiIdentityCheck },
+            };
+          }
+          if (aiRes.verdict === "match" && aiRes.primaryPrk) {
+            const picked = cardsByPrk.get(aiRes.primaryPrk);
+            if (picked) {
+              prk = picked.prk;
+              detailsUrl = picked.details_url ?? detailsUrl;
+              extraMatchedPrks = aiRes.matchedPrks.filter((id) => id !== prk && cardsByPrk.has(id)).slice(0, 2);
+              matchExplanation = `تطبیق پنل ادغام با هوش مصنوعی (${1 + extraMatchedPrks.length} پنل): ${aiRes.reasoning}`;
+              matchScore = outcome.allRanked.find((x) => x.candidate.prk === prk)?.score ?? outcome.best?.score ?? 85;
+            }
+          }
+        }
+      }
+
+      if (!prk) {
+        if (outcome.best) {
+          prk = outcome.best.candidate.prk;
+          detailsUrl = outcome.best.candidate.detailsUrl ?? detailsUrl;
+          matchExplanation = outcome.explanation;
+          matchScore = outcome.best.score;
+        } else {
+          return {
+            source: "torob",
+            offers: [],
+            totalSellerCount: 0,
+            fetchedAt: now,
+            ok: false,
+            error: outcome.explanation,
+            meta: { rejectedInSearch: true, searchQueries: searchLog, ...(aiIdentityCheck ? { aiIdentityCheck } : {}) },
+          };
+        }
       }
     }
   }
@@ -446,7 +577,25 @@ export async function fetchViaTorobMcpServer(opts: {
     return null;
   }
 
-  const converted = convertMcpDetailsToOffers(details, now);
+  const primaryConverted = convertMcpDetailsToOffers(details, now);
+  const panelList = [{ prk: details.prk ?? prk, ...primaryConverted }];
+  const mergedPanelPrks = [details.prk ?? prk];
+
+  // اگر هوش مصنوعی چند پنل ادغام هم‌هویت در ترب برای یک محصول یافته باشد، پیشنهادهایشان ادغام می‌شود
+  for (const extraPrk of extraMatchedPrks) {
+    const extraOut = await callTorobMcpToolWithDiag<TorobMcpProductDetails>(
+      opts.mcpUrl,
+      "product_details",
+      { prk: extraPrk, max_offers: 30, max_in_person: 30 },
+    );
+    if (extraOut.data && (extraOut.data.offers?.length || extraOut.data.in_person_sellers?.length)) {
+      const extraConv = convertMcpDetailsToOffers(extraOut.data, now);
+      panelList.push({ prk: extraOut.data.prk ?? extraPrk, ...extraConv });
+      mergedPanelPrks.push(extraOut.data.prk ?? extraPrk);
+    }
+  }
+
+  const converted = mergeTorobPanelOffers(panelList);
   const chart = await callTorobMcpTool<{ series?: { label?: string; points?: { date: string; value: number }[] }[] }>(
     opts.mcpUrl,
     "price_history",
@@ -471,6 +620,8 @@ export async function fetchViaTorobMcpServer(opts: {
       mcpUrl: opts.mcpUrl,
       matchScore,
       matchExplanation,
+      ...(aiIdentityCheck ? { aiIdentityCheck } : {}),
+      ...(mergedPanelPrks.length > 1 ? { mergedPanelPrks } : {}),
       // اطلاعات کفایت داده: خروجی ترب «۳۰ ارزان‌ترینِ موجود» است؛ موتور باید بداند چیزی دیده نشده یا نه
       offersTruncated: converted.offersTruncated,
       onlineOfferCount: converted.onlineOfferCount,

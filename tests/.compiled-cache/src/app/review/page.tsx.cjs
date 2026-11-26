@@ -8,8 +8,29 @@ const schema_1 = require("../../db/schema");
 const review_client_1 = require("@/components/review-client");
 const drizzle_orm_1 = require("drizzle-orm");
 exports.dynamic = "force-dynamic";
+function extractSupervisorGates(supStep) {
+    const overallRaw = supStep?.data?.overallScorePct;
+    const overallPct = typeof overallRaw === "number" && Number.isFinite(overallRaw) ? Math.round(overallRaw) : null;
+    const gatesObj = supStep?.data?.gates;
+    if (!gatesObj || typeof gatesObj !== "object") {
+        return { overallPct, gates: [] };
+    }
+    const gates = [];
+    for (const val of Object.values(gatesObj)) {
+        if (!val || typeof val !== "object")
+            continue;
+        gates.push({
+            key: String(val.key ?? ""),
+            title: String(val.title ?? val.key ?? ""),
+            scorePct: typeof val.scorePct === "number" ? Math.round(val.scorePct) : 0,
+            verdict: String(val.verdict ?? "review"),
+            reason: String(val.reason ?? ""),
+        });
+    }
+    return { overallPct, gates };
+}
 async function ReviewPage() {
-    const [rows, rejectedRows] = await Promise.all([
+    const [rawRows, rawRejectedRows] = await Promise.all([
         index_ts_1.db
             .select({
             d: schema_1.priceDecisions,
@@ -18,24 +39,95 @@ async function ReviewPage() {
             cost: schema_1.products.costPrice,
             hardFloor: schema_1.products.currentHardFloorPrice,
             current: schema_1.products.currentFinalPrice,
+            torobUrl: schema_1.products.torobUrl,
+            torobPrk: schema_1.products.torobPrk,
         })
             .from(schema_1.priceDecisions)
             .innerJoin(schema_1.products, (0, drizzle_orm_1.eq)(schema_1.products.id, schema_1.priceDecisions.productId))
             .where((0, drizzle_orm_1.inArray)(schema_1.priceDecisions.status, ["pending_review", "sync_failed", "pending_sync"]))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.priceDecisions.createdAt)),
         index_ts_1.db
-            .select({ d: schema_1.priceDecisions, name: schema_1.products.name, sku: schema_1.products.sku })
+            .select({
+            d: schema_1.priceDecisions,
+            name: schema_1.products.name,
+            sku: schema_1.products.sku,
+            torobUrl: schema_1.products.torobUrl,
+            torobPrk: schema_1.products.torobPrk,
+        })
             .from(schema_1.priceDecisions)
             .innerJoin(schema_1.products, (0, drizzle_orm_1.eq)(schema_1.products.id, schema_1.priceDecisions.productId))
             .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.status, "rejected"))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.priceDecisions.createdAt))
-            .limit(20),
+            .limit(40),
     ]);
-    const pendingItems = rows.map(({ d, name, sku, cost, hardFloor, current }) => {
+    const seenPendingProducts = new Set();
+    const rows = rawRows.filter(({ d }) => {
+        if (seenPendingProducts.has(d.productId))
+            return false;
+        seenPendingProducts.add(d.productId);
+        return true;
+    });
+    const seenRejectedProducts = new Set();
+    const rejectedRows = rawRejectedRows
+        .filter(({ d }) => {
+        if (seenPendingProducts.has(d.productId))
+            return false;
+        if (seenRejectedProducts.has(d.productId))
+            return false;
+        seenRejectedProducts.add(d.productId);
+        return true;
+    })
+        .slice(0, 20);
+    const pendingDecisionIds = rows.map(({ d }) => d.id);
+    const offersByDecision = new Map();
+    if (pendingDecisionIds.length > 0) {
+        const offerRows = await index_ts_1.db
+            .select({
+            id: schema_1.competitorOffers.id,
+            decisionId: schema_1.competitorOffers.decisionId,
+            shopName: schema_1.competitorOffers.shopName,
+            shopCity: schema_1.competitorOffers.shopCity,
+            price: schema_1.competitorOffers.price,
+            shopScore: schema_1.competitorOffers.shopScore,
+            isLocalCity: schema_1.competitorOffers.isLocalCity,
+            included: schema_1.competitorOffers.included,
+            excludeReason: schema_1.competitorOffers.excludeReason,
+        })
+            .from(schema_1.competitorOffers)
+            .where((0, drizzle_orm_1.inArray)(schema_1.competitorOffers.decisionId, pendingDecisionIds))
+            .orderBy((0, drizzle_orm_1.asc)(schema_1.competitorOffers.price));
+        for (const o of offerRows) {
+            const list = offersByDecision.get(o.decisionId) ?? [];
+            if (list.length < 6) {
+                list.push({
+                    id: o.id,
+                    shopName: o.shopName,
+                    shopCity: o.shopCity,
+                    price: o.price,
+                    shopScore: o.shopScore,
+                    isLocalCity: o.isLocalCity,
+                    included: o.included,
+                    excludeReason: o.excludeReason,
+                });
+                offersByDecision.set(o.decisionId, list);
+            }
+        }
+    }
+    const pendingItems = rows.map(({ d, name, sku, cost, hardFloor, current, torobUrl, torobPrk }) => {
         const steps = Array.isArray(d.steps) ? d.steps : [];
+        const sourceStep = steps.find((s) => s.step === "source");
+        const torobTitle = typeof sourceStep?.data?.productTitle === "string" ? sourceStep.data.productTitle : null;
+        const stepPrk = typeof sourceStep?.data?.prk === "string" ? sourceStep.data.prk : null;
+        const resolvedPrk = torobPrk || stepPrk || null;
+        const resolvedTorobUrl = torobUrl || (resolvedPrk ? `https://torob.com/p/${resolvedPrk}/` : null);
         const reasons = steps.find((s) => s.step === "decision")?.message ?? "";
-        const supMsg = steps.find((s) => s.step === "supervisor")?.message ?? null;
+        const supStep = steps.find((s) => s.step === "supervisor");
+        const supMsg = supStep?.message ?? null;
+        const { overallPct: supOverallPct, gates: supGates } = extractSupervisorGates(supStep);
         const aiMsg = steps.find((s) => s.step === "ai_review")?.message ?? null;
+        const aiIdentityMsg = steps.find((s) => s.step === "ai_identity")?.message ?? null;
+        const liquidationMsg = steps.find((s) => s.step === "liquidation_guard")?.message ?? null;
+        const gateStep = steps.find((s) => s.step === "supervision_gate");
         const positionStep = steps.find((s) => s.step === "position");
         const rankIncludingSuspect = d.rankIncludingSuspect ?? (Number(positionStep?.data?.rankIncludingSuspect) || null);
         const totalIncludingSuspect = d.totalSellersIncludingSuspect || Number(positionStep?.data?.totalSellersIncludingSuspect) || 0;
@@ -46,6 +138,9 @@ async function ReviewPage() {
             ((effectiveCost > 0 && finalPrice <= effectiveCost) ||
                 (effectiveFloor > 0 && finalPrice < effectiveFloor));
         const syncFailed = d.status === "sync_failed" || d.status === "pending_sync" || d.pushStatus === "failed";
+        const readyForApproval = typeof gateStep?.data?.readyForApproval === "boolean"
+            ? gateStep.data.readyForApproval
+            : !isBelowFloor && !d.marketConflict && !syncFailed && reasons.length === 0;
         return {
             id: d.id,
             productId: d.productId,
@@ -54,6 +149,7 @@ async function ReviewPage() {
             status: d.status,
             createdAt: d.createdAt.toISOString(),
             cost,
+            effectiveCost,
             current,
             referencePrice: d.referencePrice,
             basePrice: d.basePrice,
@@ -66,14 +162,30 @@ async function ReviewPage() {
             marketConflict: d.marketConflict,
             isBelowFloor,
             syncFailed,
+            readyForApproval,
+            torobUrl: resolvedTorobUrl,
+            torobPrk: resolvedPrk,
+            torobTitle,
             reasons,
             supMsg,
+            supOverallPct,
+            supGates,
             aiMsg,
+            aiIdentityMsg,
+            liquidationMsg,
+            competitors: offersByDecision.get(d.id) ?? [],
         };
     });
-    const rejectedItems = rejectedRows.map(({ d, name, sku }) => {
+    const rejectedItems = rejectedRows.map(({ d, name, sku, torobUrl, torobPrk }) => {
         const steps = Array.isArray(d.steps) ? d.steps : [];
-        const supMsg = steps.find((s) => s.step === "supervisor")?.message ?? "رد توسط ناظر SystemOne";
+        const sourceStep = steps.find((s) => s.step === "source");
+        const torobTitle = typeof sourceStep?.data?.productTitle === "string" ? sourceStep.data.productTitle : null;
+        const stepPrk = typeof sourceStep?.data?.prk === "string" ? sourceStep.data.prk : null;
+        const resolvedPrk = torobPrk || stepPrk || null;
+        const resolvedTorobUrl = torobUrl || (resolvedPrk ? `https://torob.com/p/${resolvedPrk}/` : null);
+        const supStep = steps.find((s) => s.step === "supervisor");
+        const supMsg = supStep?.message ?? "رد توسط ناظر SystemOne";
+        const { overallPct: supOverallPct, gates: supGates } = extractSupervisorGates(supStep);
         return {
             id: d.id,
             productId: d.productId,
@@ -81,6 +193,10 @@ async function ReviewPage() {
             sku,
             createdAt: d.createdAt.toISOString(),
             supMsg,
+            supOverallPct,
+            supGates,
+            torobUrl: resolvedTorobUrl,
+            torobTitle,
         };
     });
     return (0, jsx_runtime_1.jsx)(review_client_1.ReviewClient, { pendingItems: pendingItems, rejectedItems: rejectedItems });

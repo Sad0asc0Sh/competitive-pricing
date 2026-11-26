@@ -261,7 +261,7 @@ export function CardRangeRunner({
                 }
               >
                 {pending && <IconSpinner className="h-4 w-4 shrink-0" />}
-                <span>{pending ? "در حال اجرا…" : `⚡ اعمال روی کارت #${fromCard} تا #${toCard}`}</span>
+                <span>{pending ? "در حال اجرا…" : `🔍 استعلام و پیشنهاد کارت #${fromCard} تا #${toCard}`}</span>
               </button>
             </div>
             <div className="col-span-2 sm:col-span-2 lg:col-span-1">
@@ -310,12 +310,22 @@ export function DecisionActions({
   force = false,
   isBelowFloor = false,
   syncFailed = false,
+  initialFinalPrice,
+  initialBasePrice,
+  initialDiscountPct,
+  initialCampaignType,
+  effectiveCost,
 }: {
   decisionId?: number;
   id?: number;
   force?: boolean;
   isBelowFloor?: boolean;
   syncFailed?: boolean;
+  initialFinalPrice?: number | null;
+  initialBasePrice?: number | null;
+  initialDiscountPct?: number | null;
+  initialCampaignType?: string | null;
+  effectiveCost?: number | null;
 }) {
   const targetId = decisionId ?? id ?? 0;
   const router = useRouter();
@@ -326,17 +336,52 @@ export function DecisionActions({
   const [authorizedBy, setAuthorizedBy] = useState("");
   const [belowCostReason, setBelowCostReason] = useState("");
 
+  const [showEditPanel, setShowEditPanel] = useState(false);
+  const [editFinalPrice, setEditFinalPrice] = useState(
+    initialFinalPrice && initialFinalPrice > 0 ? String(Math.round(initialFinalPrice)) : "",
+  );
+  const [useDiscount, setUseDiscount] = useState(Boolean((initialDiscountPct ?? 0) > 0 && (initialBasePrice ?? 0) > (initialFinalPrice ?? 0)));
+  const [editDiscountPct, setEditDiscountPct] = useState(
+    initialDiscountPct && initialDiscountPct > 0 ? String(Math.round(initialDiscountPct)) : "10",
+  );
+  const [editCampaignType, setEditCampaignType] = useState(initialCampaignType ?? "none");
+
+  const parsedFinal = Math.round(Number(editFinalPrice) || 0);
+  const parsedPct = useDiscount ? Math.max(1, Math.min(60, Math.round(Number(editDiscountPct) || 0))) : 0;
+  const previewBasePrice =
+    useDiscount && parsedFinal > 0 && parsedPct > 0
+      ? Math.round(parsedFinal / (1 - parsedPct / 100))
+      : parsedFinal;
+  const previewProfit =
+    effectiveCost && effectiveCost > 0 && parsedFinal > 0 ? parsedFinal - effectiveCost : null;
+  const effectiveBelowFloor =
+    showEditPanel && parsedFinal > 0
+      ? effectiveCost && effectiveCost > 0
+        ? parsedFinal <= effectiveCost
+        : isBelowFloor
+      : isBelowFloor;
+
   const act = (
     action: "approve" | "reject" | "retry_sync",
     overrideOpts?: { allowBelowCost: boolean; belowCostReason: string; authorizedBy: string },
   ) => {
-    if (action === "approve" && isBelowFloor && !overrideOpts?.allowBelowCost) {
+    if (action === "approve" && effectiveBelowFloor && !overrideOpts?.allowBelowCost) {
       setShowOverrideForm(true);
       const warn = "این تصمیم زیر کف هزینه/سود است؛ برای تایید، مجوز صریح مدیریت (Override) را ثبت کنید.";
       setMsg({ ok: false, text: warn });
       toast.info(warn);
       return;
     }
+
+    const editPayload =
+      action === "approve" && showEditPanel && parsedFinal > 0
+        ? {
+            finalPrice: parsedFinal,
+            useDisplayDiscount: useDiscount,
+            discountPct: useDiscount ? parsedPct : 0,
+            campaignType: useDiscount ? editCampaignType : "none",
+          }
+        : {};
 
     start(async () => {
       setMsg(null);
@@ -346,6 +391,7 @@ export function DecisionActions({
         body: JSON.stringify({
           action,
           force,
+          ...editPayload,
           ...(overrideOpts?.allowBelowCost
             ? {
                 allowBelowCost: true,
@@ -364,6 +410,7 @@ export function DecisionActions({
         setShowOverrideForm(true);
       } else if (ok) {
         setShowOverrideForm(false);
+        setShowEditPanel(false);
       }
       const text = String(data.message ?? (ok ? "انجام شد" : data.error ?? "خطا"));
       setMsg({ ok, text });
@@ -389,12 +436,28 @@ export function DecisionActions({
         ) : (
           <button
             type="button"
-            className={`flex-1 sm:flex-initial ${isBelowFloor ? "btn-danger text-xs" : "btn-success"}`}
+            className={`flex-1 sm:flex-initial ${effectiveBelowFloor ? "btn-danger text-xs" : "btn-success"}`}
             disabled={pending}
             onClick={() => act("approve")}
           >
             {pending && <IconSpinner className="h-3.5 w-3.5" />}
-            <span>{isBelowFloor ? "⚠️ تایید با مجوز زیر کف…" : "تأیید و اعمال"}</span>
+            <span>
+              {effectiveBelowFloor
+                ? "⚠️ تایید با مجوز زیر کف…"
+                : showEditPanel
+                  ? "✅ ذخیره تغییرات و تأیید"
+                  : "تأیید و اعمال"}
+            </span>
+          </button>
+        )}
+        {!syncFailed && (
+          <button
+            type="button"
+            className="btn-secondary flex-1 text-xs sm:flex-initial"
+            disabled={pending}
+            onClick={() => setShowEditPanel((s) => !s)}
+          >
+            ✏️ ویرایش قیمت و تخفیف
           </button>
         )}
         <button
@@ -411,6 +474,96 @@ export function DecisionActions({
         <span className={`text-xs font-medium break-words ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>
           {msg.text}
         </span>
+      )}
+
+      {showEditPanel && !syncFailed && (
+        <div className="w-full space-y-2.5 rounded-xl border border-indigo-200 bg-indigo-50/70 p-3 text-right sm:w-96">
+          <div className="text-xs font-bold text-indigo-900">
+            ✏️ ویرایش دستی قیمت یوزر و تخفیف نمایشی پیش از ارسال به سایت
+          </div>
+          <div>
+            <label className="label text-[11px]">قیمت نهایی فروش به یوزر (تومان)</label>
+            <input
+              type="number"
+              min={1}
+              className="input num text-xs"
+              value={editFinalPrice}
+              onChange={(e) => setEditFinalPrice(e.target.value)}
+            />
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-800">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+              checked={useDiscount}
+              onChange={(e) => setUseDiscount(e.target.checked)}
+            />
+            <span>نمایش تخفیف خط‌خورده (سقف معیار + درصد تخفیف) در سایت</span>
+          </label>
+          {useDiscount && (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="label text-[11px]">درصد تخفیف نمایشی (٪)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  className="input num text-xs"
+                  value={editDiscountPct}
+                  onChange={(e) => setEditDiscountPct(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label text-[11px]">نوع کمپین سایت</label>
+                <select
+                  className="input text-xs"
+                  value={editCampaignType}
+                  onChange={(e) => setEditCampaignType(e.target.value)}
+                >
+                  <option value="none">عادی (خط‌خورده بدون کمپین)</option>
+                  <option value="flash">پیشنهاد لحظه‌ای</option>
+                  <option value="featured">پیشنهاد شگفت‌انگیز</option>
+                  <option value="timed_sale">فرصت زمان‌دار</option>
+                </select>
+              </div>
+            </div>
+          )}
+          <div className="rounded-lg bg-white/80 px-2.5 py-2 text-[11px] leading-5 text-slate-700">
+            <div>
+              سقف خط‌خورده محاسبه‌شده:{" "}
+              <strong className="num text-slate-900">
+                {previewBasePrice > 0 ? `${previewBasePrice.toLocaleString("fa-IR")} تومان` : "—"}
+              </strong>{" "}
+              {useDiscount ? `(${parsedPct.toLocaleString("fa-IR")}٪ تخفیف)` : "(بدون تخفیف نمایشی)"}
+            </div>
+            {previewProfit !== null && (
+              <div>
+                سود خالص تخمینی روی قیمت همکار:{" "}
+                <strong className={`num ${previewProfit > 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                  {previewProfit.toLocaleString("fa-IR")} تومان
+                </strong>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={`flex-1 text-xs sm:flex-initial ${effectiveBelowFloor ? "btn-danger" : "btn-success"}`}
+              disabled={pending || parsedFinal <= 0}
+              onClick={() => act("approve")}
+            >
+              {pending && <IconSpinner className="h-3.5 w-3.5" />}
+              <span>✅ ذخیره و تأیید نهایی</span>
+            </button>
+            <button
+              type="button"
+              className="btn-secondary flex-1 text-xs sm:flex-initial"
+              onClick={() => setShowEditPanel(false)}
+            >
+              بستن
+            </button>
+          </div>
+        </div>
       )}
 
       {showOverrideForm && (
@@ -455,6 +608,70 @@ export function DecisionActions({
             </button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+export function RelinkTorobAction({
+  decisionId,
+  initialTorobUrl,
+}: {
+  decisionId: number;
+  initialTorobUrl?: string | null;
+}) {
+  const router = useRouter();
+  const toast = useToast();
+  const [pending, start] = useTransition();
+  const [torobUrl, setTorobUrl] = useState(initialTorobUrl ?? "");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const submitRelink = () => {
+    const clean = torobUrl.trim();
+    if (!clean) return;
+    start(async () => {
+      setMsg(null);
+      const { ok, data } = await safeJsonFetch(`/api/decisions/${decisionId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "relink_torob",
+          torobUrl: clean,
+        }),
+      });
+      const text = String(data.message ?? (ok ? "لینک ترب اصلاح و استعلام مجدد انجام شد" : data.error ?? "خطا در اصلاح لینک ترب"));
+      setMsg({ ok, text });
+      if (ok) toast.success(text);
+      else toast.error(text);
+      router.refresh();
+    });
+  };
+
+  return (
+    <div className="mt-2.5 space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+      <div className="text-[11px] font-semibold text-slate-700">
+        🔗 اصلاح لینک صفحه محصول در ترب و استعلام مجدد (اگر پنل اشتباه انتخاب شده است):
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          className="input flex-1 text-xs"
+          dir="ltr"
+          placeholder="https://torob.com/p/..."
+          value={torobUrl}
+          onChange={(e) => setTorobUrl(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn-primary shrink-0 text-xs"
+          disabled={pending || !torobUrl.trim()}
+          onClick={submitRelink}
+        >
+          {pending && <IconSpinner className="h-3.5 w-3.5" />}
+          <span>اتصال و استعلام مجدد</span>
+        </button>
+      </div>
+      {msg && (
+        <div className={`text-xs font-medium ${msg.ok ? "text-emerald-700" : "text-rose-700"}`}>{msg.text}</div>
       )}
     </div>
   );

@@ -95,6 +95,9 @@ function rewriteAliases(code, fullPath) {
   code = code.replace(/from\s+["']@\/lib\/([^"']+)["']/g, (_, p1) => `from "${toImportPath(fullPath, path.resolve(root, 'src/lib', p1))}"`)
   code = code.replace(/from\s+["']@\/db\/([^"']+)["']/g, (_, p1) => `from "${toImportPath(fullPath, path.resolve(root, 'src/db', p1))}"`)
   code = code.replace(/from\s+["']@\/db["']/g, () => `from "${toImportPath(fullPath, path.resolve(root, 'src/db/index.ts'))}"`)
+  code = code.replace(/import\(\s*["']@\/lib\/([^"']+)["']\s*\)/g, (_, p1) => `import("${toImportPath(fullPath, path.resolve(root, 'src/lib', p1))}")`)
+  code = code.replace(/import\(\s*["']@\/db\/([^"']+)["']\s*\)/g, (_, p1) => `import("${toImportPath(fullPath, path.resolve(root, 'src/db', p1))}")`)
+  code = code.replace(/import\(\s*["']@\/db["']\s*\)/g, () => `import("${toImportPath(fullPath, path.resolve(root, 'src/db/index.ts'))}")`)
   return code
 }
 

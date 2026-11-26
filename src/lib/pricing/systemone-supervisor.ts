@@ -52,6 +52,29 @@ export const verdictFaLabel: Record<SystemOneVerdict, string> = {
   reject: "رد کامل و توقف (زیر خط قرمز اطمینان)",
 };
 
+/** گیت‌های حیاتی که ردشدنشان به‌صورت مستقل کل تصمیم را رد می‌کند (گیت تخفیف نمایشی فقط ریویو می‌دهد، نه رد کامل) */
+const CRITICAL_VETO_GATES = new Set([
+  "identity_match",
+  "profit_and_rank_safety",
+  "market_data_integrity",
+]);
+
+/** متن شفاف دلیل رد شدن توسط ناظر — تفاوت میان «میانگین کل زیر آستانه» و «وتوی یک گیت خاص» را دقیق نشان می‌دهد */
+export function formatSupervisorRejectMessage(
+  report: Pick<SystemOneSupervisorReport, "overallScorePct" | "rejectBelowPct" | "gates">,
+): string {
+  const rejectedGates = Object.values(report.gates ?? {}).filter((g) => g.verdict === "reject");
+  if (report.overallScorePct >= report.rejectBelowPct && rejectedGates.length > 0) {
+    const names = rejectedGates.map((g) => `${g.title} (${g.scorePct}%)`).join("، ");
+    return `رد توسط ناظر به دلیل وتوی گیت حیاتی [${names}] با وجود میانگین کل ${report.overallScorePct}%`;
+  }
+  if (rejectedGates.length > 0) {
+    const names = rejectedGates.map((g) => `${g.title} (${g.scorePct}%)`).join("، ");
+    return `رد توسط ناظر SystemOne (امتیاز کل ${report.overallScorePct}% < ${report.rejectBelowPct}% · گیت‌های ردشده: ${names})`;
+  }
+  return `رد توسط ناظر SystemOne (امتیاز کل ${report.overallScorePct}% < ${report.rejectBelowPct}%)`;
+}
+
 export function buildSubqSystemOneRequestBody(
   state: string,
   questions: Record<string, SystemOneQuestionSpec>,
@@ -208,8 +231,15 @@ export function evaluateSystemOneSupervisorSync(input: {
   const prfVerdict = classifyThreeZoneScore(profitScorePct, prfReject, prfApprove);
 
   let discountScorePct = 85;
+  const isCleanNoDiscount =
+    input.config.discount?.enabled === false ||
+    ((input.discountPct ?? 0) === 0 && input.finalPrice != null && input.basePrice === input.finalPrice);
+
   if (!input.finalPrice || !input.basePrice || input.basePrice < input.finalPrice) {
     discountScorePct = 20;
+  } else if (isCleanNoDiscount) {
+    // نبود تخفیف نمایشی خطا نیست؛ قیمت مستقیم یوزر بدون خط‌خورده کاملاً سالم است
+    discountScorePct = 100;
   } else {
     const discPct = input.discountPct ?? 0;
     const exactMatch =
@@ -292,8 +322,9 @@ export function evaluateSystemOneSupervisorSync(input: {
       approveAbovePct: dscApprove,
       verdict: dscVerdict,
       weight: supCfg.gates.ceiling_discount_validity.weight ?? 0.15,
-      reason:
-        dscVerdict === "approve"
+      reason: isCleanNoDiscount
+        ? "قیمت مستقیم یوزر بدون تخفیف نمایشی (سالم و معتبر)"
+        : dscVerdict === "approve"
           ? `سقف واقعی بازار و کالیبراسیون ۱۰۰٪ دقیق درصد تخفیف روی کف (${discountScorePct}%)`
           : dscVerdict === "review"
             ? `سقف یا درصد تخفیف در بازه میانی بازبینی (${discountScorePct}%)`
@@ -307,13 +338,15 @@ export function evaluateSystemOneSupervisorSync(input: {
     gateList.reduce((s, g) => s + g.scorePct * (g.weight || 0.25), 0) / totalWeight,
   );
 
-  const anyRejected = gateList.some((g) => g.verdict === "reject");
+  const criticalRejectedGates = gateList.filter((g) => CRITICAL_VETO_GATES.has(g.key) && g.verdict === "reject");
+  const anyCriticalRejected = criticalRejectedGates.length > 0;
+  const anyNonCriticalRejected = gateList.some((g) => !CRITICAL_VETO_GATES.has(g.key) && g.verdict === "reject");
   const anyReview = gateList.some((g) => g.verdict === "review");
 
   let overallVerdict = classifyThreeZoneScore(weightedPct, globalReject, globalApprove);
-  if (anyRejected && supCfg.strictGateVeto !== false) {
+  if (anyCriticalRejected && supCfg.strictGateVeto !== false) {
     overallVerdict = "reject";
-  } else if (anyReview && overallVerdict === "approve" && supCfg.strictGateVeto !== false) {
+  } else if ((anyReview || anyNonCriticalRejected) && overallVerdict === "approve" && supCfg.strictGateVeto !== false) {
     overallVerdict = "review";
   }
 
@@ -402,7 +435,10 @@ export function evaluateSystemOneSupervisorSync(input: {
     summary:
       `ناظر بالاسر SystemOne: امتیاز کل ${weightedPct}% (noul=${(weightedPct / 100).toFixed(2)}) ` +
       `[زیر ${globalReject}% = رد | ${globalReject}% تا ${globalApprove}% = ریویو | بالای ${globalApprove}% = تایید خودکار] → ` +
-      `حکم نهایی: ${verdictFaLabel[overallVerdict]}`,
+      `حکم نهایی: ${verdictFaLabel[overallVerdict]}` +
+      (overallVerdict === "reject" && anyCriticalRejected && weightedPct >= globalReject
+        ? ` (وتوی گیت: ${criticalRejectedGates.map((g) => `${g.title} ${g.scorePct}%`).join("، ")})`
+        : ""),
   };
 }
 
@@ -432,9 +468,15 @@ export async function enrichSupervisorWithSubqApi(
   if (!apiKey) return { ...report, apiStatus: "not_configured" };
 
   try {
+    // هوش مصنوعی / SubQ فقط دربارهٔ تطابق هویت پنل ادغام ترب نظر می‌دهد و هرگز روی قیمت، سود یا تخفیف قضاوت نمی‌کند
+    const identityState = report.requestPreview.state
+      .split("\n")
+      .filter((line) => line.startsWith("Product:") || line.startsWith("TorobListing:"))
+      .join("\n") || report.requestPreview.state;
+
     const apiAnswers = await callSubqSystemOneApi({
-      state: report.requestPreview.state,
-      questions: report.requestPreview.questions,
+      state: identityState,
+      questions: { identity_match: report.requestPreview.questions.identity_match },
       apiKey,
       baseUrl: supCfg.baseUrl || DEFAULT_SUBQ_BASE_URL,
       model: supCfg.model || DEFAULT_SUBQ_MODEL,
@@ -442,26 +484,23 @@ export async function enrichSupervisorWithSubqApi(
     if (!apiAnswers) throw new Error("پاسخ معتبری از API ناظر SubQ دریافت نشد");
 
     const updatedGates: Record<string, SystemOneGateEvaluation> = { ...report.gates };
-    for (const [key, gate] of Object.entries(updatedGates)) {
-      const ans = apiAnswers[key];
-      if (ans && typeof ans.noul === "number" && Number.isFinite(ans.noul)) {
-        const subqPct = Math.round(clamp(ans.noul, 0, 1) * 100);
-        const blendedPct =
-          key === "profit_and_rank_safety" && gate.scorePct === 0
-            ? 0
-            : supCfg.mode === "subq_api_only"
-              ? subqPct
-              : Math.round(gate.scorePct * 0.5 + subqPct * 0.5);
-        const gateVerdict = classifyThreeZoneScore(blendedPct, gate.rejectBelowPct, gate.approveAbovePct);
+    const idGate = updatedGates.identity_match;
+    const idAns = apiAnswers.identity_match;
+    if (idGate && idAns && typeof idAns.noul === "number" && Number.isFinite(idAns.noul)) {
+      const subqPct = Math.round(clamp(idAns.noul, 0, 1) * 100);
+      const blendedPct =
+        supCfg.mode === "subq_api_only"
+          ? subqPct
+          : Math.round(idGate.scorePct * 0.5 + subqPct * 0.5);
+      const gateVerdict = classifyThreeZoneScore(blendedPct, idGate.rejectBelowPct, idGate.approveAbovePct);
 
-        updatedGates[key] = {
-          ...gate,
-          noul: Math.round((blendedPct / 100) * 100) / 100,
-          scorePct: blendedPct,
-          verdict: gateVerdict,
-          reason: gateReasonAfterBlend(gateVerdict, blendedPct, gate.rejectBelowPct, gate.approveAbovePct),
-        };
-      }
+      updatedGates.identity_match = {
+        ...idGate,
+        noul: Math.round((blendedPct / 100) * 100) / 100,
+        scorePct: blendedPct,
+        verdict: gateVerdict,
+        reason: gateReasonAfterBlend(gateVerdict, blendedPct, idGate.rejectBelowPct, idGate.approveAbovePct),
+      };
     }
 
     const gateList = Object.values(updatedGates);
@@ -470,7 +509,9 @@ export async function enrichSupervisorWithSubqApi(
       gateList.reduce((s, g) => s + g.scorePct * (g.weight || 0.25), 0) / totalWeight,
     );
 
-    const anyRejected = gateList.some((g) => g.verdict === "reject");
+    const criticalRejectedGates = gateList.filter((g) => CRITICAL_VETO_GATES.has(g.key) && g.verdict === "reject");
+    const anyCriticalRejected = criticalRejectedGates.length > 0;
+    const anyNonCriticalRejected = gateList.some((g) => !CRITICAL_VETO_GATES.has(g.key) && g.verdict === "reject");
     const anyReview = gateList.some((g) => g.verdict === "review");
 
     let overallVerdict = classifyThreeZoneScore(
@@ -478,9 +519,9 @@ export async function enrichSupervisorWithSubqApi(
       report.rejectBelowPct,
       report.approveAbovePct,
     );
-    if (anyRejected && supCfg.strictGateVeto !== false) {
+    if (anyCriticalRejected && supCfg.strictGateVeto !== false) {
       overallVerdict = "reject";
-    } else if (anyReview && overallVerdict === "approve" && supCfg.strictGateVeto !== false) {
+    } else if ((anyReview || anyNonCriticalRejected) && overallVerdict === "approve" && supCfg.strictGateVeto !== false) {
       overallVerdict = "review";
     }
 
@@ -494,9 +535,12 @@ export async function enrichSupervisorWithSubqApi(
       verdict: overallVerdict,
       gates: updatedGates,
       summary:
-        `ناظر بالاسر SubQ SystemOne API (${report.model}): امتیاز کل ${weightedPct}% (noul=${(weightedPct / 100).toFixed(2)}) ` +
+        `ناظر بالاسر (هویت با SubQ + محاسبه ریاضی): امتیاز کل ${weightedPct}% (noul=${(weightedPct / 100).toFixed(2)}) ` +
         `[زیر ${report.rejectBelowPct}% = رد | ${report.rejectBelowPct}% تا ${report.approveAbovePct}% = ریویو | بالای ${report.approveAbovePct}% = تایید خودکار] → ` +
-        `حکم نهایی: ${verdictFaLabel[overallVerdict]}`,
+        `حکم نهایی: ${verdictFaLabel[overallVerdict]}` +
+        (overallVerdict === "reject" && anyCriticalRejected && weightedPct >= report.rejectBelowPct
+          ? ` (وتوی گیت: ${criticalRejectedGates.map((g) => `${g.title} ${g.scorePct}%`).join("، ")})`
+          : ""),
     };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
