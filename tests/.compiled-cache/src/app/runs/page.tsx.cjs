@@ -66,6 +66,8 @@ async function RunsPage({ searchParams }) {
     }));
     const serializedDecisions = decisions.map(({ d, name, sku }) => {
         const rawSteps = Array.isArray(d.steps) ? d.steps : [];
+        const inquiryData = rawSteps.find((s) => s.step === "torob_inquiry")?.data;
+        const panelEvidence = inquiryData?.panelEvidence;
         const steps = rawSteps.map((s) => ({
             step: String(s.step ?? ""),
             title: String(s.title ?? s.step ?? ""),
@@ -77,6 +79,7 @@ async function RunsPage({ searchParams }) {
             id: d.id,
             productId: d.productId,
             panels: (0, listing_1.decisionPanels)(rawSteps),
+            ...(panelEvidence?.length ? { panelEvidence } : {}),
             name,
             sku,
             source: d.source,

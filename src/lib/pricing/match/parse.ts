@@ -1072,11 +1072,15 @@ export function parseIdentityTitle(text: string, specs?: IdentitySpec[]): Parsed
         packageUnits = count;
         if (count > 1) pack = { qty: count, word: key };
       }
-    } else if (title.head?.cls === "acc:remote" && /^(?:تعداد دکمه|تعداد دکمه ها|تعداد کلید|تعداد شاسی|button count|number of buttons|buttons|number of keys)$/.test(key)) {
+    } else if (/^(?:تعداد دکمه|تعداد دکمه ها|تعداد کلید|تعداد شاسی|button count|number of buttons|buttons|number of keys)$/.test(key)
+        && title.head?.cls === "acc:remote") {
       const typed: ParsedTitle["attrs"] = {};
       const tokens = tokenize(value);
       addRemoteButtons(tokens.length === 1 ? [...tokens, "دکمه"] : tokens, typed, new Set());
       if (typed.buttons?.length) mergeAttr("buttons", typed.buttons);
+    } else if (/^(?:تعداد کانال|تعداد کانال ها|کانال|channel count|channels?)$/.test(key)) {
+      const chAttrs = parseTitle(/^\d+$/.test(value) ? `${value} کانال` : value).attrs.ch;
+      if (chAttrs?.length) mergeAttr("ch", chAttrs);
     } else if (title.head?.cls === "acc:remote" && /^(?:بلوتوث|bluetooth)$/.test(key)) {
       if (/^(?:دارد|بله|yes|true|supported)$/.test(value)) mergeAttr("bluetooth", ["yes"]);
       if (/^(?:ندارد|خیر|no|false|unsupported)$/.test(value)) mergeAttr("bluetooth", ["no"]);

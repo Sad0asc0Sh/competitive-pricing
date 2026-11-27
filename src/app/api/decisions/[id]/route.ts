@@ -6,6 +6,7 @@ import type { TorobLinkConfirmation } from "@/lib/pricing/types";
 import * as runnerService from "@/lib/services/runner";
 import { extractPrk } from "@/lib/sources/torob";
 import { torobProductUrl } from "@/lib/sources/torob-payload";
+import { syncAdminPrkLink } from "@/lib/sources/torob-index";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -100,6 +101,14 @@ export async function POST(req: Request, { params }: Ctx) {
       }
       await tx.update(priceDecisions).set({ status: "superseded", pushStatus: "superseded" })
         .where(and(eq(priceDecisions.id, d.id), inArray(priceDecisions.status, ["rejected", "pending_review"])));
+    });
+
+    await syncAdminPrkLink({
+      productId: d.productId,
+      prk,
+      origin: "admin_review",
+      confirmed: body.confirmIdentity === true,
+      now,
     });
 
     const summary = await runnerService.runPricing({

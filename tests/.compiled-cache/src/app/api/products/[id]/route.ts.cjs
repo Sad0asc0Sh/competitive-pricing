@@ -12,6 +12,7 @@ const sourcing_1 = require("../../../../lib/pricing/sourcing");
 const bootstrap_1 = require("../../../../lib/services/bootstrap");
 const registry_1 = require("../../../../lib/sources/registry");
 const torob_1 = require("../../../../lib/sources/torob");
+const torob_index_1 = require("../../../../lib/sources/torob-index");
 const torob_payload_1 = require("../../../../lib/sources/torob-payload");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
@@ -136,6 +137,14 @@ async function PATCH(req, { params }) {
     patch.updatedAt = new Date();
     try {
         const [row] = await index_ts_1.db.update(schema_1.products).set(patch).where((0, drizzle_orm_1.eq)(schema_1.products.id, productId)).returning();
+        if (linkChanged && typeof patch.torobPrk === "string" && patch.torobPrk) {
+            await (0, torob_index_1.syncAdminPrkLink)({
+                productId,
+                prk: patch.torobPrk,
+                origin: "manual_edit",
+                confirmed: false,
+            });
+        }
         return server_1.NextResponse.json(row);
     }
     catch (e) {

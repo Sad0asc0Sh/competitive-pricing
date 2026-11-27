@@ -3,7 +3,7 @@
 import { ListingLinks } from "./listing-links";
 import type { ListingPanel } from "@/lib/pricing/listing";
 import type { TorobCandidateTrace, TorobInquiryReport, TorobOfferEvidence } from "@/lib/pricing/types";
-import { TorobOfferDetails } from "./torob-evidence";
+import { TorobOfferDetails, TorobPanelComparison, TorobSearchDetails } from "./torob-evidence";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -352,7 +352,9 @@ export function ReviewClient({
                         <OfferCounts inquiry={item.inquiry} used={item.offersUsed} total={item.offersTotal} />
                       </span>
                       <ListingLinks panels={item.panels} />
-                      {item.strategy === "hold_own_price" && <span>تنها فروشندهٔ مشاهده‌شده خودمان هستیم</span>}
+                      {(item.strategy === "hold_own_price" || item.inquiry?.ownStoreOnlyOnPrimary) && (
+                        <span className="badge bg-amber-100 text-amber-900">فقط فروشگاه خودمان روی پنل اصلی</span>
+                      )}
                     </div>
                   </div>
 
@@ -547,6 +549,8 @@ export function ReviewClient({
                     🤖 هوش مصنوعی: {item.aiMsg}
                   </p>
                 )}
+                <TorobPanelComparison panels={item.inquiry?.panelEvidence} />
+                <TorobSearchDetails audit={item.inquiry ?? undefined} />
                 </details>
               </div>
             );
@@ -647,6 +651,10 @@ function RejectedCard({ item }: { item: ReviewRejectedItem }) {
         <SupervisorGateChips gates={item.supGates} />
       </div>
       <p className="mt-2.5 rounded-xl bg-rose-50 px-3 py-2 text-xs leading-6 text-rose-800">{item.supMsg}</p>
+      <div className="mt-2.5 space-y-2">
+        <TorobPanelComparison panels={item.inquiry?.panelEvidence} />
+        <TorobSearchDetails audit={item.inquiry ?? undefined} />
+      </div>
       <RelinkTorobAction
         decisionId={item.id}
         initialTorobUrl={item.torobUrl}
@@ -658,8 +666,14 @@ function RejectedCard({ item }: { item: ReviewRejectedItem }) {
 
 function OfferCounts({ inquiry, used, total }: { inquiry: TorobInquiryReport | null; used: number; total: number }) {
   if (!inquiry) return <>{faNum(used)}/{faNum(total)} پیشنهاد معتبر</>;
-  return <>{faNum(inquiry.extractedOffers)} استخراج‌شده · {inquiry.validOffers == null
-    ? "اعتبار برای قیمت‌گذاری نامشخص" : `${faNum(inquiry.validOffers)} معتبر`}</>;
+  const extCount = inquiry.panelEvidence?.reduce((sum, p) => p.groupRole === "primary" || p.groupRole === "compatible_secondary" ? sum + p.confirmedCompetitorCount : sum, 0);
+  const ownCount = inquiry.panelEvidence?.reduce((sum, p) => p.groupRole === "primary" || p.groupRole === "self_only" ? sum + p.ownStoreOfferCount : sum, 0) ?? 0;
+  return <>
+    {faNum(inquiry.extractedOffers)} استخراج‌شده · {inquiry.validOffers == null
+      ? "اعتبار برای قیمت‌گذاری نامشخص" : `${faNum(inquiry.validOffers)} رقیب معتبر`}
+    {extCount != null && extCount > 0 ? ` (تأییدشده مستقل: ${faNum(extCount)})` : ""}
+    {ownCount > 0 ? ` · خودمان: ${faNum(ownCount)}` : ""}
+  </>;
 }
 
 function Item({ k, v, strong }: { k: string; v: string; strong?: boolean }) {

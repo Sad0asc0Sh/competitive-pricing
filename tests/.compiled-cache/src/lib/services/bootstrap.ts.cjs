@@ -227,6 +227,7 @@ function mergeConfig(partial) {
             scenario: { ...d.estimator.scenario, ...(p.estimator?.scenario ?? {}) },
             confidenceModel: { ...d.estimator.confidenceModel, ...(p.estimator?.confidenceModel ?? {}) },
         },
+        discovery: { ...d.discovery, ...(p.discovery ?? {}) },
     };
 }
 async function logActivity(scope, message, meta = {}, level = "info") {

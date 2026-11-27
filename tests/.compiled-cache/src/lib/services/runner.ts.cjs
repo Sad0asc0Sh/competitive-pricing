@@ -23,6 +23,7 @@ const sourcing_1 = require("../pricing/sourcing");
 const systemone_supervisor_1 = require("../pricing/systemone-supervisor");
 const registry_1 = require("../sources/registry");
 const torob_1 = require("../sources/torob");
+const torob_index_1 = require("../sources/torob-index");
 const connectors_1 = require("../store/connectors");
 const drizzle_orm_1 = require("drizzle-orm");
 const bootstrap_1 = require("./bootstrap");
@@ -591,6 +592,20 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     // مرجع تخفیف own_price_7d (P3): تاریخچه قیمت خودی دوام‌یافته در پنجره ۷ روزی
     const discountContext = await computeOwnDiscountContext(product.id, config.discount.ownPriceWindowDays ?? 7, config.discount.ownPriceMinHoldHours ?? 48);
     const discoveryMode = opts?.discoveryMode ?? (product.needsRefresh ? "extended" : "interactive");
+    const multiPrkGraphEnabled = config.discovery?.multiPrkGraphEnabled ?? true;
+    const hybridIndexEnabled = config.discovery?.hybridIndexEnabled ?? true;
+    const graphHints = (!manualOffers?.length && (multiPrkGraphEnabled || hybridIndexEnabled))
+        ? await (0, torob_index_1.loadProductDiscoveryHints)({
+            productId: product.id,
+            productName: product.name,
+            sku: product.sku,
+            category: product.category,
+            torobPrk: product.torobPrk,
+            anchorPriceToman: product.costPrice > 0 ? product.costPrice : null,
+            multiPrkGraphEnabled,
+            hybridIndexEnabled,
+        })
+        : { knownPrks: product.torobPrk ? [product.torobPrk] : [], knownPrkHints: [], hybridHitsUsed: 0 };
     const source = await (0, registry_1.fetchFromSource)({
         id: product.id,
         sku: product.sku,
@@ -599,6 +614,8 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         sourceType: product.sourceType,
         torobUrl: product.torobUrl,
         torobPrk: product.torobPrk,
+        knownPrks: graphHints.knownPrks,
+        knownPrkHints: graphHints.knownPrkHints,
         torobDetailsUrl: product.torobDetailsUrl,
         torobLinkConfirmation: product.torobLinkConfirmation,
         costPrice: product.costPrice,
@@ -610,8 +627,24 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             minSellerCount: config.filters.minSellerCount,
             aiIdentityEnabled: Boolean(config.ai.enabled && config.ai.torobMatchEnabled === true),
             discoveryMode,
+            ownShopNames: config.filters.ownShopNames,
+            ownShopIds: config.filters.ownShopIds,
+            preferBroadDiscovery: config.discovery?.preferBroadDiscovery ?? false,
+            hybridIndexEnabled: config.discovery?.hybridIndexEnabled ?? true,
+            multiPrkGraphEnabled: config.discovery?.multiPrkGraphEnabled ?? true,
+            singleFlightEnabled: config.discovery?.singleFlightEnabled ?? true,
         },
     }, manualOffers);
+    if (source.torob && graphHints.hybridHitsUsed > 0) {
+        source.torob.hybridIndexHintsUsed = graphHints.hybridHitsUsed;
+    }
+    await (0, torob_index_1.persistDiscoveryGraphAndCatalog)({
+        productId: product.id,
+        source,
+        multiPrkGraphEnabled,
+        hybridIndexEnabled,
+        isSimulated,
+    });
     const ownRecentPrices = await loadOwnRecentPrices(product.id, product.currentFinalPrice);
     const pricingContext = {
         productId: product.id,
@@ -915,9 +948,10 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         }
     }
     // قفل کردن PRK در دیتابیس فقط زمانی که تصمیم اعمال شده یا گیت تطابق هویت بالای آستانه تایید خودکار (approve) باشد!
-    // A cached primary PRK skips discovery on the next run and loses the secondary panels.
+    // A cached primary PRK skips discovery on the next run and loses the secondary panels; self-only PRKs must not lock binding.
     const combinedPanels = Array.isArray(source.meta?.panels) && source.meta.panels.length > 1;
-    const identityApproved = source.ok && !isSimulated && !combinedPanels &&
+    const selfOnlyPrimary = Boolean(source.torob?.ownStoreOnlyOnPrimary);
+    const identityApproved = source.ok && !isSimulated && !combinedPanels && !selfOnlyPrimary &&
         (!result.torobInquiry || result.torobInquiry.status === "MATCH_CONFIRMED") &&
         result.supervisor.gates.identity_match?.verdict === "approve";
     const sameProductBinding = (0, drizzle_orm_1.sql) `${schema_1.products.name} = ${product.name}

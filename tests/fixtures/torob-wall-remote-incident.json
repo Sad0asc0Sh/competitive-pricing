@@ -1,0 +1,183 @@
+{
+  "target": {
+    "name": "ریموت لرن دیواری 3 کانال طرح درپا 433MHz",
+    "sku": "6712",
+    "costPrice": 175000,
+    "anchorPriceToman": 235000
+  },
+  "codedEquivalentTarget": {
+    "name": "ریموت دیواری بتا مدل WLC-3CH 3 کانال لرن 433MHz",
+    "sku": "WLC-3CH",
+    "costPrice": 175000,
+    "anchorPriceToman": 235000
+  },
+  "cards": {
+    "cardA_selfOnly": {
+      "prk": "wall-self-ekg-a",
+      "name_fa": "ریموت لرن دیواری 3 کانال طرح درپا 433MHz",
+      "name_en": null,
+      "price_toman": 250000,
+      "shop_count": 1,
+      "offers": [
+        {
+          "shop_name": "ای کا جی کالا",
+          "shop_id": "ekg-shop-1",
+          "shop_city": "مشهد",
+          "price_toman": 250000,
+          "product_title": "ریموت لرن دیواری 3 کانال طرح درپا 433MHz",
+          "shop_score": 4.8,
+          "shop_votes": 120,
+          "in_stock": true,
+          "is_ad": false,
+          "seller_type": "online",
+          "last_changed": "امروز"
+        }
+      ]
+    },
+    "cardB_observedAmbiguous": {
+      "prk": "wall-consol-bt-b",
+      "name_fa": "ریموت دیواری بلوتوثی 433 مگاهرتز کد لرن",
+      "name_en": null,
+      "price_toman": 215000,
+      "shop_count": 7,
+      "offers": [
+        {
+          "shop_name": "ای کا جی کالا",
+          "shop_id": "ekg-shop-1",
+          "shop_city": "مشهد",
+          "price_toman": 250000,
+          "product_title": "ریموت دیواری بلوتوثی 433 مگاهرتز کد لرن",
+          "shop_score": 4.8,
+          "shop_votes": 120,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "امروز"
+        },
+        {
+          "shop_name": "تهران گیت",
+          "shop_id": "comp-1",
+          "shop_city": "تهران",
+          "price_toman": 215000,
+          "product_title": "ریموت دیواری کد لرن 433 مگاهرتز",
+          "shop_score": 4.7,
+          "shop_votes": 80,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "۱ ساعت پیش"
+        },
+        {
+          "shop_name": "امنیت پارس",
+          "shop_id": "comp-2",
+          "shop_city": "تهران",
+          "price_toman": 220000,
+          "product_title": "ریموت دیواری بلوتوثی 433 مگاهرتز کد لرن",
+          "shop_score": 4.6,
+          "shop_votes": 60,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "۲ ساعت پیش"
+        },
+        {
+          "shop_name": "دیجی ریموت",
+          "shop_id": "comp-3",
+          "shop_city": "اصفهان",
+          "price_toman": 224000,
+          "product_title": "ریموت دیواری بلوتوثی 433 کد لرن",
+          "shop_score": 4.5,
+          "shop_votes": 45,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "۳ ساعت پیش"
+        },
+        {
+          "shop_name": "الکترو شرق",
+          "shop_id": "comp-4",
+          "shop_city": "مشهد",
+          "price_toman": 229000,
+          "product_title": "ریموت دیواری بلوتوثی 433 مگاهرتز کد لرن",
+          "shop_score": 4.9,
+          "shop_votes": 90,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "امروز"
+        },
+        {
+          "shop_name": "کیفیت کنترل",
+          "shop_id": "comp-5",
+          "shop_city": "شیراز",
+          "price_toman": 235000,
+          "product_title": "ریموت دیواری کد لرن 433",
+          "shop_score": 4.4,
+          "shop_votes": 30,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "۱ روز پیش"
+        },
+        {
+          "shop_name": "آلفا کنترل",
+          "shop_id": "comp-6",
+          "shop_city": "تهران",
+          "price_toman": 240000,
+          "product_title": "ریموت دیواری بلوتوثی 433 مگاهرتز کد لرن",
+          "shop_score": 4.7,
+          "shop_votes": 50,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "امروز"
+        }
+      ]
+    },
+    "cardC_reviewPartial": {
+      "prk": "wall-review-c",
+      "name_fa": "ریموت دیواری بتا کد لرن 433",
+      "price_toman": 225000,
+      "shop_count": 2,
+      "offers": [
+        {
+          "shop_name": "فروشگاه نیمه‌تایید ۱",
+          "shop_id": "rev-1",
+          "shop_city": "تهران",
+          "price_toman": 225000,
+          "product_title": "ریموت دیواری کد لرن 433",
+          "shop_score": 4.5,
+          "shop_votes": 20,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "امروز"
+        },
+        {
+          "shop_name": "فروشگاه نیمه‌تایید ۲",
+          "shop_id": "rev-2",
+          "shop_city": "تهران",
+          "price_toman": 230000,
+          "product_title": "ریموت دیواری لرن 433",
+          "shop_score": 4.5,
+          "shop_votes": 25,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "امروز"
+        }
+      ]
+    },
+    "cardD_mismatch": {
+      "prk": "wall-mismatch-315-d",
+      "name_fa": "ریموت دیواری بتا مدل WLC-3CH 3 کانال لرن 315MHz",
+      "price_toman": 195000,
+      "shop_count": 3,
+      "offers": [
+        {
+          "shop_name": "ناهمخوان ۳۱۵ یک",
+          "shop_id": "mis-1",
+          "shop_city": "تهران",
+          "price_toman": 195000,
+          "product_title": "ریموت دیواری بتا مدل WLC-3CH 3 کانال لرن 315MHz",
+          "shop_score": 4.6,
+          "shop_votes": 30,
+          "in_stock": true,
+          "seller_type": "online",
+          "last_changed": "امروز"
+        }
+      ]
+    }
+  }
+}

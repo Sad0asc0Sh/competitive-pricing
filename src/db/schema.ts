@@ -9,6 +9,7 @@ import {
   real,
   varchar,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type { PricingProfileConfig, SupplierQuote, TorobLinkConfirmation, TorobOfferEvidence } from "@/lib/pricing/types";
 
@@ -308,6 +309,63 @@ export const activityLogs = pgTable("activity_logs", {
   meta: jsonb("meta").default({}).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+/** فهرست محلی کارت‌های دیده‌شده در ترب برای کشف ترکیبی چندحالته */
+export const torobCatalogCards = pgTable(
+  "torob_catalog_cards",
+  {
+    prk: text("prk").primaryKey(),
+    titleFa: text("title_fa"),
+    titleEn: text("title_en"),
+    normalizedTitle: text("normalized_title").notNull(),
+    searchDocument: text("search_document").notNull(),
+    brands: jsonb("brands").$type<string[]>().default([]).notNull(),
+    models: jsonb("models").$type<string[]>().default([]).notNull(),
+    specs: jsonb("specs").$type<Array<{ key: string; value: string }>>().default([]).notNull(),
+    canonicalAttrs: jsonb("canonical_attrs").$type<Record<string, (string | number)[]>>().default({}).notNull(),
+    category: text("category"),
+    sellerNames: jsonb("seller_names").$type<string[]>().default([]).notNull(),
+    sellerTitles: jsonb("seller_titles").$type<string[]>().default([]).notNull(),
+    lastPriceToman: integer("last_price_toman"),
+    reportedSellerCount: integer("reported_seller_count"),
+    lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+    lastVerifiedAt: timestamp("last_verified_at"),
+    sourceProvenance: varchar("source_provenance", { length: 40 }).default("torob_mcp").notNull(),
+  },
+  (t) => [
+    index("torob_catalog_cards_norm_idx").on(t.normalizedTitle),
+    index("torob_catalog_cards_seen_idx").on(t.lastSeenAt),
+  ],
+);
+
+/** گراف چندکارتهٔ ارتباط محصول فروشگاه با کارت‌های ترب (PRK) */
+export const productTorobLinks = pgTable(
+  "product_torob_links",
+  {
+    id: serial("id").primaryKey(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    prk: text("prk").notNull(),
+    relationStatus: varchar("relation_status", { length: 30 }).default("review_required").notNull(),
+    identityScore: real("identity_score"),
+    confidence: real("confidence"),
+    origin: varchar("origin", { length: 40 }).default("auto_discovery").notNull(),
+    isPrimary: boolean("is_primary").default(false).notNull(),
+    ownStorePresent: boolean("own_store_present").default(false).notNull(),
+    externalCompetitorCount: integer("external_competitor_count").default(0).notNull(),
+    reportedSellerCount: integer("reported_seller_count"),
+    discoveringQueries: jsonb("discovering_queries").$type<string[]>().default([]).notNull(),
+    lastReason: text("last_reason"),
+    lastVerifiedAt: timestamp("last_verified_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("product_torob_links_prod_prk_uq").on(t.productId, t.prk),
+    index("product_torob_links_prod_idx").on(t.productId, t.isPrimary, t.externalCompetitorCount),
+  ],
+);
 
 export type DecisionStep = {
   step: string;

@@ -43,6 +43,7 @@ const format_1 = require("../../../../lib/format");
 const runnerService = __importStar(require("../../../../lib/services/runner"));
 const torob_1 = require("../../../../lib/sources/torob");
 const torob_payload_1 = require("../../../../lib/sources/torob-payload");
+const torob_index_1 = require("../../../../lib/sources/torob-index");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
@@ -122,6 +123,13 @@ async function POST(req, { params }) {
             }
             await tx.update(schema_1.priceDecisions).set({ status: "superseded", pushStatus: "superseded" })
                 .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id), (0, drizzle_orm_1.inArray)(schema_1.priceDecisions.status, ["rejected", "pending_review"])));
+        });
+        await (0, torob_index_1.syncAdminPrkLink)({
+            productId: d.productId,
+            prk,
+            origin: "admin_review",
+            confirmed: body.confirmIdentity === true,
+            now,
         });
         const summary = await runnerService.runPricing({
             trigger: "manual",

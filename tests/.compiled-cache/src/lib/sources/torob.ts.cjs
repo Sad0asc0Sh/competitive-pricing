@@ -9,7 +9,6 @@ exports.normalizeTorobInPersonSeller = normalizeTorobInPersonSeller;
 exports.parseTorobJson = parseTorobJson;
 exports.fetchTorobPriceTrendV4 = fetchTorobPriceTrendV4;
 const filters_1 = require("../pricing/filters");
-const parse_1 = require("../pricing/match/parse");
 const text_1 = require("../pricing/match/text");
 const config_1 = require("../torob-relay/config");
 const crypto_1 = require("../torob-relay/crypto");
@@ -327,8 +326,9 @@ exports.torobAdapter = {
     async fetchOffers(product) {
         const now = new Date();
         const prk = extractPrk(product.torobUrl, product.torobPrk);
-        const cachedPrk = prk && !product.torobUrl && !product.torobLinkConfirmation &&
-            !(0, parse_1.parseTitle)(product.name, { sku: product.sku }).codes.some((code) => !code.inCompat) ? prk : null;
+        const preferBroadDiscovery = Boolean(product.matchConfig?.preferBroadDiscovery);
+        const directConfirmedLock = Boolean(product.torobLinkConfirmation);
+        const cachedPrk = prk && (preferBroadDiscovery || (!product.torobUrl && !directConfirmedLock)) ? prk : null;
         const cache = (0, torob_cache_1.isNativeFetchActive)() && process.env.TOROB_DISABLE_CACHE !== "1" ? torob_cache_1.defaultTorobCache : undefined;
         const options = {
             productName: product.name,
@@ -337,6 +337,7 @@ exports.torobAdapter = {
             prk: cachedPrk ? null : prk,
             cachedPrk,
             knownPrks: product.knownPrks,
+            knownPrkHints: product.knownPrkHints,
             detailsUrl: prk ? (0, torob_payload_1.safeTorobDetailsUrl)(product.torobDetailsUrl, prk, true) : null,
             confirmation: product.torobLinkConfirmation,
             anchorPriceToman: product.currentFinalPrice && product.currentFinalPrice > 0 ? product.currentFinalPrice

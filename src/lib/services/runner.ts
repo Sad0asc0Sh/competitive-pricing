@@ -24,6 +24,7 @@ import {
 import type { PricingContext, PricingProfileConfig, PricingResult, RawOffer, SupplierQuote, TorobInquiryStatus } from "@/lib/pricing/types";
 import { fetchFromSource, isAllowedSourceType } from "@/lib/sources/registry";
 import { extractPrk } from "@/lib/sources/torob";
+import { loadProductDiscoveryHints, persistDiscoveryGraphAndCatalog } from "@/lib/sources/torob-index";
 import { buildIdempotencyKey, pushToStore, type PushResult } from "@/lib/store/connectors";
 import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { ensureDefaults, getProfileConfig, logActivity } from "./bootstrap";
@@ -784,6 +785,21 @@ async function priceOneProduct(
   const discoveryMode: "interactive" | "extended" =
     opts?.discoveryMode ?? (product.needsRefresh ? "extended" : "interactive");
 
+  const multiPrkGraphEnabled = config.discovery?.multiPrkGraphEnabled ?? true;
+  const hybridIndexEnabled = config.discovery?.hybridIndexEnabled ?? true;
+  const graphHints = (!manualOffers?.length && (multiPrkGraphEnabled || hybridIndexEnabled))
+    ? await loadProductDiscoveryHints({
+        productId: product.id,
+        productName: product.name,
+        sku: product.sku,
+        category: product.category,
+        torobPrk: product.torobPrk,
+        anchorPriceToman: product.costPrice > 0 ? product.costPrice : null,
+        multiPrkGraphEnabled,
+        hybridIndexEnabled,
+      })
+    : { knownPrks: product.torobPrk ? [product.torobPrk] : [], knownPrkHints: [], hybridHitsUsed: 0 };
+
   const source = await fetchFromSource(
     {
       id: product.id,
@@ -793,6 +809,8 @@ async function priceOneProduct(
       sourceType: product.sourceType,
       torobUrl: product.torobUrl,
       torobPrk: product.torobPrk,
+      knownPrks: graphHints.knownPrks,
+      knownPrkHints: graphHints.knownPrkHints,
       torobDetailsUrl: product.torobDetailsUrl,
       torobLinkConfirmation: product.torobLinkConfirmation,
       costPrice: product.costPrice,
@@ -806,10 +824,28 @@ async function priceOneProduct(
         minSellerCount: config.filters.minSellerCount,
         aiIdentityEnabled: Boolean(config.ai.enabled && config.ai.torobMatchEnabled === true),
         discoveryMode,
+        ownShopNames: config.filters.ownShopNames,
+        ownShopIds: config.filters.ownShopIds,
+        preferBroadDiscovery: config.discovery?.preferBroadDiscovery ?? false,
+        hybridIndexEnabled: config.discovery?.hybridIndexEnabled ?? true,
+        multiPrkGraphEnabled: config.discovery?.multiPrkGraphEnabled ?? true,
+        singleFlightEnabled: config.discovery?.singleFlightEnabled ?? true,
       },
     },
     manualOffers,
   );
+
+  if (source.torob && graphHints.hybridHitsUsed > 0) {
+    source.torob.hybridIndexHintsUsed = graphHints.hybridHitsUsed;
+  }
+
+  await persistDiscoveryGraphAndCatalog({
+    productId: product.id,
+    source,
+    multiPrkGraphEnabled,
+    hybridIndexEnabled,
+    isSimulated,
+  });
 
   const ownRecentPrices = await loadOwnRecentPrices(product.id, product.currentFinalPrice);
 
@@ -1151,9 +1187,10 @@ async function priceOneProduct(
   }
 
   // قفل کردن PRK در دیتابیس فقط زمانی که تصمیم اعمال شده یا گیت تطابق هویت بالای آستانه تایید خودکار (approve) باشد!
-  // A cached primary PRK skips discovery on the next run and loses the secondary panels.
+  // A cached primary PRK skips discovery on the next run and loses the secondary panels; self-only PRKs must not lock binding.
   const combinedPanels = Array.isArray(source.meta?.panels) && source.meta.panels.length > 1;
-  const identityApproved = source.ok && !isSimulated && !combinedPanels &&
+  const selfOnlyPrimary = Boolean(source.torob?.ownStoreOnlyOnPrimary);
+  const identityApproved = source.ok && !isSimulated && !combinedPanels && !selfOnlyPrimary &&
     (!result.torobInquiry || result.torobInquiry.status === "MATCH_CONFIRMED") &&
     result.supervisor.gates.identity_match?.verdict === "approve";
   const sameProductBinding = sql`${products.name} = ${product.name}

@@ -39,6 +39,7 @@ class TorobDiscoveryCache {
     details = new Map();
     similar = new Map();
     priceTrends = new Map();
+    inFlight = new Map();
     constructor(cfg = {}) {
         this.cfg = { ...DEFAULT_CACHE_CONFIG, ...cfg };
     }
@@ -130,9 +131,23 @@ class TorobDiscoveryCache {
         this.details.clear();
         this.similar.clear();
         this.priceTrends.clear();
+        this.inFlight.clear();
+    }
+    runSingleFlight(kind, key, fetcher) {
+        const fullKey = `${kind}:${key}`;
+        const existing = this.inFlight.get(fullKey);
+        if (existing) {
+            return { promise: existing, deduplicated: true };
+        }
+        const promise = fetcher().finally(() => {
+            if (this.inFlight.get(fullKey) === promise)
+                this.inFlight.delete(fullKey);
+        });
+        this.inFlight.set(fullKey, promise);
+        return { promise, deduplicated: false };
     }
     stats() {
-        return { searchEntries: this.searches.size, detailsEntries: this.details.size };
+        return { searchEntries: this.searches.size, detailsEntries: this.details.size, inFlightCount: this.inFlight.size };
     }
 }
 exports.TorobDiscoveryCache = TorobDiscoveryCache;

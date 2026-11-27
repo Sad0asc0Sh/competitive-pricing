@@ -1,11 +1,27 @@
 import type { SourceResult, SupplierQuote, TorobLinkConfirmation } from "@/lib/pricing/types";
 
+export interface KnownPrkHint {
+  prk: string;
+  title?: string | null;
+  identityStatus?: string | null;
+  externalCompetitorCount?: number | null;
+  ownStorePresent?: boolean | null;
+  confidence?: number | null;
+  lastVerifiedAt?: string | Date | null;
+}
+
 export interface SourceMatchConfig {
   rejectBelowPct?: number;
   approveAbovePct?: number;
   minSellerCount?: number;
   aiIdentityEnabled?: boolean;
   discoveryMode?: "interactive" | "extended";
+  ownShopNames?: string[];
+  ownShopIds?: string[];
+  preferBroadDiscovery?: boolean;
+  hybridIndexEnabled?: boolean;
+  multiPrkGraphEnabled?: boolean;
+  singleFlightEnabled?: boolean;
 }
 
 export interface SourceProduct {
@@ -17,6 +33,7 @@ export interface SourceProduct {
   torobUrl?: string | null;
   torobPrk?: string | null;
   knownPrks?: string[];
+  knownPrkHints?: KnownPrkHint[];
   torobDetailsUrl?: string | null;
   torobLinkConfirmation?: TorobLinkConfirmation | null;
   costPrice: number;

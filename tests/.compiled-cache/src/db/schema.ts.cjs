@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.activityLogs = exports.storeConnectors = exports.schedules = exports.discountCampaigns = exports.competitorOffers = exports.priceDecisions = exports.priceRuns = exports.products = exports.pricingProfiles = exports.settings = void 0;
+exports.productTorobLinks = exports.torobCatalogCards = exports.activityLogs = exports.storeConnectors = exports.schedules = exports.discountCampaigns = exports.competitorOffers = exports.priceDecisions = exports.priceRuns = exports.products = exports.pricingProfiles = exports.settings = void 0;
 const pg_core_1 = require("drizzle-orm/pg-core");
 /** تنظیمات عمومی سیستم (key/value) */
 exports.settings = (0, pg_core_1.pgTable)("settings", {
@@ -271,3 +271,50 @@ exports.activityLogs = (0, pg_core_1.pgTable)("activity_logs", {
     meta: (0, pg_core_1.jsonb)("meta").default({}).notNull(),
     createdAt: (0, pg_core_1.timestamp)("created_at").defaultNow().notNull(),
 });
+/** فهرست محلی کارت‌های دیده‌شده در ترب برای کشف ترکیبی چندحالته */
+exports.torobCatalogCards = (0, pg_core_1.pgTable)("torob_catalog_cards", {
+    prk: (0, pg_core_1.text)("prk").primaryKey(),
+    titleFa: (0, pg_core_1.text)("title_fa"),
+    titleEn: (0, pg_core_1.text)("title_en"),
+    normalizedTitle: (0, pg_core_1.text)("normalized_title").notNull(),
+    searchDocument: (0, pg_core_1.text)("search_document").notNull(),
+    brands: (0, pg_core_1.jsonb)("brands").$type().default([]).notNull(),
+    models: (0, pg_core_1.jsonb)("models").$type().default([]).notNull(),
+    specs: (0, pg_core_1.jsonb)("specs").$type().default([]).notNull(),
+    canonicalAttrs: (0, pg_core_1.jsonb)("canonical_attrs").$type().default({}).notNull(),
+    category: (0, pg_core_1.text)("category"),
+    sellerNames: (0, pg_core_1.jsonb)("seller_names").$type().default([]).notNull(),
+    sellerTitles: (0, pg_core_1.jsonb)("seller_titles").$type().default([]).notNull(),
+    lastPriceToman: (0, pg_core_1.integer)("last_price_toman"),
+    reportedSellerCount: (0, pg_core_1.integer)("reported_seller_count"),
+    lastSeenAt: (0, pg_core_1.timestamp)("last_seen_at").defaultNow().notNull(),
+    lastVerifiedAt: (0, pg_core_1.timestamp)("last_verified_at"),
+    sourceProvenance: (0, pg_core_1.varchar)("source_provenance", { length: 40 }).default("torob_mcp").notNull(),
+}, (t) => [
+    (0, pg_core_1.index)("torob_catalog_cards_norm_idx").on(t.normalizedTitle),
+    (0, pg_core_1.index)("torob_catalog_cards_seen_idx").on(t.lastSeenAt),
+]);
+/** گراف چندکارتهٔ ارتباط محصول فروشگاه با کارت‌های ترب (PRK) */
+exports.productTorobLinks = (0, pg_core_1.pgTable)("product_torob_links", {
+    id: (0, pg_core_1.serial)("id").primaryKey(),
+    productId: (0, pg_core_1.integer)("product_id")
+        .notNull()
+        .references(() => exports.products.id, { onDelete: "cascade" }),
+    prk: (0, pg_core_1.text)("prk").notNull(),
+    relationStatus: (0, pg_core_1.varchar)("relation_status", { length: 30 }).default("review_required").notNull(),
+    identityScore: (0, pg_core_1.real)("identity_score"),
+    confidence: (0, pg_core_1.real)("confidence"),
+    origin: (0, pg_core_1.varchar)("origin", { length: 40 }).default("auto_discovery").notNull(),
+    isPrimary: (0, pg_core_1.boolean)("is_primary").default(false).notNull(),
+    ownStorePresent: (0, pg_core_1.boolean)("own_store_present").default(false).notNull(),
+    externalCompetitorCount: (0, pg_core_1.integer)("external_competitor_count").default(0).notNull(),
+    reportedSellerCount: (0, pg_core_1.integer)("reported_seller_count"),
+    discoveringQueries: (0, pg_core_1.jsonb)("discovering_queries").$type().default([]).notNull(),
+    lastReason: (0, pg_core_1.text)("last_reason"),
+    lastVerifiedAt: (0, pg_core_1.timestamp)("last_verified_at").defaultNow().notNull(),
+    createdAt: (0, pg_core_1.timestamp)("created_at").defaultNow().notNull(),
+    updatedAt: (0, pg_core_1.timestamp)("updated_at").defaultNow().notNull(),
+}, (t) => [
+    (0, pg_core_1.uniqueIndex)("product_torob_links_prod_prk_uq").on(t.productId, t.prk),
+    (0, pg_core_1.index)("product_torob_links_prod_idx").on(t.productId, t.isPrimary, t.externalCompetitorCount),
+]);

@@ -248,12 +248,22 @@ function isHighAlignmentReviewCandidate(target, targetTitle, result) {
         (cardPrice / targetAnchor >= 0.45 && cardPrice / targetAnchor <= 2.1);
     return plausiblePrice && (matched > 0 || (specMatches > 0 && brandMatch) || specMatches >= 2);
 }
-function scoreInspectionPriority(target, targetTitle, result, meta, codeless, knownPrkSet) {
+function scoreInspectionPriority(target, targetTitle, result, meta, codeless, knownPrkSet, knownPrkHints) {
     const probe = codeless && result.rejected && (0, torob_identity_1.isSellerEvidenceProbeCandidate)(target, targetTitle, result);
     const highAlignment = isHighAlignmentReviewCandidate(target, targetTitle, result);
     let score = 0;
-    if (knownPrkSet.has(result.candidate.prk))
-        score += 120;
+    if (knownPrkSet.has(result.candidate.prk)) {
+        const hint = knownPrkHints?.get(result.candidate.prk);
+        if (hint && hint.identityStatus === "MATCH_CONFIRMED" && (hint.externalCompetitorCount ?? 0) >= 2) {
+            score += 150;
+        }
+        else if (hint && hint.ownStorePresent && (hint.externalCompetitorCount ?? 0) === 0) {
+            score += 95;
+        }
+        else {
+            score += 120;
+        }
+    }
     if (result.status === "MATCH_CONFIRMED")
         score += 100;
     else if (result.titleState !== "present")
@@ -318,10 +328,121 @@ async function resolveTorobSource(options) {
     const codeless = profile.isCodeless;
     const mode = options.mode ?? options.matchConfig?.discoveryMode ?? "interactive";
     const budgets = resolveDiscoveryBudgets(mode, codeless, options.budgets);
+    const knownPrkHints = new Map((options.knownPrkHints ?? []).map((h) => [h.prk, h]));
     const knownPrkSet = new Set([
         ...(options.cachedPrk ? [options.cachedPrk] : []),
         ...(options.knownPrks ?? []),
+        ...(options.knownPrkHints ?? []).map((h) => h.prk),
     ]);
+    const ownShopMatcher = (0, own_shop_1.makeOwnShopMatcher)(options.matchConfig?.ownShopNames, options.matchConfig?.ownShopIds);
+    const singleFlightEnabled = options.matchConfig?.singleFlightEnabled !== false;
+    const localInFlight = new Map();
+    const singleFlight = (kind, key, fn) => {
+        if (options.cache && singleFlightEnabled) {
+            return options.cache.runSingleFlight(kind, key, fn).promise;
+        }
+        const fullKey = `${kind}:${key}`;
+        const existing = localInFlight.get(fullKey);
+        if (existing)
+            return existing;
+        const promise = fn().finally(() => {
+            if (localInFlight.get(fullKey) === promise)
+                localInFlight.delete(fullKey);
+        });
+        localInFlight.set(fullKey, promise);
+        return promise;
+    };
+    const verifiedExternalOffers = (item) => resolveIdentity(item) === "MATCH_CONFIRMED" && item.extraction === "extracted"
+        ? item.offers.filter((offer) => offer.torobIdentity?.status === "MATCH_CONFIRMED" &&
+            !ownShopMatcher({ shopName: offer.shopName, shopId: offer.shopId }))
+        : [];
+    const verifiedOwnOffers = (item) => resolveIdentity(item) === "MATCH_CONFIRMED" && item.extraction === "extracted"
+        ? item.offers.filter((offer) => offer.torobIdentity?.status === "MATCH_CONFIRMED" &&
+            ownShopMatcher({ shopName: offer.shopName, shopId: offer.shopId }))
+        : [];
+    const buildItemPanelEvidence = (item, role, selectionReason, exclusionReason) => {
+        const rawId = resolveIdentity(item);
+        const identityStatus = rawId === "MATCH_CONFIRMED" || rawId === "IDENTITY_MISMATCH" ? rawId : "REVIEW_REQUIRED";
+        const externalKeys = new Set();
+        const confirmedExternalKeys = new Set();
+        let ownStoreOfferCount = 0;
+        let reviewRequiredCompetitorCount = 0;
+        let rejectedCompetitorCount = 0;
+        let freshExternalCount = 0;
+        let newestMs = 0;
+        const freshCutoffMs = options.now.getTime() - 7 * 86_400_000;
+        item.offers.forEach((offer, idx) => {
+            const isOwn = ownShopMatcher({ shopName: offer.shopName, shopId: offer.shopId });
+            if (isOwn) {
+                ownStoreOfferCount++;
+                return;
+            }
+            const sk = `${(0, own_shop_1.compactShopKey)(offer.shopId) || (0, own_shop_1.compactShopKey)(offer.shopName) || `idx_${idx}`}|${offer.sellerType ?? "online"}`;
+            externalKeys.add(sk);
+            const changedMs = offer.lastChangedAt?.getTime() ?? 0;
+            if (changedMs > newestMs)
+                newestMs = changedMs;
+            const isPricedValid = offer.price > 0 && offer.inStock !== false && !offer.isAd && !offer.priceUnreliable;
+            if (identityStatus === "MATCH_CONFIRMED" && offer.torobIdentity?.status === "MATCH_CONFIRMED" && isPricedValid) {
+                confirmedExternalKeys.add(sk);
+                if (changedMs >= freshCutoffMs)
+                    freshExternalCount++;
+            }
+            else if (offer.torobIdentity?.status === "IDENTITY_MISMATCH") {
+                rejectedCompetitorCount++;
+            }
+            else {
+                reviewRequiredCompetitorCount++;
+                if (isPricedValid && changedMs >= freshCutoffMs)
+                    freshExternalCount++;
+            }
+        });
+        const reportedSellerCount = item.read.data?.totalSellerCount ?? item.result.candidate.sellerCount ?? null;
+        const extractedOfferCount = item.offers.length;
+        const offersTruncated = Boolean(item.read.data?.offersTruncated ||
+            (reportedSellerCount != null && reportedSellerCount > extractedOfferCount));
+        const coverageStatus = item.read.blocked || item.extraction === "unavailable" ? "unavailable"
+            : item.extraction === "incomplete" ? "uncertain"
+                : offersTruncated ? "partial"
+                    : "complete_within_scope";
+        const metaInfo = candidates.get(item.result.candidate.prk);
+        const discoveringQueries = metaInfo
+            ? [...new Set(metaInfo.observations.map((o) => search.queries[o.query - 1]?.query).filter((q) => Boolean(q)))]
+            : [];
+        const evidenceSources = [];
+        if (item.result.titleState === "present")
+            evidenceSources.push(item.origin ?? "card_title");
+        if (item.result.candidate.specs?.length)
+            evidenceSources.push("card_specs");
+        if (item.sellerCorroborated)
+            evidenceSources.push("seller_corroboration");
+        if (item.adminConfirmed)
+            evidenceSources.push("admin_confirmation");
+        return {
+            prk: item.result.candidate.prk,
+            identityStatus,
+            title: item.result.candidate.titleFa || item.result.candidate.titleEn || item.sellerTitle || null,
+            url: (0, torob_payload_1.torobProductUrl)(item.result.candidate.prk),
+            matchConfidence: Math.max(0, Math.min(1, (item.result.score ?? 0) / 100)),
+            score: item.result.score,
+            reportedSellerCount,
+            extractedOfferCount,
+            ownStoreOfferCount,
+            uniqueExternalSellerCount: externalKeys.size,
+            confirmedCompetitorCount: confirmedExternalKeys.size,
+            reviewRequiredCompetitorCount,
+            rejectedCompetitorCount,
+            offersTruncated,
+            coverageStatus,
+            ...(role ? { groupRole: role } : {}),
+            freshness: newestMs > 0 ? new Date(newestMs).toISOString() : null,
+            freshExternalCount,
+            discoveringQueries,
+            evidenceSources,
+            ...(selectionReason !== undefined ? { selectionReason } : {}),
+            ...(exclusionReason !== undefined ? { exclusionReason } : {}),
+        };
+    };
     const search = { queries: [], candidates: [], accepted: 0, eligible: 0 };
     const candidates = new Map();
     const inspected = [];
@@ -380,7 +501,7 @@ async function resolveTorobSource(options) {
         const pagesRemaining = [...streamLastPage.values()].filter((s) => s.hasNextPage).length;
         const uninspected = ranked.filter((r) => !inspectedPrks.has(r.candidate.prk));
         const promisingUninspectedCount = uninspected.filter((r) => {
-            const p = scoreInspectionPriority(target, targetTitle, r, candidates.get(r.candidate.prk), codeless, knownPrkSet);
+            const p = scoreInspectionPriority(target, targetTitle, r, candidates.get(r.candidate.prk), codeless, knownPrkSet, knownPrkHints);
             return p.highAlignment || p.probe;
         }).length;
         const evaluatedOffers = offers ?? inspected.flatMap((i) => i.offers);
@@ -558,7 +679,7 @@ async function resolveTorobSource(options) {
         }
         else {
             apiRequestsMade++;
-            read = await options.search(req, Math.min(remaining, budgets.searchTimeoutMs));
+            read = await singleFlight("search", key, () => options.search(req, Math.min(remaining, budgets.searchTimeoutMs)));
         }
         const decoded = read.data === undefined ? null : (0, torob_payload_1.decodeTorobSearch)(read.data, req.limit, req.page ?? 1);
         const issue = read.issue ?? decoded?.issue;
@@ -630,7 +751,7 @@ async function resolveTorobSource(options) {
         ranked = outcome.allRanked;
         explanation = outcome.explanation;
         for (const r of ranked) {
-            const p = scoreInspectionPriority(target, targetTitle, r, candidates.get(r.candidate.prk), codeless, knownPrkSet);
+            const p = scoreInspectionPriority(target, targetTitle, r, candidates.get(r.candidate.prk), codeless, knownPrkSet, knownPrkHints);
             priorityMap.set(r.candidate.prk, p.priority);
         }
         return outcome;
@@ -756,9 +877,13 @@ async function resolveTorobSource(options) {
                 if (allowEarlyConsolidationStop && mode === "interactive" && bestOutcome.confident && bestOutcome.best) {
                     const bestCard = bestOutcome.best.candidate;
                     const bestCodeRel = bestOutcome.best.codeRelation;
+                    const bestHint = knownPrkHints.get(bestCard.prk);
+                    const knownSelfOnly = Boolean(bestHint && bestHint.ownStorePresent && (bestHint.externalCompetitorCount ?? 0) === 0);
                     const otherPromising = ranked.some((r) => r.candidate.prk !== bestCard.prk && (!r.rejected || (0, torob_identity_1.isSellerEvidenceProbeCandidate)(target, targetTitle, r)));
                     const lastDecoded = outcomes.find((o) => o.decoded)?.decoded;
-                    const hasExpansionSignals = (bestCard.sellerCount ?? 1) <= 3 ||
+                    const hasExpansionSignals = Boolean(options.matchConfig?.preferBroadDiscovery) ||
+                        knownSelfOnly ||
+                        (bestCard.sellerCount ?? 1) <= 3 ||
                         otherPromising ||
                         Boolean(lastDecoded?.hasNextPage) ||
                         (lastDecoded?.rows ?? 0) >= ROW_LIMIT ||
@@ -774,10 +899,12 @@ async function resolveTorobSource(options) {
             // Phase 2: Selective adaptive expansion when signals show additional PRKs may exist.
             const bestOutcome = recomputeRanking();
             const confirmedCards = ranked.filter((r) => r.status === "MATCH_CONFIRMED");
-            const fragmentedConfirmed = confirmedCards.some((r) => (r.candidate.sellerCount ?? 1) <= 2);
+            const fragmentedConfirmed = confirmedCards.some((r) => (r.candidate.sellerCount ?? 1) <= 2 ||
+                Boolean(knownPrkHints.get(r.candidate.prk)?.ownStorePresent && (knownPrkHints.get(r.candidate.prk)?.externalCompetitorCount ?? 0) === 0));
             const needsExpansion = budgetExhaustedReason === "none" &&
                 (codeless ||
                     mode === "extended" ||
+                    Boolean(options.matchConfig?.preferBroadDiscovery) ||
                     !bestOutcome.confident ||
                     fragmentedConfirmed ||
                     ranked.some((r) => !r.rejected && r.status !== "MATCH_CONFIRMED") ||
@@ -855,7 +982,7 @@ async function resolveTorobSource(options) {
         const scored = remaining
             .map((result) => ({
             result,
-            ...scoreInspectionPriority(target, targetTitle, result, candidates.get(result.candidate.prk), codeless, knownPrkSet),
+            ...scoreInspectionPriority(target, targetTitle, result, candidates.get(result.candidate.prk), codeless, knownPrkSet, knownPrkHints),
         }))
             .filter((item) => item.priority > -50)
             .sort((a, b) => b.priority - a.priority);
@@ -936,7 +1063,7 @@ async function resolveTorobSource(options) {
         budgets.maxDetails >= 6 &&
         budgets.maxSearchRequests >= 8 &&
         candidates.size > budgets.maxDetails &&
-        ranked.some((r) => r.status === "MATCH_CONFIRMED" && (r.candidate.sellerCount ?? 1) <= 2));
+        ranked.some((r) => !r.rejected && ((r.candidate.sellerCount ?? 1) <= 2 || Boolean(knownPrkHints.get(r.candidate.prk)?.ownStorePresent))));
     const initialPlan = buildInspectionOrder(reserveDetailSlotForSimilar ? budgets.maxDetails - 1 : budgets.maxDetails);
     if (!initialPlan.cards.length) {
         if (extractionIssue)
@@ -976,7 +1103,7 @@ async function resolveTorobSource(options) {
         }
         else {
             apiRequestsMade++;
-            read = await options.details(card, Math.min(remaining, budgets.detailsTimeoutMs));
+            read = await singleFlight("details", cacheKey, () => options.details(card, Math.min(remaining, budgets.detailsTimeoutMs)));
             if (options.cache && !read.blocked && !read.unavailable && !read.issue && read.data) {
                 options.cache.setDetails(cacheKey, read, options.now.getTime());
             }
@@ -1011,9 +1138,9 @@ async function resolveTorobSource(options) {
             }
             if (!results.length)
                 break;
-            const anyConfirmedOffers = inspected.some((item) => verifiedOffers(item).length > 0);
-            const batchYieldedRelevant = results.some((item) => verifiedOffers(item).length > 0 || item.offers.some((o) => o.torobIdentity?.status === "REVIEW_REQUIRED"));
-            if (anyConfirmedOffers && !plan.hasHighPriorityLeft(inspectedPrks)) {
+            const anyConfirmedExternalOffers = inspected.some((item) => verifiedExternalOffers(item).length > 0);
+            const batchYieldedRelevant = results.some((item) => verifiedExternalOffers(item).length > 0 || item.offers.some((o) => o.torobIdentity?.status === "REVIEW_REQUIRED" && !ownShopMatcher({ shopName: o.shopName, shopId: o.shopId })));
+            if (anyConfirmedExternalOffers && !plan.hasHighPriorityLeft(inspectedPrks)) {
                 lowTierNoGainBatches = batchYieldedRelevant ? 0 : lowTierNoGainBatches + 1;
                 if (lowTierNoGainBatches >= 2) {
                     stoppingReason = "plateau";
@@ -1023,20 +1150,23 @@ async function resolveTorobSource(options) {
         }
     };
     await inspectShortlist(initialPlan);
-    // Similar-product discovery when confirmed card is fragmented (few sellers) and budgets permit.
+    // Similar-product discovery when confirmed or self-only card is fragmented (few external sellers) and budgets permit.
     if (!options.prk &&
         options.similar &&
         !accessRestricted &&
         budgetExhaustedReason === "none" &&
         searchTimeLeft > 800) {
-        const confirmedPrimary = inspected.find((item) => verifiedOffers(item).length > 0);
-        const hasFragmentation = Boolean(confirmedPrimary &&
-            (confirmedPrimary.read.data?.totalSellerCount ?? confirmedPrimary.offers.length) <= 2 &&
-            (codeless || candidates.size <= 4));
-        if (confirmedPrimary && hasFragmentation && searchRequestsUsed < budgets.maxSearchRequests) {
+        const externalConfirmedPrimary = inspected.find((item) => verifiedExternalOffers(item).length > 0);
+        const seedCandidate = inspected.find((item) => verifiedOffers(item).length > 0 && buildItemPanelEvidence(item).uniqueExternalSellerCount <= 2) ??
+            inspected.find((item) => !item.result.rejected && buildItemPanelEvidence(item).ownStoreOfferCount > 0 && buildItemPanelEvidence(item).uniqueExternalSellerCount === 0);
+        const seedExtCount = seedCandidate ? buildItemPanelEvidence(seedCandidate).uniqueExternalSellerCount : 0;
+        const hasFragmentation = Boolean(seedCandidate &&
+            seedExtCount <= 2 &&
+            (codeless || candidates.size <= 4 || (!externalConfirmedPrimary && seedExtCount === 0)));
+        if (seedCandidate && hasFragmentation && searchRequestsUsed < budgets.maxSearchRequests) {
             similarProbesExecuted++;
             searchRequestsUsed++;
-            const simKey = `${confirmedPrimary.result.candidate.prk}|${ROW_LIMIT}`;
+            const simKey = `${seedCandidate.result.candidate.prk}|${ROW_LIMIT}`;
             const cachedSim = options.cache?.getSimilar(simKey, options.now.getTime());
             let simRead;
             if (cachedSim) {
@@ -1045,14 +1175,14 @@ async function resolveTorobSource(options) {
             }
             else {
                 apiRequestsMade++;
-                simRead = await options.similar(confirmedPrimary.result.candidate, ROW_LIMIT, Math.min(searchTimeLeft, budgets.searchTimeoutMs));
+                simRead = await singleFlight("similar", simKey, () => options.similar(seedCandidate.result.candidate, ROW_LIMIT, Math.min(searchTimeLeft, budgets.searchTimeoutMs)));
                 if (options.cache && !simRead.blocked && !simRead.unavailable && !simRead.issue && simRead.data !== undefined) {
                     options.cache.setSimilar(simKey, simRead, options.now.getTime());
                 }
             }
             if (!simRead.blocked && !simRead.unavailable && simRead.data !== undefined) {
                 const simDecoded = (0, torob_payload_1.decodeTorobSearch)(simRead.data, ROW_LIMIT, 1);
-                ingestCards(simDecoded, search.queries.length + 1, `similar:${confirmedPrimary.result.candidate.prk}`);
+                ingestCards(simDecoded, search.queries.length + 1, `similar:${seedCandidate.result.candidate.prk}`);
                 recomputeRanking();
             }
         }
@@ -1060,25 +1190,38 @@ async function resolveTorobSource(options) {
     if (reserveDetailSlotForSimilar && inspected.length < budgets.maxDetails && !accessRestricted) {
         await inspectShortlist(buildInspectionOrder());
     }
-    // Closed-loop search resumption when Phase 1 stopped early for coded match with 0 verified offers,
-    // OR when inspected seller listings reveal unseen market phrasing (e.g., طرح <descriptor>).
-    const noVerifiedOffersYet = !inspected.some((item) => item.read.blocked || verifiedOffers(item).length > 0);
-    if (fastIdx < fastQueries.length && searchTimeLeft > 0 && inspected.length < budgets.maxDetails && noVerifiedOffersYet) {
+    // Closed-loop search resumption when no independent external offers are verified yet (including self-only panels),
+    // OR when inspected card/seller listings reveal unseen market phrasing.
+    const hasExternalVerifiedOffersYet = () => inspected.some((item) => item.read.blocked || verifiedExternalOffers(item).length > 0);
+    const onlySelfStoreVerifiedSoFar = () => !hasExternalVerifiedOffersYet() &&
+        inspected.some((item) => verifiedOwnOffers(item).length > 0 || buildItemPanelEvidence(item).ownStoreOfferCount > 0);
+    const noExternalOffersYet = !hasExternalVerifiedOffersYet();
+    if (fastIdx < fastQueries.length && searchTimeLeft > 0 && inspected.length < budgets.maxDetails && noExternalOffersYet) {
         const resumedFailure = await runSearchPhase(false);
         if (resumedFailure)
             return resumedFailure;
         await inspectShortlist(buildInspectionOrder());
     }
     else if (!options.prk && !accessRestricted && searchTimeLeft > 800 && searchRequestsUsed < budgets.maxSearchRequests &&
-        budgetExhaustedReason === "none" && (codeless || mode === "extended" || noVerifiedOffersYet)) {
-        const sellerTitles = inspected.flatMap((i) => i.offers.map((o) => o.listingTitle).filter((t) => Boolean(t)));
-        const sellerVocab = (codeless && (!inspected.some((item) => verifiedOffers(item).length > 0) || mode === "extended"))
-            ? (0, torob_query_1.extractVocabularyExpansions)(profile, sellerTitles, [], executedNormalizedQueries, 1)
-            : [];
-        const fallbackAction = sellerVocab.length
-            ? toAction(sellerVocab[0])
-            : buildExpansionActions()[0];
-        if (fallbackAction && (sellerVocab.length > 0 || noVerifiedOffersYet || mode === "extended")) {
+        budgetExhaustedReason === "none" && (codeless || mode === "extended" || noExternalOffersYet || onlySelfStoreVerifiedSoFar())) {
+        const extraExpansionRounds = onlySelfStoreVerifiedSoFar() ? 2 : 1;
+        for (let round = 0; round < extraExpansionRounds; round++) {
+            if (accessRestricted || searchTimeLeft <= 800 || searchRequestsUsed >= budgets.maxSearchRequests || budgetExhaustedReason !== "none")
+                break;
+            if (round > 0 && hasExternalVerifiedOffersYet())
+                break;
+            const observedTitles = [
+                ...inspected.flatMap((i) => i.offers.map((o) => o.listingTitle).filter((t) => Boolean(t))),
+                ...inspected.map((i) => i.result.candidate.titleFa).filter((t) => Boolean(t)),
+            ];
+            const sellerVocab = ((codeless || onlySelfStoreVerifiedSoFar()) && (!hasExternalVerifiedOffersYet() || mode === "extended"))
+                ? (0, torob_query_1.extractVocabularyExpansions)(profile, observedTitles, [...observedSuggestedQueries], executedNormalizedQueries, 2)
+                : [];
+            const fallbackAction = sellerVocab.length
+                ? toAction(sellerVocab[0])
+                : buildExpansionActions()[0];
+            if (!fallbackAction || !(sellerVocab.length > 0 || noExternalOffersYet || mode === "extended"))
+                break;
             const searchStart = Date.now();
             const outcome = await executeSearchAction(fallbackAction, searchStart + searchTimeLeft);
             searchDurationMs += Date.now() - searchStart;
@@ -1089,6 +1232,9 @@ async function resolveTorobSource(options) {
             if (outcome.newPromising > 0 && inspected.length < budgets.maxDetails) {
                 await inspectShortlist(buildInspectionOrder());
             }
+            else if (sellerVocab.length === 0 && !onlySelfStoreVerifiedSoFar()) {
+                break;
+            }
         }
     }
     if (!options.prk && searchRequestsUsed >= budgets.maxSearchRequests && budgetExhaustedReason === "none" && buildExpansionActions().length > 0) {
@@ -1097,11 +1243,63 @@ async function resolveTorobSource(options) {
             stoppingReason = "request_budget";
     }
     verifyDurationMs = Date.now() - verifyStart;
-    const primary = inspected.find((item) => verifiedOffers(item).length > 0)
-        ?? inspected.find((item) => resolveIdentity(item) === "MATCH_CONFIRMED" &&
-            (item.extraction === "extracted" || item.extraction === "empty"))
-        ?? inspected.find((item) => item.result.status === "REVIEW_REQUIRED" && item.extraction === "extracted")
-        ?? inspected.find((item) => !item.result.rejected) ?? inspected[0];
+    const rawEvidenceByPrk = new Map(inspected.map((item) => [item.result.candidate.prk, buildItemPanelEvidence(item)]));
+    const rankPanelEntry = (item) => {
+        const ev = rawEvidenceByPrk.get(item.result.candidate.prk);
+        const id = resolveIdentity(item);
+        let tier = 0;
+        if (id === "MATCH_CONFIRMED" && item.extraction === "extracted" && !item.result.hasConflict && ev.confirmedCompetitorCount > 0) {
+            tier = 5;
+        }
+        else if (id === "MATCH_CONFIRMED" && (item.extraction === "extracted" || item.extraction === "empty") && !item.result.hasConflict) {
+            tier = 4;
+        }
+        else if (item.result.status === "REVIEW_REQUIRED" && item.extraction === "extracted" && !item.result.rejected && !item.result.hasConflict && ev.uniqueExternalSellerCount > 0) {
+            tier = 3;
+        }
+        else if (item.result.status === "REVIEW_REQUIRED" && (item.extraction === "extracted" || item.extraction === "empty") && !item.result.rejected) {
+            tier = 2;
+        }
+        else if (!item.result.rejected && item.result.status !== "IDENTITY_MISMATCH") {
+            tier = 1;
+        }
+        const baseScore = item.result.score ?? 0;
+        let utility = baseScore;
+        if (tier === 5) {
+            utility =
+                ev.confirmedCompetitorCount * 100 +
+                    (!ev.offersTruncated ? 25 : 0) +
+                    (ev.freshExternalCount ?? 0) * 8 +
+                    baseScore * 0.5 +
+                    (item.adminConfirmed ? 15 : 0);
+        }
+        else if (tier === 4) {
+            utility = baseScore + (item.adminConfirmed ? 15 : 0) - (ev.ownStoreOfferCount > 0 && ev.uniqueExternalSellerCount === 0 ? 5 : 0);
+        }
+        else if (tier === 3) {
+            utility =
+                baseScore +
+                    Math.min(28, Math.log2(ev.uniqueExternalSellerCount + 1) * 10) +
+                    (!ev.offersTruncated ? 6 : 0) +
+                    ((ev.freshExternalCount ?? 0) > 0 ? 4 : 0);
+        }
+        else {
+            utility = baseScore + (ev.uniqueExternalSellerCount > 0 ? Math.min(10, ev.uniqueExternalSellerCount * 2) : 0);
+        }
+        return { tier, utility, confirmedExt: ev.confirmedCompetitorCount, score: baseScore };
+    };
+    const inspectedRanked = [...inspected].sort((a, b) => {
+        const ra = rankPanelEntry(a);
+        const rb = rankPanelEntry(b);
+        if (rb.tier !== ra.tier)
+            return rb.tier - ra.tier;
+        if (rb.utility !== ra.utility)
+            return rb.utility - ra.utility;
+        if (rb.confirmedExt !== ra.confirmedExt)
+            return rb.confirmedExt - ra.confirmedExt;
+        return rb.score - ra.score;
+    });
+    const primary = inspectedRanked[0];
     if (!primary)
         return fail("EXTRACTION_INCOMPLETE", "مهلت دریافت جزئیات کارت ترب پایان یافت");
     const { candidate } = primary.result;
@@ -1149,20 +1347,27 @@ async function resolveTorobSource(options) {
         }
     }
     const restriction = inspected.find((item) => item.read.blocked);
+    const selfOnlyPanelPrks = [];
     if (!restriction && data && identityStatus === "MATCH_CONFIRMED") {
-        const confirmed = inspected.filter((item) => (item.extraction === "extracted" || item.extraction === "empty") &&
-            item.result.status === "MATCH_CONFIRMED" && !item.result.hasConflict);
+        const confirmed = inspectedRanked.filter((item) => (item.extraction === "extracted" || item.extraction === "empty") &&
+            resolveIdentity(item) === "MATCH_CONFIRMED" && !item.result.hasConflict);
         if (confirmed.some((a, i) => confirmed.slice(i + 1).some((b) => !(0, matcher_1.areCompatibleConfirmedIdentities)(a.result, b.result)))) {
             identityStatus = "REVIEW_REQUIRED";
             reason = "چند کارت با هویت یا مشخصات متفاوت هم‌زمان با محصول سایت منطبق‌اند";
         }
         else {
             for (const item of confirmed) {
-                if (item !== primary && item.extraction === "extracted" && item.read.data &&
-                    verifiedOffers(item).length > 0 &&
+                if (item === primary)
+                    continue;
+                const extCount = verifiedExternalOffers(item).length;
+                const ownCount = rawEvidenceByPrk.get(item.result.candidate.prk)?.ownStoreOfferCount ?? 0;
+                if (item.extraction === "extracted" && item.read.data && extCount > 0 &&
                     (0, matcher_1.areCompatibleConfirmedIdentities)(primary.result, item.result)) {
                     panels.push(item.read.data);
                     panelIds.push(item.result.candidate.prk);
+                }
+                else if (extCount === 0 && ownCount > 0) {
+                    selfOnlyPanelPrks.push(item.result.candidate.prk);
                 }
             }
         }
@@ -1178,6 +1383,19 @@ async function resolveTorobSource(options) {
     })));
     const primaryShopCount = data?.totalSellerCount ?? data?.offers.length ?? 0;
     const total = Math.max(primaryShopCount, offers.filter((offer) => panelPrks.has(offer.torobIdentity?.prk ?? "")).length);
+    const hasConfirmedExternalInSelected = offers.some((offer) => panelPrks.has(offer.torobIdentity?.prk ?? "") &&
+        offer.torobIdentity?.status === "MATCH_CONFIRMED" &&
+        !ownShopMatcher({ shopName: offer.shopName, shopId: offer.shopId }));
+    const hasOwnConfirmedInSelected = offers.some((offer) => panelPrks.has(offer.torobIdentity?.prk ?? "") &&
+        offer.torobIdentity?.status === "MATCH_CONFIRMED" &&
+        ownShopMatcher({ shopName: offer.shopName, shopId: offer.shopId }));
+    const ownStoreOnlyOnPrimary = Boolean(primaryEvCheck(rawEvidenceByPrk.get(candidate.prk)) &&
+        !hasConfirmedExternalInSelected &&
+        (rawEvidenceByPrk.get(candidate.prk).ownStoreOfferCount > 0 &&
+            rawEvidenceByPrk.get(candidate.prk).uniqueExternalSellerCount === 0));
+    function primaryEvCheck(ev) {
+        return Boolean(ev);
+    }
     let status = identityStatus;
     if (restriction) {
         status = "SOURCE_UNAVAILABLE";
@@ -1198,14 +1416,73 @@ async function resolveTorobSource(options) {
             ? "عنوان فروشنده پیدا شد و برای بازبینی ثبت شد. عنوان معتبر کارت ترب در دسترس نیست"
             : "عنوان قابل استفادهٔ کارت ترب در جستجو و جزئیات دریافت نشد";
     }
-    else if (identityStatus === "MATCH_CONFIRMED" && !offers.some((offer) => offer.torobIdentity?.status === "MATCH_CONFIRMED")) {
-        const needsSellerReview = offers.some((offer) => offer.torobIdentity?.status === "REVIEW_REQUIRED");
-        status = needsSellerReview ? "REVIEW_REQUIRED" : "NO_VALID_OFFERS";
-        reason = needsSellerReview ? "هویت کارت احراز شد و هویت پیشنهادهای فروشندگان نیازمند بازبینی است"
-            : "جزئیات کارت دریافت شد و پیشنهاد قابل استفاده‌ای برای قیمت‌گذاری استخراج نشد";
+    else if (identityStatus === "MATCH_CONFIRMED" && !hasConfirmedExternalInSelected) {
+        const needsSellerReview = offers.some((offer) => panelPrks.has(offer.torobIdentity?.prk ?? "") &&
+            !ownShopMatcher({ shopName: offer.shopName, shopId: offer.shopId }) &&
+            offer.torobIdentity?.status === "REVIEW_REQUIRED");
+        if (hasOwnConfirmedInSelected && !needsSellerReview) {
+            status = "NO_VALID_OFFERS";
+            reason = "تنها پیشنهاد تأییدشده روی کارت ترب مربوط به فروشگاه خودمان است و رقیب مستقلی یافت نشد";
+        }
+        else {
+            status = needsSellerReview ? "REVIEW_REQUIRED" : "NO_VALID_OFFERS";
+            reason = needsSellerReview ? "هویت کارت احراز شد و هویت پیشنهادهای فروشندگان نیازمند بازبینی است"
+                : "جزئیات کارت دریافت شد و پیشنهاد قابل استفاده‌ای برای قیمت‌گذاری استخراج نشد";
+        }
     }
     if (status === "IDENTITY_MISMATCH")
         reason = `عدم تطابق هویت کارت ترب · ${reason}`;
+    const panelEvidence = [];
+    const selectedPanelPrks = [];
+    const reviewPanelPrks = [];
+    const rejectedPanelPrks = [];
+    for (const item of inspectedRanked) {
+        const prk = item.result.candidate.prk;
+        const baseEv = rawEvidenceByPrk.get(prk) ?? buildItemPanelEvidence(item);
+        let groupRole;
+        let selectionReason = null;
+        let exclusionReason = null;
+        if (!restriction && identityStatus === "MATCH_CONFIRMED" && panelPrks.has(prk)) {
+            if (item === primary) {
+                groupRole = ownStoreOnlyOnPrimary ? "self_only" : "primary";
+                selectionReason = ownStoreOnlyOnPrimary
+                    ? "تنها کارت تأییدشدهٔ موجود؛ فقط شامل پیشنهاد فروشگاه خودمان است"
+                    : `انتخاب‌شده به‌عنوان مرجع اصلی بازار (${baseEv.confirmedCompetitorCount} رقیب مستقل تأییدشده)`;
+            }
+            else {
+                groupRole = "compatible_secondary";
+                selectionReason = `کارت سازگار تکمیلی با ${baseEv.confirmedCompetitorCount} رقیب مستقل تأییدشده`;
+            }
+            selectedPanelPrks.push(prk);
+            if (groupRole === "self_only" && !selfOnlyPanelPrks.includes(prk))
+                selfOnlyPanelPrks.push(prk);
+        }
+        else if (baseEv.ownStoreOfferCount > 0 && baseEv.uniqueExternalSellerCount === 0 && baseEv.identityStatus !== "IDENTITY_MISMATCH" && !item.result.rejected) {
+            groupRole = "self_only";
+            exclusionReason = "فقط شامل پیشنهاد فروشگاه خودمان است (فاقد رقیب مستقل)";
+            if (!selfOnlyPanelPrks.includes(prk))
+                selfOnlyPanelPrks.push(prk);
+        }
+        else if (baseEv.identityStatus === "IDENTITY_MISMATCH" || item.result.rejected) {
+            groupRole = "rejected";
+            exclusionReason = item.result.rejectReason ?? item.result.blockers?.[0] ?? "عدم تطابق هویت یا مشخصات با کالای هدف";
+            rejectedPanelPrks.push(prk);
+        }
+        else {
+            groupRole = item === primary && baseEv.uniqueExternalSellerCount > 0 ? "review_required" : "review_required";
+            if (item === primary) {
+                selectionReason = baseEv.uniqueExternalSellerCount > 0
+                    ? `نامزد اولویت‌دار بازبینی با ${baseEv.uniqueExternalSellerCount} فروشندهٔ مستقل؛ نیازمند تأیید هویت`
+                    : reason;
+            }
+            else {
+                exclusionReason = item.result.blockers?.[0] ?? reason;
+            }
+            reviewPanelPrks.push(prk);
+        }
+        panelEvidence.push({ ...baseEv, groupRole, selectionReason, exclusionReason });
+    }
+    const panelEvidenceMap = new Map(panelEvidence.map((ev) => [ev.prk, ev]));
     const shouldFetchPriceTrend = Boolean(status === "MATCH_CONFIRMED" &&
         data &&
         !data.offersTruncated &&
@@ -1221,15 +1498,24 @@ async function resolveTorobSource(options) {
         }
         else {
             apiRequestsMade++;
-            priceTrend = await options.priceTrend(candidate);
+            priceTrend = await singleFlight("trend", trendKey, () => options.priceTrend(candidate));
             options.cache?.setPriceTrend(trendKey, priceTrend, options.now.getTime());
         }
     }
     const offersTruncated = panels.some((panel) => panel.offersTruncated);
     const coverage = buildCoverage(status === "SOURCE_UNAVAILABLE" ? "unavailable" : undefined, offers, offersTruncated);
+    const searchTrace = trackSearch(coverage);
+    if (searchTrace) {
+        for (const c of searchTrace.candidates) {
+            const pe = panelEvidenceMap.get(c.prk);
+            if (pe)
+                c.panelEvidence = pe;
+        }
+    }
     const selected = {
         ...candidateTrace(primary.result, primary.extraction, candidates.get(candidate.prk)?.observations.map(({ query }) => query) ?? [], priorityMap.get(candidate.prk)),
         origin: primary.read.origin,
+        ...(panelEvidenceMap.get(candidate.prk) ? { panelEvidence: panelEvidenceMap.get(candidate.prk) } : {}),
     };
     const complete = status !== "EXTRACTION_INCOMPLETE" && status !== "SOURCE_UNAVAILABLE";
     return {
@@ -1251,13 +1537,19 @@ async function resolveTorobSource(options) {
             identityStatus,
             titleOrigin: primary.origin,
             identityScore: selected.score,
-            search: trackSearch(coverage),
+            search: searchTrace,
             selected,
             sellerRows: data?.sellerRows == null ? null : panels.reduce((sum, panel) => sum + (panel.sellerRows ?? 0), 0),
             reportedSellers: data?.totalSellerCount ?? null,
             adminConfirmed: primary.adminConfirmed,
             offerIdentityEvaluated: true,
             coverage,
+            panelEvidence,
+            selectedPanelPrks,
+            selfOnlyPanelPrks,
+            reviewPanelPrks,
+            rejectedPanelPrks,
+            ownStoreOnlyOnPrimary,
         },
         meta: {
             ...meta(),

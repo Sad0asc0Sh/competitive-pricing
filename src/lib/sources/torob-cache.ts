@@ -58,6 +58,7 @@ export class TorobDiscoveryCache {
   private readonly details = new Map<string, CacheEntry<TorobRead<TorobDetailsData>>>();
   private readonly similar = new Map<string, CacheEntry<TorobRead<unknown>>>();
   private readonly priceTrends = new Map<string, CacheEntry<MarketPriceTrend | null>>();
+  private readonly inFlight = new Map<string, Promise<unknown>>();
 
   constructor(cfg: Partial<TorobCacheConfig> = {}) {
     this.cfg = { ...DEFAULT_CACHE_CONFIG, ...cfg };
@@ -150,10 +151,28 @@ export class TorobDiscoveryCache {
     this.details.clear();
     this.similar.clear();
     this.priceTrends.clear();
+    this.inFlight.clear();
   }
 
-  stats(): { searchEntries: number; detailsEntries: number } {
-    return { searchEntries: this.searches.size, detailsEntries: this.details.size };
+  runSingleFlight<T>(
+    kind: "search" | "details" | "similar" | "trend",
+    key: string,
+    fetcher: () => Promise<T>,
+  ): { promise: Promise<T>; deduplicated: boolean } {
+    const fullKey = `${kind}:${key}`;
+    const existing = this.inFlight.get(fullKey);
+    if (existing) {
+      return { promise: existing as Promise<T>, deduplicated: true };
+    }
+    const promise = fetcher().finally(() => {
+      if (this.inFlight.get(fullKey) === promise) this.inFlight.delete(fullKey);
+    });
+    this.inFlight.set(fullKey, promise);
+    return { promise, deduplicated: false };
+  }
+
+  stats(): { searchEntries: number; detailsEntries: number; inFlightCount: number } {
+    return { searchEntries: this.searches.size, detailsEntries: this.details.size, inFlightCount: this.inFlight.size };
   }
 }
 

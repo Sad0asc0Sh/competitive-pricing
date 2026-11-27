@@ -5,7 +5,7 @@ import type { MarketPriceTrend, RawOffer, SourceResult, TorobLinkConfirmation } 
 import type { TorobDiscoveryCache } from "./torob-cache";
 import { buildSearchQueries, resolveTorobSource, type DiscoveryBudgets, type TorobRead } from "./torob-discovery";
 import { cleanPrk, countOf, countSellerText, firstText, offerSourceUrl, readTorobImages, readTorobSpecs, readTorobTitles, record, safeTorobDetailsUrl, torobPrice, torobStock, type TorobDetailsData, type TorobSearchRequest } from "./torob-payload";
-import type { SourceMatchConfig } from "./types";
+import type { KnownPrkHint, SourceMatchConfig } from "./types";
 
 export { buildSearchQueries } from "./torob-discovery";
 /**
@@ -308,6 +308,7 @@ export function fetchViaTorobMcpServer(opts: {
   prk?: string | null;
   cachedPrk?: string | null;
   knownPrks?: string[];
+  knownPrkHints?: KnownPrkHint[];
   detailsUrl?: string | null;
   confirmation?: TorobLinkConfirmation | null;
   productName: string;

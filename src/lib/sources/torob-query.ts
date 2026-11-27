@@ -216,6 +216,7 @@ export function buildSearchQueryPlan(productName: string, sku?: string | null): 
 
   add(coreName || productName, "exact", "fast", 100, true);
 
+  const rawCodeFromTitle = parseTitle(coreName).codes.some((item) => !item.inCompat && item.canon.length >= 5);
   if (rawCode) {
     const original = productName.split(/[\s،,;()[\]]+/)
       .find((word) => normalizeText(word).replace(/[^0-9a-z]/g, "").toUpperCase() === rawCode.canon) ?? rawCode.raw;
@@ -230,7 +231,7 @@ export function buildSearchQueryPlan(productName: string, sku?: string | null): 
     }
     if (brandFa) add(`${brandFa} ${original}`, "alternative_wording", "expand", 78);
     if (headTokens.length) add([...headTokens, brandFa ?? brandEn, original].filter(Boolean).join(" "), "alternative_wording", "expand", 75);
-    return plan;
+    if (rawCodeFromTitle) return plan;
   }
 
   if (parsed.family === "remotag" && (!parsed.head || parsed.head.cls === "access_control")) {
@@ -253,7 +254,8 @@ export function buildSearchQueryPlan(productName: string, sku?: string | null): 
     add([...head, brand, ...words].filter(Boolean).join(" "), "descriptor", "fast", 90);
   }
 
-  if (head.length && !parsed.codes.some((item) => !item.inCompat)) {
+  const codelessSearchTarget = head.length > 0 && (!rawCodeFromTitle || !parsed.codes.some((item) => !item.inCompat));
+  if (codelessSearchTarget) {
     const freqSpec = technicalSpecs.find((s) => s.key === "frequency");
     const [frequency] = parsed.attrs.frequency ?? [];
     const rf = typeof frequency === "number" && parsed.attrs.frequency.length === 1
@@ -264,40 +266,83 @@ export function buildSearchQueryPlan(productName: string, sku?: string | null): 
     const hasBt = parsed.attrs.bluetooth?.includes("yes");
 
     if (remote) {
-      // Preserve proven fast core remote queries while ensuring strong brandless/design/alias expansion.
-      add([...head, descriptor, rf, brand].filter(Boolean).join(" "), "technical", "fast", 94);
-      if (rf) add([...head, rf, brand].filter(Boolean).join(" "), "technical", "fast", 90);
-      if (descriptor && brand) add([...head, descriptor, brand].join(" "), "brand", "fast", 86);
-      if (descriptor) add([...head, descriptor].join(" "), "descriptor", "fast", 82);
-      if (descriptor && buttons) add([...head, descriptor, String(buttons), "دکمه"].join(" "), "descriptor", "fast", 78);
+      const chSpec = technicalSpecs.find((s) => s.key === "ch");
+      const [channels] = parsed.attrs.ch ?? [];
+      const styleToken = parsed.designStyle ? normalizeText(parsed.designStyle.replace(/^طرح\s+/u, "")) : "";
+      const functionalDescriptors = words.filter((w) => w !== styleToken);
+      const primaryDesc = functionalDescriptors[0] ?? words[0];
+      const secondaryDesc = functionalDescriptors[1];
+      const pairedDesc = functionalDescriptors.slice(0, 2).join(" ");
+      const altStyle = parsed.designStyle ?? (primaryDesc ? `طرح ${primaryDesc}` : undefined);
 
-      // Phase 2 expansion queries: catch brandless cards, «طرح <descriptor>», Persian brand spellings, and frequency phrasing.
-      if (descriptor && rf) {
-        add([...head, hasBt ? "بلوتوثی" : undefined, descriptor, rf].filter(Boolean).join(" "), "technical", "expand", 88);
-        add([...head, hasBt ? "بلوتوثی" : undefined, "طرح", descriptor, rf].filter(Boolean).join(" "), "alternative_wording", "expand", 86);
-        add([...head, "طرح", descriptor, rf].filter(Boolean).join(" "), "alternative_wording", "expand", 79);
+      // Preserve proven fast core remote queries while ensuring strong brandless/wall/channel/learn-code/design/alias coverage.
+      add([...head, primaryDesc, rf, brand].filter(Boolean).join(" "), "technical", "fast", 94);
+      if (functionalDescriptors.length >= 2 && rf) {
+        add([...head, pairedDesc, rf, brand].filter(Boolean).join(" "), "technical", "fast", 93);
       }
-      if (hasBt && rf && descriptor) {
+      if (secondaryDesc && rf) {
+        add([...head, secondaryDesc, rf, brand].filter(Boolean).join(" "), "technical", "fast", 92);
+      }
+      if (functionalDescriptors.includes("لرن") && rf) {
+        add([...head, secondaryDesc && secondaryDesc !== "لرن" ? secondaryDesc : undefined, "کد لرن", rf, brand].filter(Boolean).join(" "), "alternative_wording", "fast", 91);
+      }
+      if (chSpec && rf) {
+        add([...head, secondaryDesc && secondaryDesc !== "لرن" ? secondaryDesc : primaryDesc, chSpec.display, rf, brand].filter(Boolean).join(" "), "technical", brand ? "fast" : "expand", 90);
+      }
+      if (rf) add([...head, rf, brand].filter(Boolean).join(" "), "technical", brand ? "fast" : "expand", 89);
+      if (primaryDesc && brand) add([...head, primaryDesc, brand].join(" "), "brand", "fast", 86);
+      if (pairedDesc && !brand) add([...head, pairedDesc].join(" "), "descriptor", "expand", 84);
+      else if (primaryDesc) add([...head, primaryDesc].join(" "), "descriptor", "fast", 82);
+      if (primaryDesc && buttons) add([...head, primaryDesc, String(buttons), "دکمه"].join(" "), "descriptor", "fast", 78);
+
+      // Phase 2 expansion queries: catch brandless consolidated cards, «طرح <style>», learn-code synonyms, Persian brands, and frequency units.
+      if (primaryDesc && rf) {
+        add([...head, hasBt ? "بلوتوثی" : undefined, primaryDesc, rf].filter(Boolean).join(" "), "technical", "expand", 89);
+        if (altStyle) {
+          add([...head, hasBt ? "بلوتوثی" : undefined, secondaryDesc && secondaryDesc !== styleToken ? secondaryDesc : undefined, altStyle, rf].filter(Boolean).join(" "), "alternative_wording", "expand", 87);
+          add([...head, altStyle, rf].filter(Boolean).join(" "), "alternative_wording", "expand", 80);
+        }
+      }
+      if (functionalDescriptors.includes("لرن") && rf) {
+        add([...head, "کد لرن", rf].join(" "), "alternative_wording", "expand", 88);
+        add([...head, secondaryDesc && secondaryDesc !== "لرن" ? secondaryDesc : undefined, "کد لرن", freqSpec?.alternatives[2] ?? rf].filter(Boolean).join(" "), "alternative_wording", "expand", 86);
+        add([...head, "کنترل", secondaryDesc && secondaryDesc !== "لرن" ? secondaryDesc : primaryDesc, freqSpec?.alternatives[0] ?? rf].filter(Boolean).join(" "), "alternative_wording", "expand", 82);
+      }
+      if (typeof channels === "number" && !brand) {
+        const channelWord = PERSIAN_DIGITS_WORD.get(channels);
+        if (channelWord && secondaryDesc && rf) {
+          add([...head, secondaryDesc, channelWord, "کانال", rf].join(" "), "alternative_wording", "expand", 79);
+        }
+        if (chSpec && secondaryDesc) {
+          add([...head, secondaryDesc, chSpec.display].join(" "), "descriptor", "expand", 77);
+        }
+      }
+      if (hasBt && rf && primaryDesc) {
         add([...head, "بلوتوثی", rf].filter(Boolean).join(" "), "technical", "expand", 81);
       }
-      if (brandFa && (rf || descriptor)) {
-        add([...head, descriptor, rf, brandFa].filter(Boolean).join(" "), "brand", "expand", 84);
+      if (brandFa && (rf || primaryDesc)) {
+        add([...head, primaryDesc, rf, brandFa].filter(Boolean).join(" "), "brand", "expand", 84);
       }
-      if (descriptor && rf) {
-        add([...head, hasBt ? "بلوتوثی" : undefined, descriptor, "فرکانس", rf].filter(Boolean).join(" "), "alternative_wording", "expand", 80);
+      if (primaryDesc && rf) {
+        add([...head, hasBt ? "بلوتوثی" : undefined, secondaryDesc && secondaryDesc !== primaryDesc ? secondaryDesc : primaryDesc, "فرکانس", rf].filter(Boolean).join(" "), "alternative_wording", "expand", 80);
+      }
+      if (freqSpec?.alternatives[2] && (secondaryDesc || primaryDesc)) {
+        add([...head, secondaryDesc ?? primaryDesc, freqSpec.alternatives[2]].filter(Boolean).join(" "), "alternative_wording", "expand", 78);
       }
       if (freqSpec?.alternatives[0]) {
         add([...head, freqSpec.alternatives[0], brand].filter(Boolean).join(" "), "alternative_wording", "expand", 76);
       }
-      if (descriptor && typeof buttons === "number") {
+      if (primaryDesc && typeof buttons === "number") {
         const wordCount = PERSIAN_DIGITS_WORD.get(buttons);
-        if (wordCount) add([...head, descriptor, wordCount, "دکمه"].join(" "), "alternative_wording", "expand", 74);
+        if (wordCount) add([...head, primaryDesc, wordCount, "دکمه"].join(" "), "alternative_wording", "expand", 74);
       }
       if (hasBt && freqSpec?.alternatives[0]) {
         add(`bluetooth remote ${freqSpec.alternatives[0]}`, "alternative_wording", "expand", 70);
       }
       if (brandFa || brand) {
         add([...head, hasBt ? "بلوتوثی" : undefined, brandFa ?? brand].filter(Boolean).join(" "), "broad_fallback", "expand", 68);
+      } else if (secondaryDesc) {
+        add([...head, secondaryDesc, functionalDescriptors.includes("لرن") ? "لرن" : undefined].filter(Boolean).join(" "), "broad_fallback", "expand", 69);
       }
     } else {
       const topSpecs = technicalSpecs.slice(0, 2).map((s) => s.display);
@@ -383,6 +428,14 @@ export function extractVocabularyExpansions(
     if (profile.productClass && parsed.head && parsed.head.cls !== profile.productClass) continue;
     if (parsed.designStyle && head.length) {
       add([...head, parsed.designStyle, rf, profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", 76);
+    }
+    if (profile.productClass === "acc:remote" && parsed.tokens.includes("لرن") && parsed.tokens.includes("کد") && head.length) {
+      const sideDesc = profile.descriptors.find((d) => d !== "لرن");
+      add([...head, sideDesc, "کد لرن", rf, profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", 75);
+    }
+    if (profile.productClass === "acc:remote" && parsed.attrs.bluetooth?.includes("yes") && !profile.parsed.attrs.bluetooth?.includes("yes") && head.length) {
+      const sideDesc = profile.descriptors.find((d) => d !== "لرن") ?? profile.descriptors[0];
+      add([...head, sideDesc, "بلوتوثی", rf].filter(Boolean).join(" "), "vocabulary_expansion", 73);
     }
     const freqSpec = profile.technicalSpecs.find((s) => s.key === "frequency");
     if (freqSpec?.alternatives[0] && parsed.tokens.some((t) => t.endsWith("mhz") || t.endsWith("khz")) && head.length) {

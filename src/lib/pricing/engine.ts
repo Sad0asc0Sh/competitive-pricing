@@ -157,9 +157,14 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   const identityAssessed = source.torob?.offerIdentityEvaluated === true;
   const identityConfirmed = source.offers.filter((offer) => offer.torobIdentity
     ? offer.torobIdentity.status === "MATCH_CONFIRMED" : !identityAssessed);
+  const externalIdentityConfirmed = identityConfirmed.filter((o) => !ownShopMatcher({ shopName: o.shopName, shopId: o.shopId }));
   const confirmedSet = new Set(identityConfirmed);
   const marketSource = identityAssessed
-    ? { ...source, offers: identityConfirmed, totalSellerCount: distinctSellerCount(identityConfirmed) }
+    ? {
+        ...source,
+        offers: externalIdentityConfirmed,
+        totalSellerCount: distinctSellerCount(externalIdentityConfirmed),
+      }
     : source;
   const selfShopInListing = identityConfirmed.some((o) => ownShopMatcher({ shopName: o.shopName, shopId: o.shopId }));
   let identityMatchScorePct = 92;
@@ -328,8 +333,10 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   const sellerCount = source.torob ? source.torob.reportedSellers
     : listingPanel(source.prk ?? "", source.offers, source.totalSellerCount).sellerCount;
   const ownOnly = source.ok && !isSourceChallenged && !isSourceDegraded &&
-    source.sourceStatus !== "truncated" && sellerCount === 1 && selfShopInListing &&
-    source.offers.every(ownShopMatcher) &&
+    source.sourceStatus !== "truncated" &&
+    (source.torob ? Boolean(source.torob.ownStoreOnlyOnPrimary) || (sellerCount === 1 && externalIdentityConfirmed.length === 0) : sellerCount === 1) &&
+    selfShopInListing &&
+    externalIdentityConfirmed.length === 0 &&
     identityConfirmed.some(o => o.price > 0 && o.inStock !== false && !o.isAd && !o.priceUnreliable) &&
     !source.isTruncated && !source.meta?.isTruncated && !source.meta?.offersTruncated;
   log({
@@ -524,6 +531,12 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       sellerRows: source.torob.sellerRows,
       reportedSellers: source.torob.reportedSellers,
       ...(source.torob.coverage ? { coverage: source.torob.coverage } : {}),
+      ...(source.torob.panelEvidence ? { panelEvidence: source.torob.panelEvidence } : {}),
+      ...(source.torob.selectedPanelPrks ? { selectedPanelPrks: source.torob.selectedPanelPrks } : {}),
+      ...(source.torob.selfOnlyPanelPrks ? { selfOnlyPanelPrks: source.torob.selfOnlyPanelPrks } : {}),
+      ...(source.torob.reviewPanelPrks ? { reviewPanelPrks: source.torob.reviewPanelPrks } : {}),
+      ...(source.torob.rejectedPanelPrks ? { rejectedPanelPrks: source.torob.rejectedPanelPrks } : {}),
+      ...(source.torob.ownStoreOnlyOnPrimary !== undefined ? { ownStoreOnlyOnPrimary: source.torob.ownStoreOnlyOnPrimary } : {}),
       ...(identityAssessed ? { offerIdentityCounts: {
         MATCH_CONFIRMED: identityConfirmed.length,
         REVIEW_REQUIRED: source.offers.filter((offer) => !offer.torobIdentity || offer.torobIdentity.status === "REVIEW_REQUIRED").length,
@@ -538,6 +551,12 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       data: { ...torobInquiry, search: source.torob.search, candidate: source.torob.selected, titleOrigin: source.torob.titleOrigin,
         sellerTitle: source.meta?.sellerTitle, aiIdentityCheck: source.meta?.aiIdentityCheck, adminConfirmed: source.torob.adminConfirmed,
         coverage: source.torob.coverage,
+        panelEvidence: source.torob.panelEvidence,
+        selectedPanelPrks: source.torob.selectedPanelPrks,
+        selfOnlyPanelPrks: source.torob.selfOnlyPanelPrks,
+        reviewPanelPrks: source.torob.reviewPanelPrks,
+        rejectedPanelPrks: source.torob.rejectedPanelPrks,
+        ownStoreOnlyOnPrimary: source.torob.ownStoreOnlyOnPrimary,
         target: { name: ctx.productName, sku: ctx.sku } },
     });
   }

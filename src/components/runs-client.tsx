@@ -1,7 +1,9 @@
 "use client";
 
 import type { ListingPanel } from "@/lib/pricing/listing";
+import type { PanelCompetitiveEvidence } from "@/lib/pricing/types";
 import { ListingLinks } from "./listing-links";
+import { TorobPanelComparison } from "./torob-evidence";
 import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
 import { campaignLabel, faDate, faNum, pct, statusColor, statusLabel, toman } from "@/lib/format";
@@ -31,6 +33,7 @@ export interface SerializedDecisionStep {
 
 export interface SerializedRunDecision {
   panels: ListingPanel[];
+  panelEvidence?: PanelCompetitiveEvidence[];
   id: number;
   productId: number;
   name: string;
@@ -543,6 +546,7 @@ function DecisionStepsDetail({ decision }: { decision: SerializedRunDecision }) 
           <strong>خطای ثبت/ارسال:</strong> {decision.pushError}
         </div>
       )}
+      <TorobPanelComparison panels={decision.panelEvidence} />
       {decision.steps.length === 0 ? (
         <p className="text-xs text-slate-500">هیچ گامی برای این تصمیم ثبت نشده است.</p>
       ) : (

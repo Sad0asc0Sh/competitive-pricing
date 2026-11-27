@@ -5,8 +5,8 @@ import { parseTitle, type ParsedTitle } from "@/lib/pricing/match/parse";
 import { normalizeText } from "@/lib/pricing/match/text";
 import type { RawOffer, TorobDataOrigin, TorobOfferIdentity } from "@/lib/pricing/types";
 
-const REMOTE_FIELDS = ["frequency", "buttons", "bluetooth"] as const;
-const REMOTE_LABELS = { frequency: "فرکانس", buttons: "تعداد دکمه", bluetooth: "بلوتوث" };
+const REMOTE_FIELDS = ["frequency", "buttons", "bluetooth", "ch"] as const;
+const REMOTE_LABELS = { frequency: "فرکانس", buttons: "تعداد دکمه", bluetooth: "بلوتوث", ch: "تعداد کانال" };
 const SINGLE_UNIT_UNVERIFIED = "برچسب تعداد روی کارت مبهم است و عرضهٔ تکی به‌صراحت تأیید نشده است";
 export const SELLER_EVIDENCE_NOTE = "عنوان یا مشخصات مستقل فروشنده هویت کارت ترب را تکمیل کرد";
 

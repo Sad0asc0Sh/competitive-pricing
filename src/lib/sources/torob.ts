@@ -13,7 +13,7 @@ import {
   cleanPrk, countOf, firstText, offerSourceUrl, prkFromTorobUrl, readTorobImages, readTorobSpecs, readTorobTitles, record,
   safeTorobDetailsUrl, torobPrice, torobStock, type TorobDetailsData, type TorobRecord, type TorobSearchRequest, type TorobSearchSort,
 } from "./torob-payload";
-import type { PriceSourceAdapter, SourceProduct } from "./types";
+import type { KnownPrkHint, PriceSourceAdapter, SourceProduct } from "./types";
 
 const DEFAULT_TOROB_API_BASE = "https://api.torob.com";
 
@@ -314,8 +314,9 @@ export const torobAdapter: PriceSourceAdapter = {
   async fetchOffers(product: SourceProduct) {
     const now = new Date();
     const prk = extractPrk(product.torobUrl, product.torobPrk);
-    const cachedPrk = prk && !product.torobUrl && !product.torobLinkConfirmation &&
-      !parseTitle(product.name, { sku: product.sku }).codes.some((code) => !code.inCompat) ? prk : null;
+    const preferBroadDiscovery = Boolean(product.matchConfig?.preferBroadDiscovery);
+    const directConfirmedLock = Boolean(product.torobLinkConfirmation);
+    const cachedPrk = prk && (preferBroadDiscovery || (!product.torobUrl && !directConfirmedLock)) ? prk : null;
     const cache = isNativeFetchActive() && process.env.TOROB_DISABLE_CACHE !== "1" ? defaultTorobCache : undefined;
     const options = {
       productName: product.name,
@@ -324,6 +325,7 @@ export const torobAdapter: PriceSourceAdapter = {
       prk: cachedPrk ? null : prk,
       cachedPrk,
       knownPrks: product.knownPrks,
+      knownPrkHints: product.knownPrkHints,
       detailsUrl: prk ? safeTorobDetailsUrl(product.torobDetailsUrl, prk, true) : null,
       confirmation: product.torobLinkConfirmation,
       anchorPriceToman: product.currentFinalPrice && product.currentFinalPrice > 0 ? product.currentFinalPrice

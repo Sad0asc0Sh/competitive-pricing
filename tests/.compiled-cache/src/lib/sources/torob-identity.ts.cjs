@@ -10,8 +10,8 @@ const compare_1 = require("../pricing/match/compare");
 const lexicon_1 = require("../pricing/match/lexicon");
 const parse_1 = require("../pricing/match/parse");
 const text_1 = require("../pricing/match/text");
-const REMOTE_FIELDS = ["frequency", "buttons", "bluetooth"];
-const REMOTE_LABELS = { frequency: "فرکانس", buttons: "تعداد دکمه", bluetooth: "بلوتوث" };
+const REMOTE_FIELDS = ["frequency", "buttons", "bluetooth", "ch"];
+const REMOTE_LABELS = { frequency: "فرکانس", buttons: "تعداد دکمه", bluetooth: "بلوتوث", ch: "تعداد کانال" };
 const SINGLE_UNIT_UNVERIFIED = "برچسب تعداد روی کارت مبهم است و عرضهٔ تکی به‌صراحت تأیید نشده است";
 exports.SELLER_EVIDENCE_NOTE = "عنوان یا مشخصات مستقل فروشنده هویت کارت ترب را تکمیل کرد";
 function brands(title) {

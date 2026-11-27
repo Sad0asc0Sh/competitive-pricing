@@ -231,6 +231,7 @@ export function mergeConfig(partial: Partial<PricingProfileConfig> | null | unde
       scenario: { ...d.estimator.scenario, ...(p.estimator?.scenario ?? {}) },
       confidenceModel: { ...d.estimator.confidenceModel, ...(p.estimator?.confidenceModel ?? {}) },
     },
+    discovery: { ...d.discovery, ...(p.discovery ?? {}) },
   };
 }
 

@@ -7,6 +7,7 @@ import type { SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig } from "@/lib/services/bootstrap";
 import { isAllowedSourceType } from "@/lib/sources/registry";
 import { extractPrk } from "@/lib/sources/torob";
+import { syncAdminPrkLink } from "@/lib/sources/torob-index";
 import { torobProductUrl } from "@/lib/sources/torob-payload";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -135,6 +136,14 @@ export async function PATCH(req: Request, { params }: Ctx) {
   patch.updatedAt = new Date();
   try {
     const [row] = await db.update(products).set(patch).where(eq(products.id, productId)).returning();
+    if (linkChanged && typeof patch.torobPrk === "string" && patch.torobPrk) {
+      await syncAdminPrkLink({
+        productId,
+        prk: patch.torobPrk,
+        origin: "manual_edit",
+        confirmed: false,
+      });
+    }
     return NextResponse.json(row);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "خطا" }, { status: 400 });

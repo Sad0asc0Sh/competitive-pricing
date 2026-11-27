@@ -147,6 +147,12 @@ exports.DEFAULT_PROFILE_CONFIG = {
     engine: {
         version: "4.2.1",
     },
+    discovery: {
+        hybridIndexEnabled: true,
+        multiPrkGraphEnabled: true,
+        preferBroadDiscovery: false,
+        singleFlightEnabled: true,
+    },
     estimator: {
         mode: "v2",
         validityModel: true,

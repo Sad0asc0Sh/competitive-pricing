@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { DecisionStep } from "@/db/schema";
 import type { SupplierQuote, TorobInquiryAudit, TorobLinkConfirmation, TorobOfferEvidence } from "@/lib/pricing/types";
-import { TorobOfferDetails, TorobSearchDetails } from "./torob-evidence";
+import { TorobOfferDetails, TorobPanelComparison, TorobSearchDetails } from "./torob-evidence";
 import {
   badgeThemeLabel,
   campaignLabel,
@@ -307,6 +307,7 @@ export function ProductDetailClient({
                   <strong>{torobStatusLabel[latestInquiry.status]}</strong> · {latestInquiry.reason}
                 </p>
               )}
+              <TorobPanelComparison panels={latestInquiry?.panelEvidence} />
               <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
                 <Mini k="پیشنهادهای استخراج‌شده" v={faNum(latestInquiry?.extractedOffers ?? latest.offersTotal)} />
                 <Mini k="پیشنهاد معتبر برای قیمت‌گذاری" v={latestInquiry?.validOffers === null ? "نامشخص" : faNum(latestInquiry?.validOffers ?? latest.offersUsed)} />

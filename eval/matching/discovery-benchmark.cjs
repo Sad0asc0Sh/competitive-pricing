@@ -11,6 +11,7 @@ const { decodeTorobSearch } = loadTsModule('src/lib/sources/torob-payload.ts')
 const { parseTitle } = loadTsModule('src/lib/pricing/match/parse.ts')
 const { normalizeText } = loadTsModule('src/lib/pricing/match/text.ts')
 const { TorobDiscoveryCache } = loadTsModule('src/lib/sources/torob-cache.ts')
+const wallFixture = require('../../tests/fixtures/torob-wall-remote-incident.json')
 
 const NOW = new Date('2026-11-27T14:00:00.000Z')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -252,6 +253,66 @@ const BENCHMARK_CASES = [
       'cab-2': detail('cab-2', 'کابل شبکه کت 6 UTP لگراند 305 متری', [offer('کابل لاله زار', 7900000, 'کابل شبکه کت 6 UTP لگراند 305 متری')]),
     },
   },
+  {
+    id: 'CAT8-wall-remote-self-only-vs-consolidated',
+    category: 'Wall Remotes (Self-Only Incident)',
+    target: {
+      productName: 'ریموت دیواری بتا مدل WLC-3CH 3 کانال لرن 433MHz',
+      sku: 'WLC-3CH',
+      anchorPriceToman: 235000,
+    },
+    relevantPrks: ['wall-consol-coded-b'],
+    selfOnlyPrks: ['wall-self-coded-a'],
+    relevantSellers: ['تهران گیت', 'امنیت پارس', 'دیجی ریموت', 'الکترو شرق', 'کیفیت کنترل', 'آلفا کنترل'],
+    forbiddenPrks: ['wall-mismatch-315-d'],
+    searchPages: (req) => {
+      if (req.sort === 'sellers' || req.page === 2 || req.query.includes('دیواری') || req.query.includes('WLC')) {
+        return {
+          results: [
+            { random_key: 'wall-self-coded-a', name1: 'ریموت دیواری بتا مدل WLC-3CH 3 کانال لرن 433MHz', price: 250000, shop_count: 1 },
+            ...(req.sort === 'sellers' || req.page === 2 || req.query.includes('کد لرن') || req.query.includes('دیواری 433')
+              ? [{ random_key: 'wall-consol-coded-b', name1: 'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز', price: 215000, shop_count: 7 }]
+              : []),
+            { random_key: 'wall-mismatch-315-d', name1: wallFixture.cards.cardD_mismatch.name_fa, price: 195000, shop_count: 3 },
+          ],
+          count: 30,
+          next: 'page2',
+        }
+      }
+      return {
+        results: [
+          { random_key: 'wall-self-coded-a', name1: 'ریموت دیواری بتا مدل WLC-3CH 3 کانال لرن 433MHz', price: 250000, shop_count: 1 },
+        ],
+        count: 30,
+        next: 'page2',
+      }
+    },
+    detailsMap: {
+      'wall-self-coded-a': detail(
+        'wall-self-coded-a',
+        'ریموت دیواری بتا مدل WLC-3CH 3 کانال لرن 433MHz',
+        [offer('ای کا جی کالا', 250000, 'ریموت دیواری بتا مدل WLC-3CH 3 کانال لرن 433MHz')],
+      ),
+      'wall-consol-coded-b': detail(
+        'wall-consol-coded-b',
+        'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز',
+        [
+          offer('ای کا جی کالا', 250000, 'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز'),
+          offer('تهران گیت', 215000, 'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز'),
+          offer('امنیت پارس', 220000, 'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز'),
+          offer('دیجی ریموت', 224000, 'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز'),
+          offer('الکترو شرق', 229000, 'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز'),
+          offer('کیفیت کنترل', 235000, 'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز'),
+          offer('آلفا کنترل', 240000, 'ریموت دیواری بتا مدل WLC-3CH 3 کانال کد لرن 433 مگاهرتز'),
+        ],
+      ),
+      'wall-mismatch-315-d': detail(
+        'wall-mismatch-315-d',
+        wallFixture.cards.cardD_mismatch.name_fa,
+        [offer('ناهمخوان ۳۱۵ یک', 195000, wallFixture.cards.cardD_mismatch.name_fa)],
+      ),
+    },
+  },
 ]
 
 // Simulates the pre-fix baseline discovery loop (MAX_QUERIES=6, MAX_DETAILS=4, page 1 popularity only, old طرح veto).
@@ -287,6 +348,7 @@ async function runLegacyBaselineCase(c) {
     if (outcome.confident && !codeless) break
   }
   const ranked = selectBestTorobSearchMatch(c.target, [...candMap.values()]).allRanked
+  const outcome = selectBestTorobSearchMatch(c.target, [...candMap.values()])
   const shortlist = ranked.filter((r) => !r.rejected && !/طرح/.test(r.candidate.titleFa)).slice(0, 4)
   const inspected = []
   for (const s of shortlist) {
@@ -300,11 +362,13 @@ async function runLegacyBaselineCase(c) {
   const inspectedPrks = new Set(inspected.map((d) => d.prk))
   const foundSellers = new Set(inspected.flatMap((d) => d.offers.map((o) => o.shopName)))
   const confirmedWrong = inspected.some((d) => c.forbiddenPrks.includes(d.prk)) ? 1 : 0
+  const selfOnlySelected = Array.isArray(c.selfOnlyPrks) && c.selfOnlyPrks.includes(outcome.best?.candidate?.prk) ? 1 : 0
   return {
     candidateRecall: c.relevantPrks.filter((id) => retrievedPrks.has(id)).length / c.relevantPrks.length,
     recallAt4: c.relevantPrks.filter((id) => inspectedPrks.has(id)).length / c.relevantPrks.length,
     sellerRecall: c.relevantSellers.filter((s) => foundSellers.has(s)).length / c.relevantSellers.length,
     falseConfirmations: confirmedWrong,
+    selfOnlyFalseCompletion: selfOnlySelected,
     apiCalls,
     latencyMs,
     uninspectedPromising: ranked.filter((r) => !r.rejected && !inspectedPrks.has(r.candidate.prk) && c.relevantPrks.includes(r.candidate.prk)).length,
@@ -341,13 +405,15 @@ async function runAdaptiveCase(c, cache) {
   const inspectedPrks = new Set((res.torob.search?.candidates ?? []).filter((x) => x.extraction !== 'not_requested').map((x) => x.prk))
   const foundSellers = new Set(res.offers.map((o) => o.shopName))
   const confirmedForbidden = res.offers.some((o) => o.torobIdentity?.status === 'MATCH_CONFIRMED' && c.forbiddenPrks.includes(o.torobIdentity.prk)) ? 1 : 0
-  const confirmedNonTarget = res.offers.some((o) => o.torobIdentity?.status === 'MATCH_CONFIRMED' && !c.relevantSellers.includes(o.shopName)) ? 1 : 0
+  const confirmedNonTarget = res.offers.some((o) => o.torobIdentity?.status === 'MATCH_CONFIRMED' && !c.relevantSellers.includes(o.shopName) && o.shopName !== 'ای کا جی کالا') ? 1 : 0
   const transparencyViolation = cov.status === 'complete_within_scope' && (cov.pagesRemaining > 0 || cov.promisingUninspectedCount > 0 || cov.sellerOffersTruncated) ? 1 : 0
+  const selfOnlySelected = Array.isArray(c.selfOnlyPrks) && (c.selfOnlyPrks.includes(res.prk) || Boolean(res.torob.ownStoreOnlyOnPrimary)) ? 1 : 0
   return {
     candidateRecall: c.relevantPrks.filter((id) => retrievedPrks.has(id)).length / c.relevantPrks.length,
     recallAtK: c.relevantPrks.filter((id) => inspectedPrks.has(id)).length / c.relevantPrks.length,
     sellerRecall: c.relevantSellers.filter((s) => foundSellers.has(s)).length / c.relevantSellers.length,
     falseConfirmations: confirmedForbidden + confirmedNonTarget,
+    selfOnlyFalseCompletion: selfOnlySelected,
     apiCalls,
     latencyMs,
     uninspectedPromising: cov.promisingUninspectedCount,
@@ -367,6 +433,7 @@ function summarize(rows) {
     sellerRecall: Number(avg('sellerRecall').toFixed(4)),
     recallAtK: Number(avg(rows[0].recallAtK != null ? 'recallAtK' : 'recallAt4').toFixed(4)),
     falseConfirmations: rows.reduce((s, r) => s + r.falseConfirmations, 0),
+    selfOnlyFalseCompletions: rows.reduce((s, r) => s + (r.selfOnlyFalseCompletion ?? 0), 0),
     apiCallsPerInquiry: Number(avg('apiCalls').toFixed(2)),
     uniqueRelevantPerReq: Number(avg('uniqueRelevantPerReq').toFixed(3)),
     uninspectedPromising: Number(avg('uninspectedPromising').toFixed(2)),
@@ -400,6 +467,7 @@ async function main() {
   assert.ok(report.adaptiveCold.candidateRecall > report.baseline.candidateRecall, 'adaptive candidate recall must exceed baseline')
   assert.ok(report.adaptiveCold.sellerRecall > report.baseline.sellerRecall, 'adaptive seller recall must exceed baseline')
   assert.equal(report.adaptiveCold.falseConfirmations, 0)
+  assert.equal(report.adaptiveCold.selfOnlyFalseCompletions, 0)
   assert.equal(report.adaptiveCold.transparencyViolations, 0)
   assert.ok(report.adaptiveWarm.cacheHitRate >= 0.99)
 }

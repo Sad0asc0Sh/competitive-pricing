@@ -176,6 +176,34 @@ export interface TorobCoverageDiagnostics {
   limitations: string[];
 }
 
+export type PanelCoverageStatus = "complete_within_scope" | "partial" | "uncertain" | "unavailable";
+export type PanelGroupRole = "primary" | "compatible_secondary" | "self_only" | "review_required" | "rejected";
+
+export interface PanelCompetitiveEvidence {
+  prk: string;
+  identityStatus: "MATCH_CONFIRMED" | "REVIEW_REQUIRED" | "IDENTITY_MISMATCH";
+  title?: string | null;
+  url?: string | null;
+  matchConfidence: number;
+  score?: number | null;
+  reportedSellerCount: number | null;
+  extractedOfferCount: number;
+  ownStoreOfferCount: number;
+  uniqueExternalSellerCount: number;
+  confirmedCompetitorCount: number;
+  reviewRequiredCompetitorCount: number;
+  rejectedCompetitorCount: number;
+  offersTruncated: boolean;
+  coverageStatus: PanelCoverageStatus;
+  groupRole?: PanelGroupRole;
+  freshness?: string | null;
+  freshExternalCount?: number;
+  discoveringQueries?: string[];
+  evidenceSources?: string[];
+  selectionReason?: string | null;
+  exclusionReason?: string | null;
+}
+
 export interface TorobCandidateTrace {
   prk: string;
   url: string;
@@ -202,6 +230,7 @@ export interface TorobCandidateTrace {
   sellerCount?: number | null;
   priceToman?: number | null;
   inspection?: Pick<TorobCandidateTrace, "status" | "reasons" | "titleFa" | "titleEn" | "specs" | "imageUrls" | "origin">;
+  panelEvidence?: PanelCompetitiveEvidence;
 }
 
 export interface TorobSearchTrace {
@@ -240,6 +269,13 @@ export interface TorobSourceAssessment {
   adminConfirmed?: boolean;
   offerIdentityEvaluated?: true;
   coverage?: TorobCoverageDiagnostics;
+  panelEvidence?: PanelCompetitiveEvidence[];
+  selectedPanelPrks?: string[];
+  selfOnlyPanelPrks?: string[];
+  reviewPanelPrks?: string[];
+  rejectedPanelPrks?: string[];
+  ownStoreOnlyOnPrimary?: boolean;
+  hybridIndexHintsUsed?: number;
 }
 
 export interface TorobInquiryReport {
@@ -255,6 +291,12 @@ export interface TorobInquiryReport {
   reportedSellers: number | null;
   offerIdentityCounts?: Record<TorobOfferIdentity["status"], number>;
   coverage?: TorobCoverageDiagnostics;
+  panelEvidence?: PanelCompetitiveEvidence[];
+  selectedPanelPrks?: string[];
+  selfOnlyPanelPrks?: string[];
+  reviewPanelPrks?: string[];
+  rejectedPanelPrks?: string[];
+  ownStoreOnlyOnPrimary?: boolean;
 }
 
 export interface TorobInquiryAudit extends TorobInquiryReport {
@@ -639,6 +681,13 @@ export interface PricingProfileConfig {
   engine: {
     version: string;
   };
+  /** ---------- ۱۳) تنظیمات کشف ترکیبی و گراف چندکارت ترب ---------- */
+  discovery?: {
+    hybridIndexEnabled?: boolean;
+    multiPrkGraphEnabled?: boolean;
+    preferBroadDiscovery?: boolean;
+    singleFlightEnabled?: boolean;
+  };
   /**
    * ---------- ۱۳) تخمین‌گر نسخه ۲ ----------
    * هر زیرقابلیت پرچم جدا دارد تا اثرش در ablation سنجیده شود و در صورت لزوم جدا خاموش شود.
@@ -828,6 +877,12 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
   },
   engine: {
     version: "4.2.1",
+  },
+  discovery: {
+    hybridIndexEnabled: true,
+    multiPrkGraphEnabled: true,
+    preferBroadDiscovery: false,
+    singleFlightEnabled: true,
   },
   estimator: {
     mode: "v2",

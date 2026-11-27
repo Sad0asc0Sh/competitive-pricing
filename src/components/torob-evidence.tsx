@@ -1,5 +1,125 @@
-import { faNum, torobStatusLabel } from "@/lib/format";
-import type { TorobCoverageDiagnostics, TorobDataOrigin, TorobInquiryAudit, TorobOfferEvidence, TorobOfferIdentity } from "@/lib/pricing/types";
+import { faDate, faNum, torobStatusLabel } from "@/lib/format";
+import type {
+  PanelCompetitiveEvidence,
+  PanelGroupRole,
+  TorobCoverageDiagnostics,
+  TorobDataOrigin,
+  TorobInquiryAudit,
+  TorobOfferEvidence,
+  TorobOfferIdentity,
+} from "@/lib/pricing/types";
+
+const groupRoleMeta: Record<PanelGroupRole, { label: string; cls: string; groupTitle: string }> = {
+  primary: { label: "پنل مرجع اصلی", cls: "bg-emerald-100 text-emerald-900", groupTitle: "پنل‌های منتخب بازار" },
+  compatible_secondary: { label: "پنل سازگار تکمیلی", cls: "bg-cyan-100 text-cyan-900", groupTitle: "پنل‌های منتخب بازار" },
+  self_only: { label: "فقط فروشگاه خودمان", cls: "bg-amber-100 text-amber-900", groupTitle: "فقط فروشگاه خودمان (فاقد رقیب مستقل)" },
+  review_required: { label: "نیازمند بازبینی", cls: "bg-amber-50 text-amber-900 border border-amber-200", groupTitle: "نامزدهای نیازمند بررسی" },
+  rejected: { label: "ردشده / ناسازگار", cls: "bg-rose-100 text-rose-800", groupTitle: "کارت‌های ردشده" },
+};
+
+const evidenceSourceLabels: Record<string, string> = {
+  product_details: "جزئیات کارت ترب",
+  search_card: "عنوان جست‌وجو",
+  seller_listing: "عنوان فروشنده",
+  card_title: "عنوان کارت",
+  card_specs: "جدول مشخصات",
+  seller_corroboration: "تأیید متقاطع فروشندگان",
+  admin_confirmation: "تأیید مدیر",
+};
+
+export function TorobPanelComparison({ panels }: { panels?: PanelCompetitiveEvidence[] }) {
+  if (!panels?.length) return null;
+  const groups: Array<{ key: string; title: string; items: PanelCompetitiveEvidence[] }> = [
+    {
+      key: "selected",
+      title: "پنل‌های منتخب بازار (مرجع قیمت‌گذاری)",
+      items: panels.filter((p) => p.groupRole === "primary" || p.groupRole === "compatible_secondary"),
+    },
+    {
+      key: "self",
+      title: "کارت‌های فقط فروشگاه خودمان (حذف از کف رقبا)",
+      items: panels.filter((p) => p.groupRole === "self_only"),
+    },
+    {
+      key: "review",
+      title: "نامزدهای نیازمند بازبینی",
+      items: panels.filter((p) => !p.groupRole || p.groupRole === "review_required"),
+    },
+    {
+      key: "rejected",
+      title: "کارت‌های ردشده (واریانت/محصول متفاوت)",
+      items: panels.filter((p) => p.groupRole === "rejected"),
+    },
+  ].filter((g) => g.items.length > 0);
+
+  return (
+    <div className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-bold text-slate-900">مقایسه و تشخیص پنل‌های ترب ({faNum(panels.length)} کارت)</span>
+        <span className="text-[11px] text-slate-500">تفکیک فروشگاه خودمان، رقبای مستقل تأییدشده و واریانت‌های نیازمند بازبینی</span>
+      </div>
+      {groups.map((group) => (
+        <div key={group.key} className="space-y-1.5">
+          <div className="text-[11px] font-semibold text-slate-600">{group.title}</div>
+          <div className="space-y-1.5">
+            {group.items.map((p) => {
+              const role = groupRoleMeta[p.groupRole ?? "review_required"];
+              const cov = coverageLabels[p.coverageStatus];
+              const pctScore = p.score != null ? Math.round(p.score) : Math.round(p.matchConfidence * 100);
+              return (
+                <div key={p.prk} className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 space-y-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                      <span className={`badge ${role.cls}`}>{role.label}</span>
+                      <span className="badge bg-slate-100 text-slate-700">{torobStatusLabel[p.identityStatus]} ({faNum(pctScore)}٪)</span>
+                      <span className={`badge ${cov.cls}`}>{cov.label}</span>
+                      {p.offersTruncated && <span className="badge bg-amber-100 text-amber-900">برش‌خورده (Truncated)</span>}
+                    </div>
+                    <a
+                      href={p.url ?? `https://torob.com/p/${encodeURIComponent(p.prk)}/`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="num shrink-0 font-mono text-[11px] text-indigo-700 underline"
+                    >
+                      PRK: {p.prk}
+                    </a>
+                  </div>
+                  <div className="font-semibold text-slate-900">{p.title || "بدون عنوان"}</div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600 num">
+                    <span>گزارش‌شده در ترب: <strong>{p.reportedSellerCount == null ? "نامشخص" : faNum(p.reportedSellerCount)}</strong></span>
+                    <span>استخراج‌شده: <strong>{faNum(p.extractedOfferCount)}</strong></span>
+                    <span>فروشگاه خودمان: <strong className={p.ownStoreOfferCount > 0 ? "text-amber-800" : ""}>{faNum(p.ownStoreOfferCount)}</strong></span>
+                    <span>رقبای مستقل یکتا: <strong>{faNum(p.uniqueExternalSellerCount)}</strong></span>
+                    <span>رقبای تأییدشده: <strong className="text-emerald-800">{faNum(p.confirmedCompetitorCount)}</strong></span>
+                    {p.reviewRequiredCompetitorCount > 0 && <span>نیازمند بررسی: <strong className="text-amber-800">{faNum(p.reviewRequiredCompetitorCount)}</strong></span>}
+                    {p.rejectedCompetitorCount > 0 && <span>ردشده: <strong className="text-rose-800">{faNum(p.rejectedCompetitorCount)}</strong></span>}
+                    {p.freshness && <span>تازه‌ترین پیشنهاد: <strong>{faDate(p.freshness)}</strong></span>}
+                  </div>
+                  {(p.discoveringQueries?.length || p.evidenceSources?.length) ? (
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                      {p.discoveringQueries && p.discoveringQueries.length > 0 && (
+                        <span>پرس‌وجوها: {p.discoveringQueries.join("، ")}</span>
+                      )}
+                      {p.evidenceSources && p.evidenceSources.length > 0 && (
+                        <span>منابع شواهد: {p.evidenceSources.map((s) => evidenceSourceLabels[s] ?? s).join(" · ")}</span>
+                      )}
+                    </div>
+                  ) : null}
+                  {(p.selectionReason || p.exclusionReason) && (
+                    <p className="text-[11px] leading-5 text-slate-700">
+                      <strong>{p.selectionReason ? "دلیل انتخاب:" : "دلیل عدم انتخاب/جداسازی:"}</strong>{" "}
+                      {p.selectionReason ?? p.exclusionReason}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const coverageLabels: Record<TorobCoverageDiagnostics["status"], { label: string; cls: string }> = {
   complete_within_scope: { label: "تکمیل‌شده در محدودهٔ جست‌وجو", cls: "bg-emerald-50 text-emerald-800" },
@@ -101,7 +221,7 @@ export function TorobOfferDetails({ evidence }: { evidence: TorobOfferEvidence }
 }
 
 export function TorobSearchDetails({ audit }: { audit?: TorobInquiryAudit }) {
-  if (!audit?.search && !audit?.candidate && !audit?.coverage) return null;
+  if (!audit?.search && !audit?.candidate && !audit?.coverage && !audit?.panelEvidence?.length) return null;
   const queries = audit.search?.queries ?? [];
   const cards = audit.search?.candidates?.length ? audit.search.candidates : audit.candidate ? [audit.candidate] : [];
   const counts = audit.offerIdentityCounts;
@@ -110,6 +230,7 @@ export function TorobSearchDetails({ audit }: { audit?: TorobInquiryAudit }) {
   return (
     <details className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-700">
       <summary className="cursor-pointer font-semibold">شواهد جست‌وجو و تطبیق ترب</summary>
+      <TorobPanelComparison panels={audit?.panelEvidence} />
       {coverage && covStyle && (
         <div className="space-y-1.5 rounded-lg border border-slate-200 bg-white p-2">
           <div className="flex flex-wrap items-center gap-2">

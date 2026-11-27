@@ -1,3 +1,4 @@
+import type { PanelCompetitiveEvidence, TorobInquiryReport } from "@/lib/pricing/types";
 import { decisionPanels } from "@/lib/pricing/listing";
 import { parsePositiveInt, toIsoString } from "@/lib/format";
 import { db } from "@/db";
@@ -78,6 +79,8 @@ export default async function RunsPage({ searchParams }: { searchParams: Promise
 
   const serializedDecisions: SerializedRunDecision[] = decisions.map(({ d, name, sku }) => {
     const rawSteps = Array.isArray(d.steps) ? d.steps : [];
+    const inquiryData = rawSteps.find((s) => s.step === "torob_inquiry")?.data as TorobInquiryReport | undefined;
+    const panelEvidence: PanelCompetitiveEvidence[] | undefined = inquiryData?.panelEvidence;
     const steps = rawSteps.map((s) => ({
       step: String(s.step ?? ""),
       title: String(s.title ?? s.step ?? ""),
@@ -89,6 +92,7 @@ export default async function RunsPage({ searchParams }: { searchParams: Promise
       id: d.id,
       productId: d.productId,
       panels: decisionPanels(rawSteps),
+      ...(panelEvidence?.length ? { panelEvidence } : {}),
       name,
       sku,
       source: d.source,
