@@ -1,0 +1,96 @@
+{
+  "provenance": "Synthetic fixture identifiers (syn-*) paired with exact observed product/card/seller titles and prices from the user-reported incident screenshots (without fabricating live PRKs).",
+  "observedAt": "2026-11-27T14:00:00.000Z",
+  "target": {
+    "id": 101,
+    "sku": "2399",
+    "name": "ریموت بلوتوثی 315 بنزی 5 دکمه (Hsp)",
+    "anchorPriceToman": 589000
+  },
+  "cards": {
+    "cardA_bazar": {
+      "prk": "syn-hsp-bazar-a",
+      "name_fa": "613 ریموت بلوتوثی 315 بنزی 5 دکمه اچ اس پی",
+      "name_en": null,
+      "price_toman": 580000,
+      "shop_count": 1,
+      "shop_text": "در بازار قفل",
+      "offers": [
+        {
+          "shop_name": "بازار قفل",
+          "shop_id": "syn-shop-bazar",
+          "shop_city": "تهران",
+          "price_toman": 580000,
+          "product_title": "613 ریموت بلوتوثی 315 بنزی 5 دکمه اچ اس پی",
+          "available": true,
+          "shop_score": 4.8,
+          "shop_votes": 64
+        }
+      ]
+    },
+    "cardB_jahan": {
+      "prk": "syn-hsp-jahan-b",
+      "name_fa": "ریموت بنزی ۵ عددی",
+      "name_en": "Hsp",
+      "price_toman": 750000,
+      "shop_count": 1,
+      "shop_text": "در جهان ریموت",
+      "offers": [
+        {
+          "shop_name": "جهان ریموت",
+          "shop_id": "syn-shop-jahan",
+          "shop_city": "تهران",
+          "price_toman": 750000,
+          "product_title": "ریموت بنزی بلوتوثی بنزی فرکانس 315 Hsp",
+          "available": true,
+          "shop_score": 4.6,
+          "shop_votes": 42
+        }
+      ]
+    },
+    "cardC_volta": {
+      "prk": "syn-hsp-volta-c",
+      "name_fa": "ریموت بلوتوثی طرح بنزی فرکانس ۳۱۵",
+      "name_en": null,
+      "price_toman": 610190,
+      "shop_count": 1,
+      "shop_text": "در ولتاتک",
+      "offers": [
+        {
+          "shop_name": "ولتاتک",
+          "shop_id": "syn-shop-volta",
+          "shop_city": "مشهد",
+          "price_toman": 610190,
+          "product_title": "ریموت بلوتوثی طرح بنزی 315MHz برند HSP",
+          "available": true,
+          "shop_score": 4.7,
+          "shop_votes": 51
+        }
+      ]
+    },
+    "cardD_verified_volta": {
+      "prk": "syn-hsp-volta-d",
+      "name_fa": "ریموت بلوتوثی طرح بنزی فرکانس ۳۱۵",
+      "name_en": null,
+      "price_toman": 610190,
+      "shop_count": 1,
+      "shop_text": "در ولتاتک",
+      "offers": [
+        {
+          "shop_name": "ولتاتک",
+          "shop_id": "syn-shop-volta",
+          "shop_city": "مشهد",
+          "price_toman": 610190,
+          "product_title": "ریموت بلوتوثی طرح بنزی 315MHz برند HSP",
+          "specs": [
+            { "key": "تعداد دکمه", "value": "5" },
+            { "key": "تعداد در بسته", "value": "1" }
+          ],
+          "available": true,
+          "shop_score": 4.7,
+          "shop_votes": 51
+        }
+      ]
+    }
+  }
+}

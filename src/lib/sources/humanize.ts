@@ -44,11 +44,12 @@ export function browserHeaders(referer?: string): Record<string, string> {
 
 /** قبل از هر درخواست: رعایت فاصله کوتاه per-host بدون کند کردن پنل */
 export async function politeDelay(host: string, minMs = 200, maxMs = 550): Promise<void> {
-  const last = lastRequestAt.get(host) ?? 0;
-  const since = Date.now() - last;
+  const now = Date.now();
   const wait = randomBetween(minMs, maxMs);
-  if (since < wait) await sleep(wait - since);
-  lastRequestAt.set(host, Date.now());
+  const scheduled = Math.max(now, (lastRequestAt.get(host) ?? 0) + wait);
+  // Reserve slot before sleeping so concurrent callers still keep per-host spacing.
+  lastRequestAt.set(host, scheduled);
+  if (scheduled > now) await sleep(scheduled - now);
 }
 
 export async function fetchWithRetry(

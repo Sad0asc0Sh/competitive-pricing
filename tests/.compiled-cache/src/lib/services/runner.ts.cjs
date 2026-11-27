@@ -309,6 +309,7 @@ async function runPricing(opts = {}) {
                     runMode,
                     isSimulated,
                     profileIdOverride: opts.profileId,
+                    discoveryMode: opts.discoveryMode,
                 });
                 outcomes.push(outcome);
                 summary.decisionIds.push(outcome.id);
@@ -589,6 +590,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     const supplierQuotes = manualSupplierQuotes ?? product.supplierQuotes ?? [];
     // مرجع تخفیف own_price_7d (P3): تاریخچه قیمت خودی دوام‌یافته در پنجره ۷ روزی
     const discountContext = await computeOwnDiscountContext(product.id, config.discount.ownPriceWindowDays ?? 7, config.discount.ownPriceMinHoldHours ?? 48);
+    const discoveryMode = opts?.discoveryMode ?? (product.needsRefresh ? "extended" : "interactive");
     const source = await (0, registry_1.fetchFromSource)({
         id: product.id,
         sku: product.sku,
@@ -607,6 +609,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             approveAbovePct: config.supervisor?.gates?.identity_match?.approveAbovePct ?? config.supervisor?.approveAbovePct ?? 80,
             minSellerCount: config.filters.minSellerCount,
             aiIdentityEnabled: Boolean(config.ai.enabled && config.ai.torobMatchEnabled === true),
+            discoveryMode,
         },
     }, manualOffers);
     const ownRecentPrices = await loadOwnRecentPrices(product.id, product.currentFinalPrice);
@@ -929,11 +932,22 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     const safeHardFloor = (0, exports.safeInt)(result.supply.hardFloorPrice);
     const shouldStoreReplacement = (lowestQuoteCost ?? 0) > 0 &&
         (product.costPrice <= 0 || lowestQuoteCost > product.costPrice);
+    const coverageInfo = source.torob?.coverage;
+    const shouldScheduleExtended = Boolean(!isSimulated &&
+        discoveryMode === "interactive" &&
+        coverageInfo?.status === "partial" &&
+        (coverageInfo.promisingUninspectedCount > 0 || coverageInfo.pagesRemaining > 0));
+    const nextNeedsRefresh = shouldScheduleExtended
+        ? true
+        : (discoveryMode === "extended" || coverageInfo?.status === "complete_within_scope")
+            ? false
+            : product.needsRefresh;
     await index_ts_1.db
         .update(schema_1.products)
         .set({
         lastCheckedAt: new Date(),
         lastDecisionId: decision.id,
+        needsRefresh: nextNeedsRefresh,
         updatedAt: new Date(),
         ...(shouldStoreReplacement
             ? {

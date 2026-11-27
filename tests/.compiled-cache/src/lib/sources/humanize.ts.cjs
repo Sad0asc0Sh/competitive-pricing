@@ -46,12 +46,13 @@ function browserHeaders(referer) {
 }
 /** قبل از هر درخواست: رعایت فاصله کوتاه per-host بدون کند کردن پنل */
 async function politeDelay(host, minMs = 200, maxMs = 550) {
-    const last = lastRequestAt.get(host) ?? 0;
-    const since = Date.now() - last;
+    const now = Date.now();
     const wait = randomBetween(minMs, maxMs);
-    if (since < wait)
-        await (0, exports.sleep)(wait - since);
-    lastRequestAt.set(host, Date.now());
+    const scheduled = Math.max(now, (lastRequestAt.get(host) ?? 0) + wait);
+    // Reserve slot before sleeping so concurrent callers still keep per-host spacing.
+    lastRequestAt.set(host, scheduled);
+    if (scheduled > now)
+        await (0, exports.sleep)(scheduled - now);
 }
 async function fetchWithRetry(url, init, opts = {}) {
     const retries = opts.retries ?? 1;

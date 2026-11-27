@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VARIANT_WORDS = exports.GENERIC_WORDS = exports.STOPWORDS = exports.DEFECTIVE_PHRASES = exports.COUNTERFEIT_PHRASES = exports.USED_PHRASES = exports.QTY_UNIT_WORDS = exports.PACK_WORDS = exports.COMPANION_MARKERS = exports.COMPAT_MARKERS = exports.isAccessoryClass = void 0;
 exports.brandInfo = brandInfo;
+exports.brandDisplayAliases = brandDisplayAliases;
 exports.expandBrands = expandBrands;
 exports.areBrandsCompatible = areBrandsCompatible;
 exports.areBrandSetsCompatible = areBrandSetsCompatible;
@@ -140,6 +141,18 @@ for (const [id, def] of Object.entries(BRAND_DEFS)) {
 }
 function brandInfo(id) {
     return BRAND_INFO.get(id);
+}
+/** Primary Persian and Latin display aliases for a recognized brand id. */
+function brandDisplayAliases(brandId) {
+    const def = BRAND_DEFS[brandId];
+    if (!def)
+        return {};
+    const fa = def.aliases.find((alias) => /[\u0600-\u06FF]/.test(alias));
+    const en = def.aliases.find((alias) => /^[a-z0-9 .-]+$/i.test(alias));
+    return {
+        ...(fa ? { fa: (0, text_1.normalizeText)(fa) } : {}),
+        ...(en ? { en: (0, text_1.normalizeText)(en) } : {}),
+    };
 }
 /** برند مادر را هم اضافه می‌کند (tapo ⇒ tplink) */
 function expandBrands(ids) {

@@ -149,6 +149,18 @@ export function brandInfo(id: string): BrandInfo | undefined {
   return BRAND_INFO.get(id);
 }
 
+/** Primary Persian and Latin display aliases for a recognized brand id. */
+export function brandDisplayAliases(brandId: string): { fa?: string; en?: string } {
+  const def = BRAND_DEFS[brandId];
+  if (!def) return {};
+  const fa = def.aliases.find((alias) => /[\u0600-\u06FF]/.test(alias));
+  const en = def.aliases.find((alias) => /^[a-z0-9 .-]+$/i.test(alias));
+  return {
+    ...(fa ? { fa: normalizeText(fa) } : {}),
+    ...(en ? { en: normalizeText(en) } : {}),
+  };
+}
+
 /** برند مادر را هم اضافه می‌کند (tapo ⇒ tplink) */
 export function expandBrands(ids: Iterable<string>): Set<string> {
   const out = new Set<string>();

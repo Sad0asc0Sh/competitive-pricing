@@ -523,6 +523,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       validLocalInPersonOffers: canValidateOffers ? offers.filter((o) => o.included && o.sellerType === "in_person" && o.isLocalCity).length : null,
       sellerRows: source.torob.sellerRows,
       reportedSellers: source.torob.reportedSellers,
+      ...(source.torob.coverage ? { coverage: source.torob.coverage } : {}),
       ...(identityAssessed ? { offerIdentityCounts: {
         MATCH_CONFIRMED: identityConfirmed.length,
         REVIEW_REQUIRED: source.offers.filter((offer) => !offer.torobIdentity || offer.torobIdentity.status === "REVIEW_REQUIRED").length,
@@ -536,6 +537,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       level: status === "MATCH_CONFIRMED" ? "info" : status === "IDENTITY_MISMATCH" ? "error" : "warn",
       data: { ...torobInquiry, search: source.torob.search, candidate: source.torob.selected, titleOrigin: source.torob.titleOrigin,
         sellerTitle: source.meta?.sellerTitle, aiIdentityCheck: source.meta?.aiIdentityCheck, adminConfirmed: source.torob.adminConfirmed,
+        coverage: source.torob.coverage,
         target: { name: ctx.productName, sku: ctx.sku } },
     });
   }

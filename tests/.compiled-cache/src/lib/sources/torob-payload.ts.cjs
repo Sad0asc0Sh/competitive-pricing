@@ -166,12 +166,24 @@ function countSellerText(shopName) {
     const count = /\d+(?=\s*(?:فروشگاه|فروشنده))/.exec((0, text_1.toAsciiDigits)(shopName ?? ""));
     return count ? Number(count[0]) : null;
 }
-function decodeTorobSearch(payload, limit) {
+function decodeTorobSearch(payload, limit, requestedPage = 1) {
     const envelope = record(payload);
     const data = record(envelope?.data) ?? envelope;
     const rows = data?.products ?? data?.results;
-    if (!Array.isArray(rows))
-        return { rows: null, candidates: [], issue: "search_schema" };
+    if (!Array.isArray(rows)) {
+        return {
+            rows: null,
+            candidates: [],
+            issue: "search_schema",
+            page: requestedPage,
+            hasNextPage: false,
+            totalMatches: null,
+            suggestedCategories: [],
+            suggestedQueries: [],
+            queryCorrected: null,
+            truncated: false,
+        };
+    }
     const candidates = [];
     let unmapped = 0;
     for (const row of rows.slice(0, limit)) {
@@ -200,7 +212,36 @@ function decodeTorobSearch(payload, limit) {
     const upstreamRowCount = countOf(data?.page_count) ?? rows.length;
     if (Math.min(upstreamRowCount, limit) > rows.length)
         unmapped += Math.min(upstreamRowCount, limit) - rows.length;
-    return { rows: Math.max(rows.length, upstreamRowCount), candidates, ...(unmapped ? { issue: "search_card_id_missing_or_conflicting" } : {}) };
+    const rawCats = Array.isArray(data?.suggested_categories)
+        ? data.suggested_categories
+        : Array.isArray(data?.categories) ? data.categories : [];
+    const suggestedCategories = rawCats.flatMap((item) => {
+        const cat = record(item);
+        const id = firstText(cat?.id, cat?.category_id);
+        const title = firstText(cat?.title, cat?.name);
+        return id && title ? [{ id, title }] : [];
+    }).slice(0, 8);
+    const suggestedQueries = Array.isArray(data?.suggested_queries)
+        ? data.suggested_queries.filter((q) => typeof q === "string" && q.trim().length > 0).slice(0, 8)
+        : [];
+    const spellcheck = record(data?.spellcheck);
+    const queryCorrected = firstText(data?.query_corrected, spellcheck?.corrected_query) ?? null;
+    const page = countOf(data?.page) ?? requestedPage;
+    const hasNextPage = data?.has_next_page === true || (typeof data?.next === "string" && data.next.trim().length > 0);
+    const totalMatches = countOf(data?.total_matches ?? data?.count);
+    const truncated = data?.truncated === true || rows.length > limit;
+    return {
+        rows: Math.max(rows.length, upstreamRowCount),
+        candidates,
+        ...(unmapped ? { issue: "search_card_id_missing_or_conflicting" } : {}),
+        page,
+        hasNextPage,
+        totalMatches,
+        suggestedCategories,
+        suggestedQueries,
+        queryCorrected,
+        truncated,
+    };
 }
 function readTorobSpecs(row) {
     const specs = [];

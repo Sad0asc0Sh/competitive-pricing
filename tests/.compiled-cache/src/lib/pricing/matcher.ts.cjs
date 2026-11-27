@@ -149,18 +149,35 @@ function evaluateTorobCandidate(target, candidate, _minSellerCount = 1) {
 const VERDICT_RANK = { approve: 2, review: 1, reject: 0 };
 function areCompatibleConfirmedIdentities(a, b) {
     if (a.status !== "MATCH_CONFIRMED" || b.status !== "MATCH_CONFIRMED" || a.hasConflict || b.hasConflict ||
-        !a.identityKey || a.identityKey !== b.identityKey || !a.parsed || !b.parsed)
+        !a.parsed || !b.parsed)
         return false;
+    if (a.identityKey?.startsWith("code:") && b.identityKey?.startsWith("code:") && a.identityKey !== b.identityKey) {
+        return false;
+    }
     const left = a.parsed;
     const right = b.parsed;
     if (left.head && right.head && left.head.cls !== right.head.cls)
         return false;
     if (!(0, lexicon_1.areKnownBrandSetsCompatible)([...left.brands, ...left.impliedBrands], [...right.brands, ...right.impliedBrands]))
         return false;
-    return Object.entries(left.attrs).every(([key, values]) => {
-        const other = right.attrs[key];
-        return key === "res" || key === "wifi" || !other?.length || values.some((value) => other.includes(value));
-    });
+    const codesA = left.codes.filter(({ inCompat }) => !inCompat);
+    const codesB = right.codes.filter(({ inCompat }) => !inCompat);
+    const codesCover = (xs, ys) => xs.every((code) => ys.some((other) => ["equal", "alias", "tail"].includes((0, compare_1.relateCodes)(code, other))));
+    if (codesA.length && codesB.length && (!codesCover(codesA, codesB) || !codesCover(codesB, codesA))) {
+        return false;
+    }
+    if (left.packageUnits != null && right.packageUnits != null && left.packageUnits !== right.packageUnits) {
+        return false;
+    }
+    if ((0, compare_1.conflictingPrimarySpec)(left, right))
+        return false;
+    for (const key of ["form", "tech", "hddkind", "mgmt", "tier"]) {
+        const lf = left.features[key];
+        const rf = right.features[key];
+        if (lf?.length && rf?.length && !lf.some((value) => rf.includes(value)))
+            return false;
+    }
+    return true;
 }
 function selectBestTorobSearchMatch(target, candidates, minSellerCount = 1) {
     if (!candidates.length) {

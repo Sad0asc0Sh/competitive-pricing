@@ -208,19 +208,37 @@ function decodeMcpDetails(value, now) {
 function fetchViaTorobMcpServer(opts) {
     const now = opts.now ?? new Date();
     let endpointUnavailable = false;
+    const invokeFallbackSearch = (req, timeoutMs) => {
+        if (!opts.fallbackSearch)
+            return Promise.resolve({ unavailable: true });
+        if (opts.fallbackSearch.length >= 3) {
+            return opts.fallbackSearch(req.query, req.limit, timeoutMs);
+        }
+        return opts.fallbackSearch(req, timeoutMs);
+    };
     return (0, torob_discovery_1.resolveTorobSource)({
         ...opts,
+        mode: opts.mode ?? opts.matchConfig?.discoveryMode ?? "interactive",
         now,
         via: "torob_mcp_server",
-        search: async (query, limit, timeoutMs) => {
+        search: async (req, timeoutMs) => {
             if (endpointUnavailable && opts.fallbackSearch)
-                return opts.fallbackSearch(query, limit, timeoutMs);
+                return invokeFallbackSearch(req, timeoutMs);
             const started = Date.now();
-            const out = await callTorobMcpToolWithDiag(opts.mcpUrl, "search_products", { query, limit, sort: "popularity" }, timeoutMs);
+            const mcpArgs = {
+                query: req.query,
+                limit: req.limit,
+                sort: req.sort ?? "popularity",
+                ...(req.page && req.page > 1 ? { page: req.page } : {}),
+                ...(req.category ? { category: req.category } : {}),
+                ...(req.minPriceToman && req.minPriceToman > 0 ? { min_price_toman: req.minPriceToman } : {}),
+                ...(req.maxPriceToman && req.maxPriceToman > 0 ? { max_price_toman: req.maxPriceToman } : {}),
+            };
+            const out = await callTorobMcpToolWithDiag(opts.mcpUrl, "search_products", mcpArgs, timeoutMs);
             endpointUnavailable ||= out.endpointUnavailable === true && !out.blocked;
             const remaining = timeoutMs - (Date.now() - started);
             if (endpointUnavailable && opts.fallbackSearch && remaining > 200)
-                return opts.fallbackSearch(query, limit, remaining);
+                return invokeFallbackSearch(req, remaining);
             return { ...out, origin: "torob_mcp", data: out.data ?? undefined };
         },
         details: async (card, timeoutMs) => {
@@ -250,6 +268,23 @@ function fetchViaTorobMcpServer(opts) {
                     return fallback;
             }
             return decoded;
+        },
+        similar: async (card, limit, timeoutMs) => {
+            if (endpointUnavailable && opts.fallbackSimilar)
+                return opts.fallbackSimilar(card, limit, timeoutMs);
+            const started = Date.now();
+            const address = (0, torob_payload_1.safeTorobDetailsUrl)(card.detailsUrl, card.prk, true);
+            const discoveredAddress = address && new URL(address).searchParams.has("search_id") ? address : null;
+            const out = await callTorobMcpToolWithDiag(opts.mcpUrl, "similar_products", {
+                prk: card.prk,
+                ...(discoveredAddress ? { details_url: discoveredAddress } : {}),
+                limit,
+            }, timeoutMs);
+            const remaining = timeoutMs - (Date.now() - started);
+            if (out.endpointUnavailable && opts.fallbackSimilar && remaining > 200) {
+                return opts.fallbackSimilar(card, limit, remaining);
+            }
+            return { ...out, origin: "torob_mcp", data: out.data ?? undefined };
         },
         priceTrend: async (card) => {
             if (endpointUnavailable)

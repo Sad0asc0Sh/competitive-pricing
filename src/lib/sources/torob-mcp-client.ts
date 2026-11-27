@@ -2,8 +2,9 @@ import { parsePersianRelativeDate } from "@/lib/pricing/filters";
 import { normalizeText } from "@/lib/pricing/match/text";
 import type { TorobCandidateCard } from "@/lib/pricing/matcher";
 import type { MarketPriceTrend, RawOffer, SourceResult, TorobLinkConfirmation } from "@/lib/pricing/types";
-import { buildSearchQueries, resolveTorobSource, type TorobRead } from "./torob-discovery";
-import { cleanPrk, countOf, countSellerText, firstText, offerSourceUrl, readTorobImages, readTorobSpecs, readTorobTitles, record, safeTorobDetailsUrl, torobPrice, torobStock, type TorobDetailsData } from "./torob-payload";
+import type { TorobDiscoveryCache } from "./torob-cache";
+import { buildSearchQueries, resolveTorobSource, type DiscoveryBudgets, type TorobRead } from "./torob-discovery";
+import { cleanPrk, countOf, countSellerText, firstText, offerSourceUrl, readTorobImages, readTorobSpecs, readTorobTitles, record, safeTorobDetailsUrl, torobPrice, torobStock, type TorobDetailsData, type TorobSearchRequest } from "./torob-payload";
 import type { SourceMatchConfig } from "./types";
 
 export { buildSearchQueries } from "./torob-discovery";
@@ -306,6 +307,7 @@ export function fetchViaTorobMcpServer(opts: {
   mcpUrl: string;
   prk?: string | null;
   cachedPrk?: string | null;
+  knownPrks?: string[];
   detailsUrl?: string | null;
   confirmation?: TorobLinkConfirmation | null;
   productName: string;
@@ -313,23 +315,46 @@ export function fetchViaTorobMcpServer(opts: {
   category?: string | null;
   anchorPriceToman?: number | null;
   matchConfig?: SourceMatchConfig;
+  mode?: "interactive" | "extended";
+  cache?: TorobDiscoveryCache;
+  budgets?: Partial<DiscoveryBudgets>;
   now?: Date;
-  fallbackSearch?: (query: string, limit: number, timeoutMs: number) => Promise<TorobRead<unknown>>;
+  fallbackSearch?:
+    | ((req: TorobSearchRequest, timeoutMs: number) => Promise<TorobRead<unknown>>)
+    | ((query: string, limit: number, timeoutMs: number) => Promise<TorobRead<unknown>>);
   fallbackDetails?: (card: TorobCandidateCard, timeoutMs: number) => Promise<TorobRead<TorobDetailsData>>;
+  fallbackSimilar?: (card: TorobCandidateCard, limit: number, timeoutMs: number) => Promise<TorobRead<unknown>>;
 }): Promise<SourceResult> {
   const now = opts.now ?? new Date();
   let endpointUnavailable = false;
+  const invokeFallbackSearch = (req: TorobSearchRequest, timeoutMs: number) => {
+    if (!opts.fallbackSearch) return Promise.resolve<TorobRead<unknown>>({ unavailable: true });
+    if (opts.fallbackSearch.length >= 3) {
+      return (opts.fallbackSearch as (q: string, l: number, t: number) => Promise<TorobRead<unknown>>)(req.query, req.limit, timeoutMs);
+    }
+    return (opts.fallbackSearch as (r: TorobSearchRequest, t: number) => Promise<TorobRead<unknown>>)(req, timeoutMs);
+  };
   return resolveTorobSource({
     ...opts,
+    mode: opts.mode ?? opts.matchConfig?.discoveryMode ?? "interactive",
     now,
     via: "torob_mcp_server",
-    search: async (query, limit, timeoutMs) => {
-      if (endpointUnavailable && opts.fallbackSearch) return opts.fallbackSearch(query, limit, timeoutMs);
+    search: async (req, timeoutMs) => {
+      if (endpointUnavailable && opts.fallbackSearch) return invokeFallbackSearch(req, timeoutMs);
       const started = Date.now();
-      const out = await callTorobMcpToolWithDiag(opts.mcpUrl, "search_products", { query, limit, sort: "popularity" }, timeoutMs);
+      const mcpArgs: Record<string, unknown> = {
+        query: req.query,
+        limit: req.limit,
+        sort: req.sort ?? "popularity",
+        ...(req.page && req.page > 1 ? { page: req.page } : {}),
+        ...(req.category ? { category: req.category } : {}),
+        ...(req.minPriceToman && req.minPriceToman > 0 ? { min_price_toman: req.minPriceToman } : {}),
+        ...(req.maxPriceToman && req.maxPriceToman > 0 ? { max_price_toman: req.maxPriceToman } : {}),
+      };
+      const out = await callTorobMcpToolWithDiag(opts.mcpUrl, "search_products", mcpArgs, timeoutMs);
       endpointUnavailable ||= out.endpointUnavailable === true && !out.blocked;
       const remaining = timeoutMs - (Date.now() - started);
-      if (endpointUnavailable && opts.fallbackSearch && remaining > 200) return opts.fallbackSearch(query, limit, remaining);
+      if (endpointUnavailable && opts.fallbackSearch && remaining > 200) return invokeFallbackSearch(req, remaining);
       return { ...out, origin: "torob_mcp", data: out.data ?? undefined };
     },
     details: async (card, timeoutMs) => {
@@ -356,6 +381,22 @@ export function fetchViaTorobMcpServer(opts: {
         if (fallback.data && !fallback.issue) return fallback;
       }
       return decoded;
+    },
+    similar: async (card, limit, timeoutMs) => {
+      if (endpointUnavailable && opts.fallbackSimilar) return opts.fallbackSimilar(card, limit, timeoutMs);
+      const started = Date.now();
+      const address = safeTorobDetailsUrl(card.detailsUrl, card.prk, true);
+      const discoveredAddress = address && new URL(address).searchParams.has("search_id") ? address : null;
+      const out = await callTorobMcpToolWithDiag(opts.mcpUrl, "similar_products", {
+        prk: card.prk,
+        ...(discoveredAddress ? { details_url: discoveredAddress } : {}),
+        limit,
+      }, timeoutMs);
+      const remaining = timeoutMs - (Date.now() - started);
+      if (out.endpointUnavailable && opts.fallbackSimilar && remaining > 200) {
+        return opts.fallbackSimilar(card, limit, remaining);
+      }
+      return { ...out, origin: "torob_mcp", data: out.data ?? undefined };
     },
     priceTrend: async (card) => {
       if (endpointUnavailable) return null;

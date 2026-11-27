@@ -692,6 +692,14 @@ function addRemoteButtons(tokens, attrs, consumed) {
         }
     }
 }
+const COUNTERFEIT_TARH_WORDS = new Set([
+    "اصل", "اصلی", "اورجینال", "شرکتی", "فیک", "کپی", "تقلبی", "درجه",
+    "ایفون", "آیفون", "گلکسی", "ایرپاد", "ایرپادز", "اپل", "واچ",
+].map((word) => (0, text_1.normalizeText)(word)));
+const NEUTRAL_STYLE_WORDS = new Set([
+    "جدید", "قدیم", "قدیمی", "نوین", "لبخند", "لبخندی", "دام", "بولت", "سقفی", "دیواری",
+    "چوب", "چوبی", "سنگ", "سنگی", "چرم", "چرمی", "کربن", "مات", "براق", "کلاسیک", "مدرن", "اسپرت",
+].map((word) => (0, text_1.normalizeText)(word)));
 const SINGLE_UNIT_PHRASES = [
     ["تکی"], ["تک", "عددی"], ["1", "عددی"], ["یک", "عددی"],
     ["single", "unit"], ["1", "pc"], ["1", "piece"],
@@ -859,6 +867,7 @@ function parseTitle(text, opts = {}) {
     }
     const used = findPhrase(tokens, lexicon_1.USED_PHRASES);
     let counterfeit = findPhrase(tokens, lexicon_1.COUNTERFEIT_PHRASES);
+    let designStyle = null;
     if (!counterfeit) {
         // «قابلیت کپی»، «دستگاه کپی» و «کپی خور» نشانگر غیراصل بودن کالا نیستند.
         const standaloneCopy = tokens.some((token, i) => token === "کپی" &&
@@ -868,13 +877,20 @@ function parseTitle(text, opts = {}) {
             counterfeit = "کپی";
     }
     if (!counterfeit) {
-        const kTarh = tokens.indexOf("طرح");
-        if (kTarh >= 0) {
+        for (let kTarh = 0; kTarh < tokens.length; kTarh++) {
+            if (tokens[kTarh] !== "طرح")
+                continue;
             const next = tokens[kTarh + 1] ?? "";
-            const styleWords = new Set(["جدید", "قدیم", "قدیمی", "نوین", "لبخند", "دام", "بولت", "سقفی", "دیواری", "چوب", "سنگ"]);
-            if (brandScan.consumed.has(kTarh + 1) || !next || !styleWords.has(next)) {
-                counterfeit = brandScan.consumed.has(kTarh + 1) ? `طرح ${next}` : "طرح";
+            if (!next || brandScan.consumed.has(kTarh + 1) || COUNTERFEIT_TARH_WORDS.has(next)) {
+                counterfeit = next ? `طرح ${next}` : "طرح";
+                break;
             }
+            if (NEUTRAL_STYLE_WORDS.has(next)) {
+                consumed.add(kTarh);
+                continue;
+            }
+            designStyle = `طرح ${next}`;
+            consumed.add(kTarh);
         }
     }
     const defective = findPhrase(tokens, lexicon_1.DEFECTIVE_PHRASES);
@@ -951,6 +967,7 @@ function parseTitle(text, opts = {}) {
         ...(singleUnit && pack ? { evidenceConflicts: ["واحد تکی و پک چندعددی هم‌زمان در عنوان ذکر شده‌اند"] } : {}),
         used,
         counterfeit,
+        designStyle,
         defective,
         bundleWith,
         withAccessories,

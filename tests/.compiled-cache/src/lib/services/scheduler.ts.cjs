@@ -39,6 +39,22 @@ async function tickScheduler() {
             });
             ran.push(s.id);
         }
+        // Extended verification pass for products whose interactive scan reported partial coverage.
+        const pendingExtended = await index_ts_1.db
+            .select({ id: schema_1.products.id })
+            .from(schema_1.products)
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.products.needsRefresh, true), (0, drizzle_orm_1.ne)(schema_1.products.status, "paused"), (0, drizzle_orm_1.or)((0, drizzle_orm_1.isNull)(schema_1.products.lockedUntil), (0, drizzle_orm_1.lte)(schema_1.products.lockedUntil, now))))
+            .orderBy((0, drizzle_orm_1.asc)(schema_1.products.id))
+            .limit(3);
+        if (pendingExtended.length) {
+            const productIds = pendingExtended.map((row) => row.id);
+            await (0, bootstrap_1.logActivity)("scheduler", `تکمیل استعلام توسعه‌یافته برای ${productIds.length} محصول با پوشش جزئی`, { productIds });
+            await (0, runner_1.runPricing)({
+                trigger: "schedule",
+                productIds,
+                discoveryMode: "extended",
+            });
+        }
     }
     finally {
         ticking = false;

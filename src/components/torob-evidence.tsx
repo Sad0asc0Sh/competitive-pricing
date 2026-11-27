@@ -1,5 +1,24 @@
 import { faNum, torobStatusLabel } from "@/lib/format";
-import type { TorobDataOrigin, TorobInquiryAudit, TorobOfferEvidence, TorobOfferIdentity } from "@/lib/pricing/types";
+import type { TorobCoverageDiagnostics, TorobDataOrigin, TorobInquiryAudit, TorobOfferEvidence, TorobOfferIdentity } from "@/lib/pricing/types";
+
+const coverageLabels: Record<TorobCoverageDiagnostics["status"], { label: string; cls: string }> = {
+  complete_within_scope: { label: "تکمیل‌شده در محدودهٔ جست‌وجو", cls: "bg-emerald-50 text-emerald-800" },
+  partial: { label: "پوشش جزئی", cls: "bg-amber-50 text-amber-900" },
+  uncertain: { label: "پوشش نیازمند بررسی", cls: "bg-amber-50 text-amber-900" },
+  unavailable: { label: "منبع در دسترس نیست", cls: "bg-rose-50 text-rose-800" },
+};
+
+const stoppingLabels: Record<TorobCoverageDiagnostics["stoppingReason"], string> = {
+  scope_completed: "پایان محدودهٔ طراحی‌شده",
+  confirmed_consolidated: "تأیید کارت متمرکز",
+  time_budget: "اتمام بودجهٔ زمانی",
+  request_budget: "اتمام سقف درخواست",
+  plateau: "توقف به‌دلیل نبود نتیجهٔ جدید",
+  response_truncated: "برش خروجی جست‌وجو",
+  source_unavailable: "اختلال موقت منبع",
+  access_restricted: "محدودیت دسترسی",
+  direct_prk_lookup: "استعلام مستقیم PRK",
+};
 
 const transportLabels: Record<TorobDataOrigin, string> = {
   torob_mcp: "MCP ترب",
@@ -82,13 +101,36 @@ export function TorobOfferDetails({ evidence }: { evidence: TorobOfferEvidence }
 }
 
 export function TorobSearchDetails({ audit }: { audit?: TorobInquiryAudit }) {
-  if (!audit?.search && !audit?.candidate) return null;
+  if (!audit?.search && !audit?.candidate && !audit?.coverage) return null;
   const queries = audit.search?.queries ?? [];
   const cards = audit.search?.candidates?.length ? audit.search.candidates : audit.candidate ? [audit.candidate] : [];
   const counts = audit.offerIdentityCounts;
+  const coverage = audit.coverage ?? audit.search?.coverage;
+  const covStyle = coverage ? coverageLabels[coverage.status] : undefined;
   return (
     <details className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-700">
       <summary className="cursor-pointer font-semibold">شواهد جست‌وجو و تطبیق ترب</summary>
+      {coverage && covStyle && (
+        <div className="space-y-1.5 rounded-lg border border-slate-200 bg-white p-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`badge ${covStyle.cls}`}>{covStyle.label}</span>
+            <span>حالت: {coverage.mode === "extended" ? "توسعه‌یافته" : "تعاملی"}</span>
+            <span>توقف: {stoppingLabels[coverage.stoppingReason]}</span>
+          </div>
+          <p className="text-slate-600">
+            {faNum(coverage.queriesExecuted)}/{faNum(coverage.queriesGenerated)} پرس‌وجو ·{" "}
+            {faNum(coverage.pagesRequested)} صفحه بررسی‌شده ({faNum(coverage.pagesRemaining)} صفحه باقی‌مانده) ·{" "}
+            {faNum(coverage.uniquePrksDiscovered)} PRK یکتا ({faNum(coverage.candidatePrksInspected)} بررسی‌شده،{" "}
+            {faNum(coverage.promisingUninspectedCount)} موردِ مستعدِ بررسی‌نشده) ·{" "}
+            {faNum(coverage.apiRequestsMade)} درخواست API (کش {faNum(Math.round(coverage.cacheHitRate * 100))}٪)
+          </p>
+          {coverage.limitations.length > 0 && (
+            <ul className="list-inside list-disc text-amber-900">
+              {coverage.limitations.map((item, i) => <li key={i}>{item}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
       {counts && <p>
         {faNum(counts.MATCH_CONFIRMED)} پیشنهاد هم‌هویت · {faNum(counts.REVIEW_REQUIRED)} نیازمند بررسی · {faNum(counts.IDENTITY_MISMATCH)} نامنطبق
       </p>}

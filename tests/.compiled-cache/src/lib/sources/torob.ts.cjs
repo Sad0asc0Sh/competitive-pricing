@@ -14,6 +14,7 @@ const text_1 = require("../pricing/match/text");
 const config_1 = require("../torob-relay/config");
 const crypto_1 = require("../torob-relay/crypto");
 const humanize_1 = require("./humanize");
+const torob_cache_1 = require("./torob-cache");
 const torob_discovery_1 = require("./torob-discovery");
 const torob_mcp_client_1 = require("./torob-mcp-client");
 const torob_payload_1 = require("./torob-payload");
@@ -186,9 +187,50 @@ function parseTorobJson(value, now = new Date()) {
         inPersonCount: details?.inPersonSellerCount ?? 0,
     };
 }
-async function searchTorobProductV4(query, limit, timeoutMs) {
-    const params = new URLSearchParams({ q: query, page: "0", size: String(limit), source: "next_desktop" });
+const TOROB_SORT_PARAM = {
+    popularity: "",
+    price: "price",
+    expensive: "-price",
+    newest: "-date",
+    sellers: "-supply",
+};
+async function searchTorobProductV4(reqOrQuery, limitOrTimeout, maybeTimeoutMs) {
+    const req = typeof reqOrQuery === "string"
+        ? { query: reqOrQuery, limit: limitOrTimeout ?? 24 }
+        : reqOrQuery;
+    const timeoutMs = typeof reqOrQuery === "string" ? (maybeTimeoutMs ?? 4500) : (limitOrTimeout ?? 4500);
+    const page = Math.max(0, (req.page ?? 1) - 1);
+    const params = new URLSearchParams({
+        q: req.query,
+        page: String(page),
+        size: String(req.limit),
+        source: "next_desktop",
+    });
+    const sortParam = req.sort ? TOROB_SORT_PARAM[req.sort] : "";
+    if (sortParam)
+        params.set("sort", sortParam);
+    if (req.category)
+        params.set("category", req.category);
+    if (req.minPriceToman && req.minPriceToman > 0)
+        params.set("price__gt", String(Math.round(req.minPriceToman)));
+    if (req.maxPriceToman && req.maxPriceToman > 0)
+        params.set("price__lt", String(Math.round(req.maxPriceToman)));
     const response = await torobTransportGet("api", `/v4/base-product/search/?${params}`, timeoutMs);
+    if (response.data === undefined)
+        return response;
+    const data = jsonValue(response.data);
+    return { origin: "torob_api", ...(data === undefined ? { issue: "search_schema" } : { data }) };
+}
+async function similarTorobProductsV4(card, limit, timeoutMs) {
+    const details = (0, torob_payload_1.safeTorobDetailsUrl)(card.detailsUrl, card.prk, true);
+    const searchId = details ? new URL(details).searchParams.get("search_id") : null;
+    const params = new URLSearchParams({
+        prk: card.prk,
+        size: String(limit),
+        source: "next_desktop",
+        ...(searchId ? { search_id: searchId } : {}),
+    });
+    const response = await torobTransportGet("api", `/v4/base-product/similar-base-product/?${params}`, timeoutMs);
     if (response.data === undefined)
         return response;
     const data = jsonValue(response.data);
@@ -287,27 +329,41 @@ exports.torobAdapter = {
         const prk = extractPrk(product.torobUrl, product.torobPrk);
         const cachedPrk = prk && !product.torobUrl && !product.torobLinkConfirmation &&
             !(0, parse_1.parseTitle)(product.name, { sku: product.sku }).codes.some((code) => !code.inCompat) ? prk : null;
+        const cache = (0, torob_cache_1.isNativeFetchActive)() && process.env.TOROB_DISABLE_CACHE !== "1" ? torob_cache_1.defaultTorobCache : undefined;
         const options = {
             productName: product.name,
             sku: product.sku,
             category: product.category,
             prk: cachedPrk ? null : prk,
             cachedPrk,
+            knownPrks: product.knownPrks,
             detailsUrl: prk ? (0, torob_payload_1.safeTorobDetailsUrl)(product.torobDetailsUrl, prk, true) : null,
             confirmation: product.torobLinkConfirmation,
             anchorPriceToman: product.currentFinalPrice && product.currentFinalPrice > 0 ? product.currentFinalPrice
                 : product.costPrice > 0 ? product.costPrice : null,
             matchConfig: product.matchConfig,
+            mode: product.matchConfig?.discoveryMode ?? "interactive",
+            cache,
             now,
         };
         const details = (card, timeoutMs) => fetchTorobDetails(card, now, timeoutMs);
         const mcpUrl = process.env.TOROB_MCP_URL?.trim();
         if (mcpUrl) {
             await (0, config_1.syncTorobRelayToMcp)().catch(() => undefined);
-            return (0, torob_mcp_client_1.fetchViaTorobMcpServer)({ ...options, mcpUrl, fallbackSearch: searchTorobProductV4, fallbackDetails: details });
+            return (0, torob_mcp_client_1.fetchViaTorobMcpServer)({
+                ...options,
+                mcpUrl,
+                fallbackSearch: searchTorobProductV4,
+                fallbackDetails: details,
+                fallbackSimilar: similarTorobProductsV4,
+            });
         }
         return (0, torob_discovery_1.resolveTorobSource)({
-            ...options, via: "torob_v4", search: searchTorobProductV4, details,
+            ...options,
+            via: "torob_v4",
+            search: searchTorobProductV4,
+            details,
+            similar: similarTorobProductsV4,
             priceTrend: (card) => fetchTorobPriceTrendV4(card.prk),
         });
     },

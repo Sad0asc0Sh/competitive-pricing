@@ -131,6 +131,51 @@ export interface TorobOfferIdentity {
   sharedImage?: boolean;
 }
 
+export type TorobCoverageStatus = "complete_within_scope" | "partial" | "uncertain" | "unavailable";
+
+export type TorobStoppingReason =
+  | "scope_completed"
+  | "confirmed_consolidated"
+  | "time_budget"
+  | "request_budget"
+  | "plateau"
+  | "response_truncated"
+  | "source_unavailable"
+  | "access_restricted"
+  | "direct_prk_lookup";
+
+export interface TorobCoverageDiagnostics {
+  mode: "interactive" | "extended";
+  status: TorobCoverageStatus;
+  stoppingReason: TorobStoppingReason;
+  budgetExhaustedReason: "none" | "search_time" | "search_requests" | "details_time" | "details_requests";
+  queriesGenerated: number;
+  queriesExecuted: number;
+  pagesRequested: number;
+  pagesRemaining: number;
+  sortModesUsed: string[];
+  categoriesUsed: string[];
+  similarProbesExecuted: number;
+  uniquePrksDiscovered: number;
+  candidatePrksInspected: number;
+  candidatePrksNotInspected: number;
+  promisingUninspectedCount: number;
+  sellerListingsExtracted: number;
+  confirmedSellerListings: number;
+  reviewRequiredSellerListings: number;
+  rejectedSellerListings: number;
+  apiRequestsMade: number;
+  cacheHits: number;
+  cacheHitRate: number;
+  searchDurationMs: number;
+  verifyDurationMs: number;
+  searchResponseTruncated: boolean;
+  sellerOffersTruncated: boolean;
+  sourceUnavailable: boolean;
+  accessRestricted: boolean;
+  limitations: string[];
+}
+
 export interface TorobCandidateTrace {
   prk: string;
   url: string;
@@ -153,14 +198,32 @@ export interface TorobCandidateTrace {
   extraction: "not_requested" | "extracted" | "empty" | "incomplete" | "unavailable";
   origin?: TorobDataOrigin;
   imageUrls?: string[];
+  inspectionPriority?: number;
+  sellerCount?: number | null;
+  priceToman?: number | null;
   inspection?: Pick<TorobCandidateTrace, "status" | "reasons" | "titleFa" | "titleEn" | "specs" | "imageUrls" | "origin">;
 }
 
 export interface TorobSearchTrace {
-  queries: { query: string; rows: number | null; mapped: number; issue?: string; origin?: TorobDataOrigin }[];
+  queries: {
+    query: string;
+    rows: number | null;
+    mapped: number;
+    issue?: string;
+    origin?: TorobDataOrigin;
+    page?: number;
+    sort?: string;
+    category?: string;
+    strategy?: string;
+    hasNextPage?: boolean;
+    totalMatches?: number | null;
+    newPrks?: number;
+    cached?: boolean;
+  }[];
   candidates: TorobCandidateTrace[];
   accepted: number;
   eligible: number;
+  coverage?: TorobCoverageDiagnostics;
 }
 
 export interface TorobSourceAssessment {
@@ -176,6 +239,7 @@ export interface TorobSourceAssessment {
   reportedSellers: number | null;
   adminConfirmed?: boolean;
   offerIdentityEvaluated?: true;
+  coverage?: TorobCoverageDiagnostics;
 }
 
 export interface TorobInquiryReport {
@@ -190,6 +254,7 @@ export interface TorobInquiryReport {
   sellerRows: number | null;
   reportedSellers: number | null;
   offerIdentityCounts?: Record<TorobOfferIdentity["status"], number>;
+  coverage?: TorobCoverageDiagnostics;
 }
 
 export interface TorobInquiryAudit extends TorobInquiryReport {

@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { schedules } from "@/db/schema";
-import { and, eq, isNull, lte, or } from "drizzle-orm";
+import { products, schedules } from "@/db/schema";
+import { and, asc, eq, isNull, lte, ne, or } from "drizzle-orm";
 import { ensureDefaults, logActivity } from "./bootstrap";
 import { runPricing } from "./runner";
 
@@ -37,6 +37,28 @@ export async function tickScheduler(): Promise<{ ran: number[] }> {
         profileId: s.filter?.profileId,
       });
       ran.push(s.id);
+    }
+
+    // Extended verification pass for products whose interactive scan reported partial coverage.
+    const pendingExtended = await db
+      .select({ id: products.id })
+      .from(products)
+      .where(and(
+        eq(products.needsRefresh, true),
+        ne(products.status, "paused"),
+        or(isNull(products.lockedUntil), lte(products.lockedUntil, now)),
+      ))
+      .orderBy(asc(products.id))
+      .limit(3);
+
+    if (pendingExtended.length) {
+      const productIds = pendingExtended.map((row) => row.id);
+      await logActivity("scheduler", `تکمیل استعلام توسعه‌یافته برای ${productIds.length} محصول با پوشش جزئی`, { productIds });
+      await runPricing({
+        trigger: "schedule",
+        productIds,
+        discoveryMode: "extended",
+      });
     }
   } finally {
     ticking = false;

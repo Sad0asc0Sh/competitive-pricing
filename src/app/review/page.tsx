@@ -126,24 +126,31 @@ export default async function ReviewPage() {
       .where(inArray(competitorOffers.decisionId, pendingDecisionIds))
       .orderBy(asc(competitorOffers.price));
 
+    const identityRank: Record<string, number> = { MATCH_CONFIRMED: 0, REVIEW_REQUIRED: 1, IDENTITY_MISMATCH: 2 };
     for (const o of offerRows) {
       const list = offersByDecision.get(o.decisionId) ?? [];
-      if (list.length < 6) {
-        list.push({
-          id: o.id,
-          shopName: o.shopName,
-          shopCity: o.shopCity,
-          price: o.price,
-          sellerType: o.sellerType,
-          listingTitle: o.torobEvidence?.listingTitle ?? null,
-          torobEvidence: o.torobEvidence,
-          shopScore: o.shopScore,
-          isLocalCity: o.isLocalCity,
-          included: o.included,
-          excludeReason: o.excludeReason,
-        });
-        offersByDecision.set(o.decisionId, list);
-      }
+      list.push({
+        id: o.id,
+        shopName: o.shopName,
+        shopCity: o.shopCity,
+        price: o.price,
+        sellerType: o.sellerType,
+        listingTitle: o.torobEvidence?.listingTitle ?? null,
+        torobEvidence: o.torobEvidence,
+        shopScore: o.shopScore,
+        isLocalCity: o.isLocalCity,
+        included: o.included,
+        excludeReason: o.excludeReason,
+      });
+      offersByDecision.set(o.decisionId, list);
+    }
+    for (const [decisionId, list] of offersByDecision.entries()) {
+      list.sort((a, b) => {
+        const ra = identityRank[a.torobEvidence?.identity?.status ?? "REVIEW_REQUIRED"] ?? 1;
+        const rb = identityRank[b.torobEvidence?.identity?.status ?? "REVIEW_REQUIRED"] ?? 1;
+        return ra !== rb ? ra - rb : a.price - b.price;
+      });
+      offersByDecision.set(decisionId, list.slice(0, 15));
     }
   }
 

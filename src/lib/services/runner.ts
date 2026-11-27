@@ -65,6 +65,8 @@ export interface RunOptions {
   manualOffers?: RawOffer[] | Record<number, RawOffer[]>;
   /** پیشنهادهای دستی لیست همکاران (در صورت ارسال در لحظه اجرا) */
   manualSupplierQuotes?: SupplierQuote[];
+  /** حالت اکتشاف ترب: interactive (پاسخ سریع) یا extended (تکمیل پوشش) */
+  discoveryMode?: "interactive" | "extended";
 }
 
 export interface RunSummary {
@@ -441,6 +443,7 @@ export async function runPricing(opts: RunOptions = {}): Promise<RunSummary> {
           runMode,
           isSimulated,
           profileIdOverride: opts.profileId,
+          discoveryMode: opts.discoveryMode,
         });
         outcomes.push(outcome);
         summary.decisionIds.push(outcome.id);
@@ -749,6 +752,7 @@ async function priceOneProduct(
     runMode?: RunMode;
     isSimulated?: boolean;
     profileIdOverride?: number;
+    discoveryMode?: "interactive" | "extended";
   },
 ): Promise<ProcessOutcome> {
   const manualOffers = opts?.manualOffers;
@@ -777,6 +781,9 @@ async function priceOneProduct(
     config.discount.ownPriceMinHoldHours ?? 48,
   );
 
+  const discoveryMode: "interactive" | "extended" =
+    opts?.discoveryMode ?? (product.needsRefresh ? "extended" : "interactive");
+
   const source = await fetchFromSource(
     {
       id: product.id,
@@ -798,6 +805,7 @@ async function priceOneProduct(
           config.supervisor?.gates?.identity_match?.approveAbovePct ?? config.supervisor?.approveAbovePct ?? 80,
         minSellerCount: config.filters.minSellerCount,
         aiIdentityEnabled: Boolean(config.ai.enabled && config.ai.torobMatchEnabled === true),
+        discoveryMode,
       },
     },
     manualOffers,
@@ -1163,11 +1171,25 @@ async function priceOneProduct(
     (lowestQuoteCost ?? 0) > 0 &&
     (product.costPrice <= 0 || lowestQuoteCost! > product.costPrice);
 
+  const coverageInfo = source.torob?.coverage;
+  const shouldScheduleExtended = Boolean(
+    !isSimulated &&
+      discoveryMode === "interactive" &&
+      coverageInfo?.status === "partial" &&
+      (coverageInfo.promisingUninspectedCount > 0 || coverageInfo.pagesRemaining > 0),
+  );
+  const nextNeedsRefresh = shouldScheduleExtended
+    ? true
+    : (discoveryMode === "extended" || coverageInfo?.status === "complete_within_scope")
+      ? false
+      : product.needsRefresh;
+
   await db
     .update(products)
     .set({
       lastCheckedAt: new Date(),
       lastDecisionId: decision.id,
+      needsRefresh: nextNeedsRefresh,
       updatedAt: new Date(),
       ...(shouldStoreReplacement
         ? {

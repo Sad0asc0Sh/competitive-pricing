@@ -7,7 +7,7 @@
  * جزئیات: src/lib/pricing/match/*.ts  و  docs/MATCHER_V2.md
  */
 import type { SystemOneVerdict, TorobIdentityStatus, TorobTitleState } from "./types";
-import { compareParsed, DEFAULT_MATCH_FLAGS, relateCodes, type MatchFlags } from "./match/compare";
+import { compareParsed, conflictingPrimarySpec, DEFAULT_MATCH_FLAGS, relateCodes, type MatchFlags } from "./match/compare";
 import { areKnownBrandSetsCompatible } from "./match/lexicon";
 import { parseIdentityTitle, parseTitle, type IdentitySpec, type ParsedTitle } from "./match/parse";
 import { isInternalOrDatabaseId as isInternalId, normalizeText } from "./match/text";
@@ -224,15 +224,31 @@ const VERDICT_RANK: Record<SystemOneVerdict, number> = { approve: 2, review: 1, 
 
 export function areCompatibleConfirmedIdentities(a: ScoredCandidateResult, b: ScoredCandidateResult): boolean {
   if (a.status !== "MATCH_CONFIRMED" || b.status !== "MATCH_CONFIRMED" || a.hasConflict || b.hasConflict ||
-      !a.identityKey || a.identityKey !== b.identityKey || !a.parsed || !b.parsed) return false;
+      !a.parsed || !b.parsed) return false;
+  if (a.identityKey?.startsWith("code:") && b.identityKey?.startsWith("code:") && a.identityKey !== b.identityKey) {
+    return false;
+  }
   const left = a.parsed;
   const right = b.parsed;
   if (left.head && right.head && left.head.cls !== right.head.cls) return false;
   if (!areKnownBrandSetsCompatible([...left.brands, ...left.impliedBrands], [...right.brands, ...right.impliedBrands])) return false;
-  return Object.entries(left.attrs).every(([key, values]) => {
-    const other = right.attrs[key];
-    return key === "res" || key === "wifi" || !other?.length || values.some((value) => other.includes(value));
-  });
+  const codesA = left.codes.filter(({ inCompat }) => !inCompat);
+  const codesB = right.codes.filter(({ inCompat }) => !inCompat);
+  const codesCover = (xs: typeof codesA, ys: typeof codesB) =>
+    xs.every((code) => ys.some((other) => ["equal", "alias", "tail"].includes(relateCodes(code, other))));
+  if (codesA.length && codesB.length && (!codesCover(codesA, codesB) || !codesCover(codesB, codesA))) {
+    return false;
+  }
+  if (left.packageUnits != null && right.packageUnits != null && left.packageUnits !== right.packageUnits) {
+    return false;
+  }
+  if (conflictingPrimarySpec(left, right)) return false;
+  for (const key of ["form", "tech", "hddkind", "mgmt", "tier"] as const) {
+    const lf = left.features[key];
+    const rf = right.features[key];
+    if (lf?.length && rf?.length && !lf.some((value) => rf.includes(value))) return false;
+  }
+  return true;
 }
 
 export function selectBestTorobSearchMatch(

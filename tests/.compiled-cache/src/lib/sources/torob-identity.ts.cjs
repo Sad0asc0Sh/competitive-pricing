@@ -51,12 +51,14 @@ function cardForSellerEvidence(target, targetTitle, result) {
     const ambiguousPack = Boolean(parsed.pack && !targetTitle.pack);
     if (ambiguousPack && parsed.pack) {
         const { qty, word } = parsed.pack;
-        const ratio = (result.candidate.priceToman ?? 0) / (target.anchorPriceToman ?? 0);
+        const anchor = target.anchorPriceToman;
+        const cardPrice = result.candidate.priceToman;
+        const ratio = anchor && anchor > 0 && cardPrice && cardPrice > 0 ? cardPrice / anchor : null;
         if (parsed.head?.cls !== "acc:remote" || targetTitle.head?.cls !== "acc:remote" ||
             qty == null || qty > 16 || parsed.attrs.buttons?.length && parsed.packageUnits !== 1 ||
             !/ (?:عددی|تایی)$/.test(word) ||
             (targetTitle.attrs.buttons?.length && !targetTitle.attrs.buttons.includes(qty)) ||
-            !(ratio >= 0.55 && ratio <= 1.85) || parsed.tokens.some((token) => lexicon_1.PACK_WORDS.has(token)))
+            (ratio != null && !(ratio >= 0.55 && ratio <= 1.85)) || parsed.tokens.some((token) => lexicon_1.PACK_WORDS.has(token)))
             return undefined;
         // A plausible label permits inspection. Explicit evidence is still required to establish one unit.
         const stripQuantity = (title) => ` ${(0, text_1.normalizeText)(title)} `.replace(` ${word} `, " ").trim();
@@ -85,9 +87,20 @@ function isSellerEvidenceProbeCandidate(target, targetTitle, result) {
     const evidence = cardForSellerEvidence(target, targetTitle, result);
     if (!evidence)
         return false;
-    return evidence.ambiguousPack || !result.hasConflict && (Object.entries(card.attrs).every(([key, values]) => targetTitle.attrs[key]?.some((value) => values.includes(value))) &&
-        card.words.every((word) => targetTitle.tokens.includes(word)) &&
-        (Object.keys(targetTitle.attrs).some((key) => !card.attrs[key]?.length) || targetTitle.words.some((word) => !card.tokens.includes(word))));
+    if (evidence.ambiguousPack)
+        return true;
+    if (result.hasConflict)
+        return false;
+    const extraVariantWord = card.words.some((word) => !targetTitle.tokens.includes(word) && lexicon_1.VARIANT_WORDS.has(word));
+    if (extraVariantWord)
+        return false;
+    const unsharedWords = card.words.filter((word) => !targetTitle.tokens.includes(word));
+    if (unsharedWords.length > (sharedDescriptor || sharedBrand ? 1 : 0))
+        return false;
+    return (Object.entries(card.attrs).every(([key, values]) => targetTitle.attrs[key]?.some((value) => values.includes(value))) &&
+        (Object.keys(targetTitle.attrs).some((key) => !card.attrs[key]?.length) ||
+            targetTitle.words.some((word) => !card.tokens.includes(word)) ||
+            (brands(targetTitle).length > 0 && !brands(card).length)));
 }
 function inspectSellerOffers(target, targetTitle, cardResult, offers, context) {
     const evidence = cardForSellerEvidence(target, targetTitle, cardResult);

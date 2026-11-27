@@ -146,15 +146,49 @@ export function countSellerText(shopName: string | null): number | null {
   return count ? Number(count[0]) : null;
 }
 
-export function decodeTorobSearch(payload: unknown, limit: number): {
+export type TorobSearchSort = "popularity" | "price" | "expensive" | "newest" | "sellers";
+
+export interface TorobSearchRequest {
+  query: string;
+  limit: number;
+  page?: number;
+  sort?: TorobSearchSort;
+  category?: string;
+  minPriceToman?: number;
+  maxPriceToman?: number;
+}
+
+export interface DecodedTorobSearch {
   rows: number | null;
   candidates: TorobCandidateCard[];
   issue?: string;
-} {
+  page: number;
+  hasNextPage: boolean;
+  totalMatches: number | null;
+  suggestedCategories: { id: string; title: string }[];
+  suggestedQueries: string[];
+  queryCorrected: string | null;
+  truncated: boolean;
+}
+
+export function decodeTorobSearch(payload: unknown, limit: number, requestedPage = 1): DecodedTorobSearch {
   const envelope = record(payload);
   const data = record(envelope?.data) ?? envelope;
   const rows = data?.products ?? data?.results;
-  if (!Array.isArray(rows)) return { rows: null, candidates: [], issue: "search_schema" };
+  if (!Array.isArray(rows)) {
+    return {
+      rows: null,
+      candidates: [],
+      issue: "search_schema",
+      page: requestedPage,
+      hasNextPage: false,
+      totalMatches: null,
+      suggestedCategories: [],
+      suggestedQueries: [],
+      queryCorrected: null,
+      truncated: false,
+    };
+  }
   const candidates: TorobCandidateCard[] = [];
   let unmapped = 0;
   for (const row of rows.slice(0, limit)) {
@@ -182,7 +216,36 @@ export function decodeTorobSearch(payload: unknown, limit: number): {
   }
   const upstreamRowCount = countOf(data?.page_count) ?? rows.length;
   if (Math.min(upstreamRowCount, limit) > rows.length) unmapped += Math.min(upstreamRowCount, limit) - rows.length;
-  return { rows: Math.max(rows.length, upstreamRowCount), candidates, ...(unmapped ? { issue: "search_card_id_missing_or_conflicting" } : {}) };
+  const rawCats = Array.isArray(data?.suggested_categories)
+    ? data.suggested_categories
+    : Array.isArray(data?.categories) ? data.categories : [];
+  const suggestedCategories = rawCats.flatMap((item) => {
+    const cat = record(item);
+    const id = firstText(cat?.id, cat?.category_id);
+    const title = firstText(cat?.title, cat?.name);
+    return id && title ? [{ id, title }] : [];
+  }).slice(0, 8);
+  const suggestedQueries = Array.isArray(data?.suggested_queries)
+    ? data.suggested_queries.filter((q): q is string => typeof q === "string" && q.trim().length > 0).slice(0, 8)
+    : [];
+  const spellcheck = record(data?.spellcheck);
+  const queryCorrected = firstText(data?.query_corrected, spellcheck?.corrected_query) ?? null;
+  const page = countOf(data?.page) ?? requestedPage;
+  const hasNextPage = data?.has_next_page === true || (typeof data?.next === "string" && data.next.trim().length > 0);
+  const totalMatches = countOf(data?.total_matches ?? data?.count);
+  const truncated = data?.truncated === true || rows.length > limit;
+  return {
+    rows: Math.max(rows.length, upstreamRowCount),
+    candidates,
+    ...(unmapped ? { issue: "search_card_id_missing_or_conflicting" } : {}),
+    page,
+    hasNextPage,
+    totalMatches,
+    suggestedCategories,
+    suggestedQueries,
+    queryCorrected,
+    truncated,
+  };
 }
 
 export function readTorobSpecs(row: TorobRecord): IdentitySpec[] {

@@ -5,6 +5,7 @@ export interface SourceMatchConfig {
   approveAbovePct?: number;
   minSellerCount?: number;
   aiIdentityEnabled?: boolean;
+  discoveryMode?: "interactive" | "extended";
 }
 
 export interface SourceProduct {
@@ -15,6 +16,7 @@ export interface SourceProduct {
   sourceType: string;
   torobUrl?: string | null;
   torobPrk?: string | null;
+  knownPrks?: string[];
   torobDetailsUrl?: string | null;
   torobLinkConfirmation?: TorobLinkConfirmation | null;
   costPrice: number;

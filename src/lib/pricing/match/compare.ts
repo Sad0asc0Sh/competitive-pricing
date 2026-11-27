@@ -602,6 +602,15 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
       if (c.features[key]?.length && !t.features[key]?.length) block(`کارت ترب ویژگی «${c.features[key].join("/")}» دارد که در محصول سایت ذکر نشده`);
     }
   }
+  if (c.designStyle && !t.designStyle) {
+    const designNoun = c.designStyle.replace(/^طرح\s+/, "");
+    const nounInTarget = Boolean(designNoun) && (tStems.has(stem(designNoun)) || tNorm.includes(` ${designNoun} `));
+    if (nounInTarget && brand === "match") {
+      notes.push(`عبارت «${c.designStyle}» در کنار برند منطبق به‌عنوان توصیف شکل ظاهری تفسیر شد`);
+    } else {
+      block(`عبارت «${c.designStyle}» ممکن است توصیف شکل ظاهری یا کالای مشابه باشد و نیازمند بررسی است`);
+    }
+  }
   recordContribution("title");
 
   // ── ۸) قیمت (لنگر نرم) و سخت‌گیری کالای گران‌قیمت
@@ -682,7 +691,7 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
   if (!identityKey) {
     identityKey = `desc:${[...tAll].sort().join(",")}|${t.head?.cls ?? "?"}|${Object.entries(c.attrs)
       // فرکانس مشترک اجازه می‌دهد کارت‌هایی با تعداد دکمهٔ ذکرنشده هم‌هویت باشند.
-      .filter(([key]) => key !== "buttons" || !sameRemoteFrequency)
+      .filter(([key]) => !SOFT_ATTRS.has(key) && (key !== "gen" || Boolean(t.attrs.gen?.length)) && (key !== "buttons" || !sameRemoteFrequency))
       .map(([k, v]) => `${k}=${showVals(v)}`)
       .sort()
       .join(",")}`;

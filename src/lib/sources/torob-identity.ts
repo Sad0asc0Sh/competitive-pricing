@@ -1,6 +1,6 @@
 import { areCompatibleConfirmedIdentities, evaluateTorobCandidate, type ProductMatchTarget, type ScoredCandidateResult } from "@/lib/pricing/matcher";
 import { conflictingPrimarySpec, relateCodes } from "@/lib/pricing/match/compare";
-import { areKnownBrandSetsCompatible, PACK_WORDS } from "@/lib/pricing/match/lexicon";
+import { areKnownBrandSetsCompatible, PACK_WORDS, VARIANT_WORDS } from "@/lib/pricing/match/lexicon";
 import { parseTitle, type ParsedTitle } from "@/lib/pricing/match/parse";
 import { normalizeText } from "@/lib/pricing/match/text";
 import type { RawOffer, TorobDataOrigin, TorobOfferIdentity } from "@/lib/pricing/types";
@@ -50,12 +50,14 @@ function cardForSellerEvidence(target: ProductMatchTarget, targetTitle: ParsedTi
   const ambiguousPack = Boolean(parsed.pack && !targetTitle.pack);
   if (ambiguousPack && parsed.pack) {
     const { qty, word } = parsed.pack;
-    const ratio = (result.candidate.priceToman ?? 0) / (target.anchorPriceToman ?? 0);
+    const anchor = target.anchorPriceToman;
+    const cardPrice = result.candidate.priceToman;
+    const ratio = anchor && anchor > 0 && cardPrice && cardPrice > 0 ? cardPrice / anchor : null;
     if (parsed.head?.cls !== "acc:remote" || targetTitle.head?.cls !== "acc:remote" ||
         qty == null || qty > 16 || parsed.attrs.buttons?.length && parsed.packageUnits !== 1 ||
         !/ (?:عددی|تایی)$/.test(word) ||
         (targetTitle.attrs.buttons?.length && !targetTitle.attrs.buttons.includes(qty)) ||
-        !(ratio >= 0.55 && ratio <= 1.85) || parsed.tokens.some((token) => PACK_WORDS.has(token))) return undefined;
+        (ratio != null && !(ratio >= 0.55 && ratio <= 1.85)) || parsed.tokens.some((token) => PACK_WORDS.has(token))) return undefined;
     // A plausible label permits inspection. Explicit evidence is still required to establish one unit.
     const stripQuantity = (title: string | null | undefined) => ` ${normalizeText(title)} `.replace(` ${word} `, " ").trim();
     const { candidate } = result;
@@ -79,10 +81,17 @@ export function isSellerEvidenceProbeCandidate(target: ProductMatchTarget, targe
   if (!sharedBrand && !sharedDescriptor && !sharedSpec) return false;
   const evidence = cardForSellerEvidence(target, targetTitle, result);
   if (!evidence) return false;
-  return evidence.ambiguousPack || !result.hasConflict && (
+  if (evidence.ambiguousPack) return true;
+  if (result.hasConflict) return false;
+  const extraVariantWord = card.words.some((word) => !targetTitle.tokens.includes(word) && VARIANT_WORDS.has(word));
+  if (extraVariantWord) return false;
+  const unsharedWords = card.words.filter((word) => !targetTitle.tokens.includes(word));
+  if (unsharedWords.length > (sharedDescriptor || sharedBrand ? 1 : 0)) return false;
+  return (
     Object.entries(card.attrs).every(([key, values]) => targetTitle.attrs[key]?.some((value) => values.includes(value))) &&
-    card.words.every((word) => targetTitle.tokens.includes(word)) &&
-    (Object.keys(targetTitle.attrs).some((key) => !card.attrs[key]?.length) || targetTitle.words.some((word) => !card.tokens.includes(word)))
+    (Object.keys(targetTitle.attrs).some((key) => !card.attrs[key]?.length) ||
+      targetTitle.words.some((word) => !card.tokens.includes(word)) ||
+      (brands(targetTitle).length > 0 && !brands(card).length))
   );
 }
 
