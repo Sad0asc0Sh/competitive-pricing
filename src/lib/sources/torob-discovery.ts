@@ -54,7 +54,9 @@ export function buildSearchQueries(productName: string, sku?: string | null): st
     const identity = parseTitle(core);
     const head = identity.head ? identity.tokens.slice(identity.head.at, identity.head.at + identity.head.len) : [];
     const words = identity.words.slice(0, 3);
-    if (words.length && (brand || head.length)) add([...head, brand, ...words].filter(Boolean).join(" "));
+    const remote = parsed.head?.cls === "acc:remote";
+    // Remote seller listings are often indexed under a shorter, brandless Torob card.
+    if (!remote && words.length && (brand || head.length)) add([...head, brand, ...words].filter(Boolean).join(" "));
     if (head.length && !parsed.codes.some((item) => !item.inCompat)) {
       const frequency = identity.attrs.frequency;
       if (frequency?.length === 1 && typeof frequency[0] === "number") {
@@ -62,7 +64,9 @@ export function buildSearchQueries(productName: string, sku?: string | null): st
         const label = hz >= 1_000_000 ? String(hz / 1_000_000) : hz >= 1_000 ? `${hz / 1_000} khz` : `${hz} hz`;
         add([...head, label, brand].join(" "));
       }
-      for (const word of words) add([...head, word, brand].join(" "));
+      // Try the distinctive shape first (e.g. "بنزی"), then the same words without the manufacturer.
+      for (const word of remote ? [...words].reverse() : words) add([...head, word, brand].filter(Boolean).join(" "));
+      if (remote) for (const word of [...words].reverse()) add([...head, word].join(" "));
     }
   }
   return queries;
@@ -189,7 +193,15 @@ function cardForSellerEvidence(target: ProductMatchTarget, targetTitle: ParsedTi
 
 function isSellerEvidenceProbeCandidate(target: ProductMatchTarget, targetTitle: ParsedTitle, result: ScoredCandidateResult): boolean {
   const card = result.parsed;
-  if (!card?.head || card.head.cls !== targetTitle.head?.cls || !identityBrands(card).length || !identityBrands(targetTitle).length) return false;
+  if (!card?.head || card.head.cls !== targetTitle.head?.cls) return false;
+  // A Torob card can omit the manufacturer while its individual seller titles name it.
+  // Require at least one positive hint on the card before spending a details request.
+  const sharedBrand = Boolean(identityBrands(card).length && identityBrands(targetTitle).length &&
+    areKnownBrandSetsCompatible(identityBrands(card), identityBrands(targetTitle)));
+  const sharedDescriptor = card.words.some((word) => targetTitle.tokens.includes(word));
+  const sharedSpec = Object.entries(card.attrs).some(([key, values]) =>
+    targetTitle.attrs[key]?.some((value) => values.includes(value)));
+  if (!sharedBrand && !sharedDescriptor && !sharedSpec) return false;
   const evidence = cardForSellerEvidence(target, targetTitle, result);
   if (!evidence?.parsed) return false;
   if (!evidence.rejected) return true;
@@ -381,12 +393,24 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
       const outcome = selectBestTorobSearchMatch(target, [...candidates.values()].map(({ card }) => card), options.matchConfig?.minSellerCount);
       ranked = outcome.allRanked;
       explanation = outcome.explanation;
-      if (outcome.confident && (!codeless || (outcome.best?.candidate.sellerCount ?? 0) > 1)) break;
+      // A confirmed codeless card does not imply every matching seller is on that card.
+      // Continue the bounded query expansion to discover other Torob PRKs.
+      if (outcome.confident && !codeless) break;
     }
 
-    shortlist = ranked
-      .filter((result) => !result.rejected || (codeless && isSellerEvidenceProbeCandidate(target, targetTitle, result)))
-      .slice(0, MAX_DETAILS).map((result) => result.candidate);
+    const reviewable = ranked.filter((result) => !result.rejected);
+    const sellerProbes = codeless ? ranked.filter((result) => result.rejected &&
+      isSellerEvidenceProbeCandidate(target, targetTitle, result)) : [];
+    // Reserve details capacity for ambiguous cards. Otherwise four high-scoring but
+    // incomplete titles can starve a genuine seller-confirmed listing below them.
+    const probeSlots = Math.min(2, sellerProbes.length);
+    const regularSlots = MAX_DETAILS - probeSlots;
+    shortlist = [
+      ...reviewable.slice(0, regularSlots),
+      ...sellerProbes.slice(0, probeSlots),
+      ...reviewable.slice(regularSlots),
+      ...sellerProbes.slice(probeSlots),
+    ].slice(0, MAX_DETAILS).map((result) => result.candidate);
     if (!shortlist.length) {
       if (extractionIssue) return fail("EXTRACTION_INCOMPLETE", "ساختار بعضی پاسخ‌ها یا شناسه‌های کارت ترب قابل استخراج نبود");
       if (!completedSearch && unavailable) return fail("SOURCE_UNAVAILABLE", "پاسخی از جستجوی ترب دریافت نشد");
@@ -412,7 +436,8 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     if (!item || item.read.blocked) break;
     if (resolveIdentity(item) === "MATCH_CONFIRMED" && item.extraction === "extracted") {
       const sellerCount = item.read.data?.totalSellerCount ?? item.read.data?.offers.length ?? 0;
-      if (!foundFragmentedCard && sellerCount > 2) break;
+      // Codeless products can be split across independent Torob product cards.
+      if (!codeless && !foundFragmentedCard && sellerCount > 2) break;
       foundFragmentedCard = true;
     }
   }
