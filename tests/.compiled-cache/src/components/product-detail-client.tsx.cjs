@@ -83,7 +83,6 @@ function ProductDetailClient({ product, decisions, offers, }) {
                             minMarginPct: product.minMarginPct ?? "",
                             minProfitAmount: product.minProfitAmount ?? "",
                             preferredCampaignType: product.preferredCampaignType ?? "auto",
-                            autoApply: product.autoApply,
                             showInFeatured: product.showInFeatured,
                         }, initialQuotes: product.supplierQuotes })] }))] }));
 }

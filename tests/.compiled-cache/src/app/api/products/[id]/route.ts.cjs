@@ -46,7 +46,6 @@ async function PATCH(req, { params }) {
         "minMarginPct",
         "minProfitAmount",
         "preferredCampaignType",
-        "autoApply",
         "showInFeatured",
         "profileId",
         "status",
@@ -100,6 +99,8 @@ async function PATCH(req, { params }) {
         patch.selectedSupplierName = null;
         patch.currentHardFloorPrice = null;
     }
+    // نظارت انسانی قطعی: اعمال خودکار در سطح محصول همیشه خاموش می‌ماند
+    patch.autoApply = false;
     patch.updatedAt = new Date();
     try {
         const [row] = await index_ts_1.db.update(schema_1.products).set(patch).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).returning();

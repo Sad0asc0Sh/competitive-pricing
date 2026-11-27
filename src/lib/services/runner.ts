@@ -723,6 +723,20 @@ function syncSupervisorAfterEnrichment(
   else result.steps.push(stepLog);
 }
 
+/**
+ * وضعیت اولیه تصمیم قیمت‌گذاری پس از اجرای موتور:
+ * با قفل قطعی نظارت انسانی، هیچ تصمیمی به صورت خودکار به `pending_sync` نمی‌رود
+ * و تمام تصمیم‌های دارای قیمت معتبر (غیرردشده) به `pending_review` هدایت می‌شوند.
+ */
+export function resolveInitialDecisionStatus(input: {
+  rejectedBySupervisor: boolean;
+  hasFinalPrice: boolean;
+}): "rejected" | "failed" | "pending_review" {
+  if (input.rejectedBySupervisor) return "rejected";
+  if (!input.hasFinalPrice) return "failed";
+  return "pending_review";
+}
+
 async function priceOneProduct(
   product: Product,
   runId: number,
@@ -936,7 +950,7 @@ async function priceOneProduct(
     approveMarginPct: config.guards.profitApproveMarginPct,
     netMarginPct: Number(result.position.netMarginPct) || 0,
     strictlyAboveCost,
-    autoApply: product.autoApply,
+    autoApply: false,
     needsReview: result.needsReview,
     rejectedBySupervisor: Boolean(result.rejectedBySupervisor),
     isProvisional: Boolean(result.isProvisional),
@@ -953,8 +967,7 @@ async function priceOneProduct(
       result.confidence >= Math.max(0.9, config.costless?.minConfidence ?? 0.9),
   );
 
-  // نظارت اجباری انسانی: اگر requireHumanApproval (پیش‌فرض true) فعال باشد، هیچ تصمیمی خودکار به فروشگاه ارسال نمی‌شود
-  const humanSupervisionRequired = config.guards?.requireHumanApproval !== false;
+  // نظارت انسانی قطعی: هیچ تصمیمی بدون تأیید مدیر در پنل قیمت‌گذاری خودکار به فروشگاه ارسال نمی‌شود
   const readyForApproval = Boolean(
     !result.rejectedBySupervisor &&
       result.finalPrice != null &&
@@ -963,16 +976,11 @@ async function priceOneProduct(
       (strictlyAboveCost || costlessPolicyAuthorized),
   );
 
-  let status: string;
-  if (result.rejectedBySupervisor) {
-    status = "rejected";
-  } else if (!result.finalPrice) {
-    status = "failed";
-  } else if (runMode === "shadow" || isSimulated) {
-    // در حالت shadow یا simulate هرگز پوش خودکار به فروشگاه انجام نمی‌شود
-    status = "pending_review";
-  } else if (humanSupervisionRequired) {
-    status = "pending_review";
+  const status: string = resolveInitialDecisionStatus({
+    rejectedBySupervisor: Boolean(result.rejectedBySupervisor),
+    hasFinalPrice: Boolean(result.finalPrice),
+  });
+  if (status === "pending_review" && runMode === "live" && !isSimulated) {
     result.steps.push({
       step: "supervision_gate",
       title: "نظارت اجباری مدیر پیش از اعمال قیمت",
@@ -985,17 +993,6 @@ async function priceOneProduct(
         reviewReasons: result.reviewReasons,
       },
     });
-  } else if (result.isProvisional) {
-    // به صورت پیش‌فرض کالاهای بدون قیمت خرید نیازمند بازبینی انسانی‌اند مگر سیاست صریح فعال باشد
-    status =
-      costlessPolicyAuthorized && !result.needsReview && product.autoApply
-        ? "pending_sync"
-        : "pending_review";
-  } else if (strictlyAboveCost && !result.needsReview && product.autoApply) {
-    // تصمیم تا قبل از تایید واقعی فروشگاه در وضعیت pending_sync قرار می‌گیرد (نه applied!)
-    status = "pending_sync";
-  } else {
-    status = "pending_review";
   }
 
   if (runMode === "shadow") {
@@ -1008,7 +1005,7 @@ async function priceOneProduct(
         runMode: "shadow",
         validationSource: "shadow_torob",
         isSimulated: false,
-        wouldAutoApply: Boolean(strictlyAboveCost && !result.needsReview && product.autoApply && !result.isProvisional),
+        wouldAutoApply: false,
       },
     });
   } else if (isSimulated) {

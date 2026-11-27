@@ -32,7 +32,6 @@ export interface SerializedProductDetail {
   minMarginPct: number | null;
   minProfitAmount: number | null;
   preferredCampaignType: string;
-  autoApply: boolean;
   showInFeatured: boolean;
   status: string;
   selectedSupplierName: string | null;
@@ -643,7 +642,6 @@ export function ProductDetailClient({
               minMarginPct: product.minMarginPct ?? "",
               minProfitAmount: product.minProfitAmount ?? "",
               preferredCampaignType: product.preferredCampaignType ?? "auto",
-              autoApply: product.autoApply,
               showInFeatured: product.showInFeatured,
             }}
             initialQuotes={product.supplierQuotes}

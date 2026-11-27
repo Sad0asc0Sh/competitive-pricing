@@ -19,7 +19,6 @@ type Values = {
   minProfitAmount: number | string | null;
   preferredCampaignType: string;
   colleagueListText: string;
-  autoApply: boolean;
   showInFeatured?: boolean;
 };
 
@@ -45,7 +44,6 @@ const empty: Values = {
   minProfitAmount: "",
   preferredCampaignType: "auto",
   colleagueListText: "",
-  autoApply: false,
   showInFeatured: false,
 };
 
@@ -228,15 +226,8 @@ export function ProductForm({
         />
       </div>
 
-      {/* بخش ۴: سوئیچ‌های کنترلی */}
-      <div className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200/80 bg-white p-3.5 sm:grid-cols-2 sm:p-4">
-        <Switch
-          id={`auto-${v.id ?? "new"}`}
-          checked={v.autoApply}
-          onChange={(next) => set("autoApply", next)}
-          label="اعمال خودکار بدون تأیید انسانی"
-          description="با تضمین قطعی عدم فروش زیر قیمت خرید همکار"
-        />
+      {/* بخش ۴: تنظیمات نمایش و نظارت انسانی */}
+      <div className="space-y-3 rounded-xl border border-slate-200/80 bg-white p-3.5 sm:p-4">
         <Switch
           id={`feat-${v.id ?? "new"}`}
           checked={Boolean(v.showInFeatured)}
@@ -244,6 +235,9 @@ export function ProductForm({
           label="★ مجاز برای باکس «منتخب‌های صفحه اصلی»"
           description="در زمان فعال‌شدن کمپین در فروشگاه نمایش داده شود"
         />
+        <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/70 px-3 py-2 text-xs leading-5 text-emerald-800">
+          🔒 نظارت انسانی همیشه فعال است: هیچ قیمتی بدون تأیید شما در پنل قیمت‌گذاری روی فروشگاه اعمال نمی‌شود.
+        </div>
       </div>
 
       {err && <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-700">{err}</div>}

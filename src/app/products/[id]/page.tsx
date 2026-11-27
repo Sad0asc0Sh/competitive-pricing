@@ -48,7 +48,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     minMarginPct: p.minMarginPct,
     minProfitAmount: p.minProfitAmount,
     preferredCampaignType: p.preferredCampaignType,
-    autoApply: p.autoApply,
     showInFeatured: p.showInFeatured,
     status: p.status,
     selectedSupplierName: p.selectedSupplierName,

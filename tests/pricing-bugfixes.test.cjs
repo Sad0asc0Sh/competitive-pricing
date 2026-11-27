@@ -23,7 +23,7 @@ const { verifyTorobMatchesWithAI } = loadTsModule('src/lib/ai/client.ts')
 const mcpClient = loadTsModule('src/lib/sources/torob-mcp-client.ts')
 const { torobAdapter } = loadTsModule('src/lib/sources/torob.ts')
 const { invalidateTorobRelayCache } = loadTsModule('src/lib/torob-relay/config.ts')
-const { safeInt } = loadTsModule('src/lib/services/runner.ts')
+const { safeInt, resolveInitialDecisionStatus } = loadTsModule('src/lib/services/runner.ts')
 const { pool } = loadTsModule('src/db/index.ts')
 
 const NOW = new Date('2026-10-24T09:00:00.000Z')
@@ -882,4 +882,10 @@ test('P5. پیش‌فرض‌ها روی حالت آماری/محلی بدون AI
   assert.equal(DEFAULT_PROFILE_CONFIG.ai.enabled, false)
   assert.equal(DEFAULT_PROFILE_CONFIG.ai.torobMatchEnabled, false)
   assert.equal(DEFAULT_PROFILE_CONFIG.supervisor.mode, 'local_instant_only')
+})
+
+test('P6. قفل قطعی نظارت انسانی: تمام تصمیم‌های معتبر بدون استثنا به pending_review می‌روند و هرگز خودکار اعمال نمی‌شوند', () => {
+  assert.equal(resolveInitialDecisionStatus({ rejectedBySupervisor: true, hasFinalPrice: true }), 'rejected')
+  assert.equal(resolveInitialDecisionStatus({ rejectedBySupervisor: false, hasFinalPrice: false }), 'failed')
+  assert.equal(resolveInitialDecisionStatus({ rejectedBySupervisor: false, hasFinalPrice: true }), 'pending_review')
 })

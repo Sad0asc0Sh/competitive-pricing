@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.applyDecisionToStore = exports.safeReal = exports.safeInt = void 0;
 exports.recoverStuckAppliedDecisions = recoverStuckAppliedDecisions;
 exports.runPricing = runPricing;
+exports.resolveInitialDecisionStatus = resolveInitialDecisionStatus;
 exports.isSupervisorRejected = isSupervisorRejected;
 exports.applyHumanOverrideToDecision = applyHumanOverrideToDecision;
 exports.applyDecision = applyDecision;
@@ -556,6 +557,18 @@ function syncSupervisorAfterEnrichment(result, sourceOk, allowCostlessAutoApply 
     else
         result.steps.push(stepLog);
 }
+/**
+ * وضعیت اولیه تصمیم قیمت‌گذاری پس از اجرای موتور:
+ * با قفل قطعی نظارت انسانی، هیچ تصمیمی به صورت خودکار به `pending_sync` نمی‌رود
+ * و تمام تصمیم‌های دارای قیمت معتبر (غیرردشده) به `pending_review` هدایت می‌شوند.
+ */
+function resolveInitialDecisionStatus(input) {
+    if (input.rejectedBySupervisor)
+        return "rejected";
+    if (!input.hasFinalPrice)
+        return "failed";
+    return "pending_review";
+}
 async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     const manualOffers = opts?.manualOffers;
     const manualSupplierQuotes = opts?.manualSupplierQuotes;
@@ -720,7 +733,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         approveMarginPct: config.guards.profitApproveMarginPct,
         netMarginPct: Number(result.position.netMarginPct) || 0,
         strictlyAboveCost,
-        autoApply: product.autoApply,
+        autoApply: false,
         needsReview: result.needsReview,
         rejectedBySupervisor: Boolean(result.rejectedBySupervisor),
         isProvisional: Boolean(result.isProvisional),
@@ -734,26 +747,17 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     const costlessPolicyAuthorized = Boolean(allowCostless &&
         (product.torobPrk || product.torobUrl) &&
         result.confidence >= Math.max(0.9, config.costless?.minConfidence ?? 0.9));
-    // نظارت اجباری انسانی: اگر requireHumanApproval (پیش‌فرض true) فعال باشد، هیچ تصمیمی خودکار به فروشگاه ارسال نمی‌شود
-    const humanSupervisionRequired = config.guards?.requireHumanApproval !== false;
+    // نظارت انسانی قطعی: هیچ تصمیمی بدون تأیید مدیر در پنل قیمت‌گذاری خودکار به فروشگاه ارسال نمی‌شود
     const readyForApproval = Boolean(!result.rejectedBySupervisor &&
         result.finalPrice != null &&
         !result.needsReview &&
         !result.isProvisional &&
         (strictlyAboveCost || costlessPolicyAuthorized));
-    let status;
-    if (result.rejectedBySupervisor) {
-        status = "rejected";
-    }
-    else if (!result.finalPrice) {
-        status = "failed";
-    }
-    else if (runMode === "shadow" || isSimulated) {
-        // در حالت shadow یا simulate هرگز پوش خودکار به فروشگاه انجام نمی‌شود
-        status = "pending_review";
-    }
-    else if (humanSupervisionRequired) {
-        status = "pending_review";
+    const status = resolveInitialDecisionStatus({
+        rejectedBySupervisor: Boolean(result.rejectedBySupervisor),
+        hasFinalPrice: Boolean(result.finalPrice),
+    });
+    if (status === "pending_review" && runMode === "live" && !isSimulated) {
         result.steps.push({
             step: "supervision_gate",
             title: "نظارت اجباری مدیر پیش از اعمال قیمت",
@@ -767,20 +771,6 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             },
         });
     }
-    else if (result.isProvisional) {
-        // به صورت پیش‌فرض کالاهای بدون قیمت خرید نیازمند بازبینی انسانی‌اند مگر سیاست صریح فعال باشد
-        status =
-            costlessPolicyAuthorized && !result.needsReview && product.autoApply
-                ? "pending_sync"
-                : "pending_review";
-    }
-    else if (strictlyAboveCost && !result.needsReview && product.autoApply) {
-        // تصمیم تا قبل از تایید واقعی فروشگاه در وضعیت pending_sync قرار می‌گیرد (نه applied!)
-        status = "pending_sync";
-    }
-    else {
-        status = "pending_review";
-    }
     if (runMode === "shadow") {
         result.steps.push({
             step: "shadow_validation",
@@ -791,7 +781,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
                 runMode: "shadow",
                 validationSource: "shadow_torob",
                 isSimulated: false,
-                wouldAutoApply: Boolean(strictlyAboveCost && !result.needsReview && product.autoApply && !result.isProvisional),
+                wouldAutoApply: false,
             },
         });
     }

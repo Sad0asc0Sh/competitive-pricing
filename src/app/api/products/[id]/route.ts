@@ -45,7 +45,6 @@ export async function PATCH(req: Request, { params }: Ctx) {
     "minMarginPct",
     "minProfitAmount",
     "preferredCampaignType",
-    "autoApply",
     "showInFeatured",
     "profileId",
     "status",
@@ -101,6 +100,8 @@ export async function PATCH(req: Request, { params }: Ctx) {
     patch.currentHardFloorPrice = null;
   }
 
+  // نظارت انسانی قطعی: اعمال خودکار در سطح محصول همیشه خاموش می‌ماند
+  patch.autoApply = false;
   patch.updatedAt = new Date();
   try {
     const [row] = await db.update(products).set(patch).where(eq(products.id, Number(id))).returning();

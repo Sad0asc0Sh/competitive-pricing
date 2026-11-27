@@ -70,7 +70,7 @@ async function POST(req) {
             minMarginPct,
             minProfitAmount,
             preferredCampaignType: body.preferredCampaignType ? String(body.preferredCampaignType) : "auto",
-            autoApply: body.autoApply === true,
+            autoApply: false,
             showInFeatured: Boolean(body.showInFeatured ?? false),
             profileId: body.profileId ? Number(body.profileId) : null,
         })
