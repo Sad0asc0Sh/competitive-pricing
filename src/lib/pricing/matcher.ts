@@ -8,6 +8,7 @@
  */
 import type { SystemOneVerdict, TorobIdentityStatus, TorobTitleState } from "./types";
 import { compareParsed, DEFAULT_MATCH_FLAGS, relateCodes, type MatchFlags } from "./match/compare";
+import { areKnownBrandSetsCompatible } from "./match/lexicon";
 import { parseIdentityTitle, parseTitle, type IdentitySpec, type ParsedTitle } from "./match/parse";
 import { isInternalOrDatabaseId as isInternalId, normalizeText } from "./match/text";
 
@@ -220,6 +221,19 @@ export function evaluateTorobCandidate(
 
 const VERDICT_RANK: Record<SystemOneVerdict, number> = { approve: 2, review: 1, reject: 0 };
 
+export function areCompatibleConfirmedIdentities(a: ScoredCandidateResult, b: ScoredCandidateResult): boolean {
+  if (a.status !== "MATCH_CONFIRMED" || b.status !== "MATCH_CONFIRMED" || a.hasConflict || b.hasConflict ||
+      !a.identityKey || a.identityKey !== b.identityKey || !a.parsed || !b.parsed) return false;
+  const left = a.parsed;
+  const right = b.parsed;
+  if (left.head && right.head && left.head.cls !== right.head.cls) return false;
+  if (!areKnownBrandSetsCompatible([...left.brands, ...left.impliedBrands], [...right.brands, ...right.impliedBrands])) return false;
+  return Object.entries(left.attrs).every(([key, values]) => {
+    const other = right.attrs[key];
+    return key === "res" || key === "wifi" || !other?.length || values.some((value) => other.includes(value));
+  });
+}
+
 export function selectBestTorobSearchMatch(
   target: ProductMatchTarget,
   candidates: TorobCandidateCard[],
@@ -242,27 +256,7 @@ export function selectBestTorobSearchMatch(
 
   // قاعدهٔ ابهام بین‌کارتی: اگر دو کارت با «هویت متفاوت» یا مشخصات اصلی متضاد هر دو تایید خودکار شدند، هیچ‌کدام خودکار نیست
   const approved = evaluated.filter((x) => x.verdict === "approve");
-  const keys = new Set(approved.map((x) => x.identityKey));
-  let crossCardConflict = keys.size > 1;
-  if (!crossCardConflict && approved.length > 1) {
-    const parsedCards = approved.map((x) => x.parsed!);
-    for (let i = 0; i < parsedCards.length && !crossCardConflict; i++) {
-      for (let j = i + 1; j < parsedCards.length; j++) {
-        const a = parsedCards[i].attrs;
-        const b = parsedCards[j].attrs;
-        for (const k of Object.keys(a)) {
-          if (k === "res" || k === "wifi") continue;
-          const va = a[k];
-          const vb = b[k];
-          if (va?.length && vb?.length && !va.some((x) => vb.some((y) => String(x) === String(y)))) {
-            crossCardConflict = true;
-            break;
-          }
-        }
-      }
-    }
-  }
-  if (approved.length > 1 && crossCardConflict) {
+  if (approved.some((a, i) => approved.slice(i + 1).some((b) => !areCompatibleConfirmedIdentities(a, b)))) {
     evaluated = evaluated.map((x) =>
       x.verdict === "approve"
         ? {

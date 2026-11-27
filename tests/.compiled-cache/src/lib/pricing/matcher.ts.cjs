@@ -7,8 +7,10 @@ exports.isInternalOrDatabaseId = isInternalOrDatabaseId;
 exports.normalizeProductText = normalizeProductText;
 exports.extractModelAndSpecTokens = extractModelAndSpecTokens;
 exports.evaluateTorobCandidate = evaluateTorobCandidate;
+exports.areCompatibleConfirmedIdentities = areCompatibleConfirmedIdentities;
 exports.selectBestTorobSearchMatch = selectBestTorobSearchMatch;
 const compare_1 = require("./match/compare");
+const lexicon_1 = require("./match/lexicon");
 const parse_1 = require("./match/parse");
 const text_1 = require("./match/text");
 /** پرچم‌های ویژگی (برای ablation و خاموش‌کردن اضطراری هر قاعده) */
@@ -145,6 +147,21 @@ function evaluateTorobCandidate(target, candidate, _minSellerCount = 1) {
     };
 }
 const VERDICT_RANK = { approve: 2, review: 1, reject: 0 };
+function areCompatibleConfirmedIdentities(a, b) {
+    if (a.status !== "MATCH_CONFIRMED" || b.status !== "MATCH_CONFIRMED" || a.hasConflict || b.hasConflict ||
+        !a.identityKey || a.identityKey !== b.identityKey || !a.parsed || !b.parsed)
+        return false;
+    const left = a.parsed;
+    const right = b.parsed;
+    if (left.head && right.head && left.head.cls !== right.head.cls)
+        return false;
+    if (!(0, lexicon_1.areKnownBrandSetsCompatible)([...left.brands, ...left.impliedBrands], [...right.brands, ...right.impliedBrands]))
+        return false;
+    return Object.entries(left.attrs).every(([key, values]) => {
+        const other = right.attrs[key];
+        return key === "res" || key === "wifi" || !other?.length || values.some((value) => other.includes(value));
+    });
+}
 function selectBestTorobSearchMatch(target, candidates, minSellerCount = 1) {
     if (!candidates.length) {
         return {
@@ -161,28 +178,7 @@ function selectBestTorobSearchMatch(target, candidates, minSellerCount = 1) {
     let evaluated = candidates.map((c) => evaluateTorobCandidate(target, c, minSellerCount));
     // قاعدهٔ ابهام بین‌کارتی: اگر دو کارت با «هویت متفاوت» یا مشخصات اصلی متضاد هر دو تایید خودکار شدند، هیچ‌کدام خودکار نیست
     const approved = evaluated.filter((x) => x.verdict === "approve");
-    const keys = new Set(approved.map((x) => x.identityKey));
-    let crossCardConflict = keys.size > 1;
-    if (!crossCardConflict && approved.length > 1) {
-        const parsedCards = approved.map((x) => x.parsed);
-        for (let i = 0; i < parsedCards.length && !crossCardConflict; i++) {
-            for (let j = i + 1; j < parsedCards.length; j++) {
-                const a = parsedCards[i].attrs;
-                const b = parsedCards[j].attrs;
-                for (const k of Object.keys(a)) {
-                    if (k === "res" || k === "wifi")
-                        continue;
-                    const va = a[k];
-                    const vb = b[k];
-                    if (va?.length && vb?.length && !va.some((x) => vb.some((y) => String(x) === String(y)))) {
-                        crossCardConflict = true;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    if (approved.length > 1 && crossCardConflict) {
+    if (approved.some((a, i) => approved.slice(i + 1).some((b) => !areCompatibleConfirmedIdentities(a, b)))) {
         evaluated = evaluated.map((x) => x.verdict === "approve"
             ? {
                 ...x,

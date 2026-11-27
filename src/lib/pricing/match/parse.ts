@@ -67,6 +67,8 @@ const SPEC_TOKEN_PATTERNS: RegExp[] = [
   /^\d+(?:\.\d+)?(?:mp|mm2|mm|cm|m|kv|mv|v|vdc|vac|ka|ma|mah|ah|a|kw|w|kva|va|kvar|uf|mf|hp|hz|khz|mhz|ghz|mbps|gbps|kbps|tb|gb|mb|kb|ch|p|k|x|inch|db|dbi|lux|fps|ohm|pin|port|ports|pole|poles|ph|phase|core|pcs|pc|pack)$/,
   /^\d+(?:\.\d+)?v[/-]\d+(?:\.\d+)?a$/,
   /^\d+-?(?:port|ports|pole|poles)$/,
+  /^\d+(?:\.\d+)?-(?:hz|khz|mhz|ghz)$/,
+  /^\d{1,2}-?(?:buttons?|keys?)$/,
   /^(?:[1-4]p(?:\+n)?|n\+[1-4]p|[13]ph|x\d{1,3})$/,
   /^(?:ir\d{1,3}m?|\d{1,2}led|led\d{1,2}|smd\d*|wdr\d*|dwdr|v\d(?:\.\d+)?|\d+db|\d+fps|\d+x)$/,
   /^(?:h\.?26[45]\+?|ip\d{2}[a-z]?|cat\.?\d[ae]?|rg-?\d{1,2}(?:\+\d)?|usb\d?(?:\.\d)?|sata\d?|poe\+?|hdmi\d?|wifi\d?|wi-fi\d?|ac\d{3,4}|ax\d{3,5}|n\d{3,4}|sfp\+?|ddr\d|nvme|m\.2|802\.11[a-z]*|\d+k|\d{3,4}p|hd-?tvi|hd-?cvi|ahd\d?|tvi\d?|cvi\d?|lte|[2-5]g|\d+x\d+(?:x\d+)?|\d+\/\d+(?:\/\d+)*)$/,
@@ -414,6 +416,7 @@ function extractAttrs(tokens: string[], end: number, consumed: Set<number>): Rec
     }
     if (num != null && i + numLen < n) {
       const nxt = tokens[i + numLen];
+      if (nxt === "مگا" && tokens[i + numLen + 1] === "هرتز") continue;
       const span = (k: number): number[] => Array.from({ length: k }, (_, q) => i + q);
       // «میلی متر»
       if (nxt === "میلی" && tokens[i + numLen + 1] === "متر") {
@@ -520,11 +523,15 @@ function extractAttrs(tokens: string[], end: number, consumed: Set<number>): Rec
     }
   }
 
+  return attrs;
+}
+
+function addGenerationAttrs(tokens: string[], end: number, attrs: ParsedTitle["attrs"], consumed: Set<number>) {
   // ۴.۲.۱ — «نسل/شمارهٔ سری» در نام‌های لاتین: «Buds 4 Lite» ≠ «Buds 3 Lite»، «Band 8» ≠ «Band 7»، «Watch 5» ≠ «Watch 6»،
   // «iPhone 14» ≠ «iPhone 13». قبلاً عددِ بعد از واژهٔ سری هیچ مشخصه‌ای نبود و کالای بدون کد با نسل دیگر تأیید خودکار می‌شد
   // (اندازه‌گیری: eval/matching/realistic3.cjs، N12). فقط ترتیب «واژه ← عدد» (نه «عدد ← واژه» که تعداد/واحد است) و فقط
   // عدد یک‌ یا دورقمی صحیح؛ عدد مصرف‌شده در مشخصات واحددار (۲ MP، ۶۴ GB، ۱۲ V …) نادیده گرفته می‌شود.
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < end; i++) {
     const tok = tokens[i];
     let word: string | null = null;
     let num: string | null = null;
@@ -532,14 +539,13 @@ function extractAttrs(tokens: string[], end: number, consumed: Set<number>): Rec
     if (attached) {
       word = attached[1];
       num = attached[2];
-    } else if (/^[a-z]{3,}$/.test(tok) && i + 1 < n && /^\d{1,2}$/.test(tokens[i + 1]) && !consumed.has(i + 1)) {
+    } else if (/^[a-z]{3,}$/.test(tok) && i + 1 < end && /^\d{1,2}$/.test(tokens[i + 1]) && !consumed.has(i + 1)) {
       word = tok;
       num = tokens[i + 1];
     }
     if (!word || !num || GEN_STOP_WORDS.has(word)) continue;
     addAttr(attrs, "gen", `${word}:${Number(num)}`);
   }
-  return attrs;
 }
 
 /** واژه‌هایی که عددِ بعدشان «شمارهٔ سری/نسل» نیست (تعداد، نسخه، بستهٔ چندتایی، واحد…) */
@@ -666,17 +672,69 @@ function accessModelName(value: string): string {
   return name;
 }
 
-function addAccessControlAttrs(tokens: string[], attrs: ParsedTitle["attrs"], consumed: Set<number>) {
+function addAccessControlModel(tokens: string[], attrs: ParsedTitle["attrs"], consumed: Set<number>) {
   const modelIndex = tokens.findIndex((token) => token === "مدل" || token === "model");
   const label = tokens[modelIndex + 1];
   if (modelIndex >= 0 && label && !isSpecToken(label) && !looksLikeCode(label)) {
     addAttr(attrs, "access_model", accessModelName(label));
     consumed.add(modelIndex + 1);
   }
-  for (const match of tokens.join(" ").matchAll(/(?:^| )(\d+(?:\.\d+)?)\s*(mhz|مگاهرتز|khz|کیلوهرتز|hz|هرتز)(?= |$)/g)) {
-    const unit = match[2];
-    const multiplier = ["mhz", "مگاهرتز"].includes(unit) ? 1_000_000 : ["khz", "کیلوهرتز"].includes(unit) ? 1_000 : 1;
-    addAttr(attrs, "frequency", Number(match[1]) * multiplier);
+}
+
+const FREQUENCY_UNITS = new Map([
+  ["hz", 1], ["هرتز", 1], ["khz", 1_000], ["کیلوهرتز", 1_000],
+  ["mhz", 1_000_000], ["مگاهرتز", 1_000_000], ["ghz", 1_000_000_000], ["گیگاهرتز", 1_000_000_000],
+]);
+const FREQUENCY_LABELS = new Set(["فرکانس", "frequency"]);
+const REMOTE_RF_MHZ = new Set([315, 433, 433.92, 868]);
+const BUTTON_UNITS = new Set(["دکمه", "دکمهای", "کلید", "کلیده", "کلیدی", "شاسی", "button", "buttons", "key", "keys"]);
+const NON_RF_UNITS = new Set([
+  ...UNIT_MAP.keys(), ...QTY_UNIT_WORDS, ...BUTTON_UNITS, ...PART_COUNT_WORDS,
+  "میلی", "کیلو", "مگا", "گیگا", "گرم", "کیلوگرم", "ماه", "روز", "سال", "ثانیه", "تومان", "ریال", "درصد", "percent",
+  "اهم", "ohm", "g", "kg", "km", "kv", "mv", "rpm", "db", "dbi", "lux", "fps",
+]);
+
+function addFrequencyAttrs(tokens: string[], attrs: ParsedTitle["attrs"], consumed: Set<number>, remote: boolean) {
+  for (let i = 0; i < tokens.length; i++) {
+    const match = /^(\d+(?:\.\d+)?)(?:-?([a-z]+))?$/.exec(tokens[i]);
+    if (!match) continue;
+    const num = Number(match[1]);
+    if (!Number.isFinite(num) || num <= 0) continue;
+    const prev = tokens[i - 1] ?? "";
+    const next = tokens[i + 1] ?? "";
+    const labeled = FREQUENCY_LABELS.has(prev);
+    const splitUnit = !match[2] && tokens[i + 2] === "هرتز" && ["کیلو", "مگا", "گیگا"].includes(next);
+    const multiplier = FREQUENCY_UNITS.get(match[2] ?? (splitUnit ? `${next}هرتز` : next));
+    if (multiplier == null) {
+      if (match[2] || consumed.has(i) || NON_RF_UNITS.has(next)) continue;
+      if (!labeled && (!remote || !REMOTE_RF_MHZ.has(num) || ["مدل", "model", "کد", "code"].includes(prev))) continue;
+    }
+    addAttr(attrs, "frequency", num * (multiplier ?? 1_000_000));
+    if (labeled) consumed.add(i - 1);
+    consumed.add(i);
+    if (multiplier != null && !match[2]) consumed.add(i + 1);
+    if (splitUnit) consumed.add(i + 2);
+  }
+}
+
+function addRemoteButtons(tokens: string[], attrs: ParsedTitle["attrs"], consumed: Set<number>) {
+  for (let i = 0; i < tokens.length; i++) {
+    const wordNumber = readWordNumber(tokens, i);
+    if (wordNumber && wordNumber.len > 1) {
+      i += wordNumber.len - 1;
+      continue;
+    }
+    const attached = /^(\d{1,2})-?(?:buttons?|keys?)$/.exec(tokens[i]);
+    const count = numberFromToken(attached?.[1] ?? tokens[i]);
+    if (count == null || !Number.isInteger(count) || count < 1 || count > 16) continue;
+    const unit = tokens[i + 1];
+    if (!attached && !BUTTON_UNITS.has(unit)) continue;
+    addAttr(attrs, "buttons", count);
+    consumed.add(i);
+    if (!attached) {
+      consumed.add(++i);
+      if (unit === "دکمه" && tokens[i + 1] === "ای") consumed.add(++i);
+    }
   }
 }
 
@@ -719,17 +777,20 @@ export function parseTitle(text: string | null | undefined, opts: ParseOptions =
   let attrEnd = tokens.length;
   if (compatStart >= 0) attrEnd = compatStart;
   else if (companionStart >= 0) attrEnd = companionStart;
-  const family = tokens.slice(0, attrEnd).includes("ریموتگ") ? "remotag" : null;
-  const brandScan = scanBrands(family ? tokens.slice(0, attrEnd) : tokens);
+  const body = tokens.slice(0, attrEnd);
+  const family = body.includes("ریموتگ") ? "remotag" : null;
+  const brandScan = scanBrands(family ? body : tokens);
   for (const k of brandScan.consumed) consumed.add(k);
   const attrs = extractAttrs(tokens, attrEnd, consumed);
-  if (family || head?.cls === "access_control") {
-    addAccessControlAttrs(tokens.slice(0, attrEnd), attrs, consumed);
-  }
+  const accessControl = family != null || head?.cls === "access_control";
+  const remote = head?.cls === "acc:remote";
+  if (accessControl) addAccessControlModel(body, attrs, consumed);
+  if (accessControl || remote) addFrequencyAttrs(body, attrs, consumed, remote);
+  if (remote) addRemoteButtons(body, attrs, consumed);
+  addGenerationAttrs(tokens, attrEnd, attrs, consumed);
 
   // نوع کابل (فقط برای رده کابل): شبکه/کواکسیال/HDMI/SATA/برق/…
   if (head?.cls === "cable") {
-    const body = tokens.slice(0, attrEnd);
     const has = (w: string): boolean => body.includes(w);
     if (has("hdmi")) addAttr(attrs, "cabletype", "hdmi");
     else if (has("sata")) addAttr(attrs, "cabletype", "sata");
@@ -813,14 +874,11 @@ export function parseTitle(text: string | null | undefined, opts: ParseOptions =
   const used = findPhrase(tokens, USED_PHRASES);
   let counterfeit = findPhrase(tokens, COUNTERFEIT_PHRASES);
   if (!counterfeit) {
-    // «کپی» در «قابلیت کپی / دستگاه کپی / فتوکپی» مجاز است؛ در غیر این صورت (کپی برند، کپی، طرح برند) نشانهٔ غیراصل است
-    const kCopy = tokens.indexOf("کپی");
-    if (kCopy >= 0) {
-      const prev = tokens[kCopy - 1] ?? "";
-      const next = tokens[kCopy + 1] ?? "";
-      const benignCopy = ["قابلیت", "امکان", "دستگاه", "ماشین", "پرینتر", "اسکن", "فتوکپی"].includes(prev) || ["برداری", "کارت"].includes(next);
-      if (!benignCopy) counterfeit = "کپی";
-    }
+    // «قابلیت کپی»، «دستگاه کپی» و «کپی خور» نشانگر غیراصل بودن کالا نیستند.
+    const standaloneCopy = tokens.some((token, i) => token === "کپی" &&
+      !["قابلیت", "امکان", "دستگاه", "ماشین", "پرینتر", "اسکن", "فتوکپی"].includes(tokens[i - 1]) &&
+      !["برداری", "کارت", "خور"].includes(tokens[i + 1]));
+    if (standaloneCopy) counterfeit = "کپی";
   }
   if (!counterfeit) {
     const kTarh = tokens.indexOf("طرح");
@@ -957,9 +1015,10 @@ export function parseIdentityTitle(text: string, specs?: IdentitySpec[]): Parsed
       const volts = parseTitle(/^\d+(?:\.\d+)?$/.test(value) ? `${value} v` : value).attrs.volt;
       if (volts?.length) mergeAttr("volt", volts);
     } else if (/^(?:فرکانس|فرکانس کاری|فرکانس عملکرد|frequency|operating frequency)$/.test(key)
-        && (title.family || title.head?.cls === "access_control")) {
+        && (title.family || title.head?.cls === "access_control" || title.head?.cls === "acc:remote")) {
       const frequency: ParsedTitle["attrs"] = {};
-      addAccessControlAttrs(tokenize(value), frequency, new Set());
+      const text = title.head?.cls === "acc:remote" ? `فرکانس ${value}` : value;
+      addFrequencyAttrs(tokenize(text), frequency, new Set(), false);
       if (frequency.frequency?.length) mergeAttr("frequency", frequency.frequency);
     }
   }

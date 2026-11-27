@@ -5,13 +5,15 @@ exports.resolveTorobSource = resolveTorobSource;
 const client_1 = require("../ai/client");
 const listing_1 = require("../pricing/listing");
 const matcher_1 = require("../pricing/matcher");
+const compare_1 = require("../pricing/match/compare");
+const lexicon_1 = require("../pricing/match/lexicon");
 const parse_1 = require("../pricing/match/parse");
 const text_1 = require("../pricing/match/text");
 const own_shop_1 = require("../pricing/own-shop");
 const torob_payload_1 = require("./torob-payload");
 const MAX_QUERIES = 5;
 const ROW_LIMIT = 24;
-const MAX_DETAILS = 3;
+const MAX_DETAILS = 4;
 const SEARCH_BUDGET_MS = 15_000;
 const DETAILS_BUDGET_MS = 16_000;
 const SEARCH_TIMEOUT_MS = 4_500;
@@ -58,6 +60,16 @@ function buildSearchQueries(productName, sku) {
         const words = identity.words.slice(0, 3);
         if (words.length && (brand || head.length))
             add([...head, brand, ...words].filter(Boolean).join(" "));
+        if (head.length && !parsed.codes.some((item) => !item.inCompat)) {
+            const frequency = identity.attrs.frequency;
+            if (frequency?.length === 1 && typeof frequency[0] === "number") {
+                const hz = frequency[0];
+                const label = hz >= 1_000_000 ? String(hz / 1_000_000) : hz >= 1_000 ? `${hz / 1_000} khz` : `${hz} hz`;
+                add([...head, label, brand].join(" "));
+            }
+            for (const word of words)
+                add([...head, word, brand].join(" "));
+        }
     }
     return queries;
 }
@@ -104,7 +116,88 @@ function mergeCards(prev, next) {
         shopName: prev.shopName ?? next.shopName,
     };
 }
-function inspectDetails(target, card, read, confirmation) {
+const SELLER_EVIDENCE_NOTE = "عنوان فروشندگان شواهد تطابق هویت کارت ترب را تکمیل کرد";
+function identityBrands(title) {
+    return [...title.brands, ...title.impliedBrands];
+}
+function hasSellerEvidenceConflict(target, result) {
+    const card = result.parsed;
+    if (!card || result.hasConflict || !(0, lexicon_1.areKnownBrandSetsCompatible)(identityBrands(target), identityBrands(card)))
+        return true;
+    if (card.codes.some((code) => !code.inCompat && !target.codes.some((other) => !other.inCompat && ["equal", "alias", "tail"].includes((0, compare_1.relateCodes)(code, other)))))
+        return true;
+    if (card.bundleWith.some((cls) => !target.bundleWith.includes(cls)) ||
+        card.withAccessories.some((cls) => !target.withAccessories.includes(cls)) ||
+        (card.trailingAccessory && card.trailingAccessory !== target.trailingAccessory))
+        return true;
+    return card.head?.cls === "acc:remote" && card.hits.some(({ cls }) => cls !== "acc:remote" && !target.hits.some((hit) => hit.cls === cls));
+}
+function cardForSellerEvidence(target, targetTitle, result) {
+    const parsed = result.parsed;
+    if (!parsed)
+        return undefined;
+    if (parsed.pack && !targetTitle.pack) {
+        const { qty, word } = parsed.pack;
+        const ratio = (result.candidate.priceToman ?? 0) / (target.anchorPriceToman ?? 0);
+        if (parsed.head?.cls !== "acc:remote" || targetTitle.head?.cls !== "acc:remote" ||
+            qty == null || qty > 16 || parsed.attrs.buttons?.length || !/ (?:عددی|تایی)$/.test(word) ||
+            (targetTitle.attrs.buttons?.length && !targetTitle.attrs.buttons.includes(qty)) ||
+            !(ratio >= 0.55 && ratio <= 1.85) || parsed.tokens.some((token) => lexicon_1.PACK_WORDS.has(token)))
+            return undefined;
+        // Re-evaluate the card with only the ambiguous quantity phrase removed.
+        const stripQuantity = (title) => ` ${(0, text_1.normalizeText)(title)} `.replace(` ${word} `, " ").trim();
+        const { candidate } = result;
+        result = (0, matcher_1.evaluateTorobCandidate)(target, { ...candidate, titleFa: stripQuantity(candidate.titleFa), titleEn: stripQuantity(candidate.titleEn) });
+        if (result.parsed?.pack)
+            return undefined;
+    }
+    return hasSellerEvidenceConflict(targetTitle, result) ? undefined : result;
+}
+function isSellerEvidenceProbeCandidate(target, targetTitle, result) {
+    const card = result.parsed;
+    if (!card?.head || card.head.cls !== targetTitle.head?.cls || !identityBrands(card).length || !identityBrands(targetTitle).length)
+        return false;
+    const evidence = cardForSellerEvidence(target, targetTitle, result);
+    if (!evidence?.parsed)
+        return false;
+    if (!evidence.rejected)
+        return true;
+    const title = evidence.parsed;
+    // A low-scoring title is eligible only when it omits evidence without adding an unverified spec or descriptor.
+    return Object.entries(title.attrs).every(([key, values]) => targetTitle.attrs[key]?.some((value) => values.includes(value))) &&
+        title.words.every((word) => targetTitle.tokens.includes(word)) &&
+        (Object.keys(targetTitle.attrs).some((key) => !title.attrs[key]?.length) ||
+            targetTitle.words.some((word) => !title.tokens.includes(word)));
+}
+function hasConflictingRemoteSpecs(titles) {
+    return ["frequency", "buttons"].some((key) => new Set(titles.flatMap((title) => title.attrs[key] ?? [])).size > 1);
+}
+function corroborateWithSellerTitles(target, targetTitle, result, offers) {
+    const evidence = cardForSellerEvidence(target, targetTitle, result);
+    if (!evidence?.parsed)
+        return result;
+    const { candidate } = result;
+    const sellers = offers.flatMap(({ listingTitle, price }) => listingTitle && (0, text_1.normalizeText)(listingTitle)
+        ? [(0, matcher_1.evaluateTorobCandidate)(target, { ...candidate, titleFa: listingTitle, titleEn: undefined, specs: undefined, priceToman: price })]
+        : []);
+    if (sellers.some((seller) => seller.rejected || hasSellerEvidenceConflict(targetTitle, seller)))
+        return result;
+    if (targetTitle.head?.cls === "acc:remote" &&
+        hasConflictingRemoteSpecs([evidence.parsed, ...sellers.flatMap(({ parsed }) => parsed ? [parsed] : [])]))
+        return result;
+    const best = sellers.sort((a, b) => b.score - a.score)[0];
+    if (!best || best.score <= result.score)
+        return result;
+    const corroborated = (0, matcher_1.evaluateTorobCandidate)(target, {
+        ...evidence.candidate,
+        titleFa: best.candidate.titleFa,
+        titleEn: [evidence.candidate.titleFa, evidence.candidate.titleEn].filter(Boolean).join(" "),
+    });
+    if (corroborated.rejected || corroborated.score <= result.score || hasSellerEvidenceConflict(targetTitle, corroborated))
+        return result;
+    return { ...corroborated, candidate, notes: [...corroborated.notes, SELLER_EVIDENCE_NOTE] };
+}
+function inspectDetails(target, targetTitle, card, read, confirmation) {
     if (read.data?.prk && read.data.prk !== card.prk) {
         read = { issue: "details_prk_mismatch" };
     }
@@ -121,9 +214,28 @@ function inspectDetails(target, card, read, confirmation) {
         priceToman: prices.length ? prices[Math.floor((prices.length - 1) / 2)] : card.priceToman,
         detailsUrl: card.detailsUrl ?? details?.detailsUrl,
     };
-    const result = (0, matcher_1.evaluateTorobCandidate)(target, candidate);
+    const cardResult = (0, matcher_1.evaluateTorobCandidate)(target, candidate);
     const extraction = read.unavailable ? "unavailable" : !details || details.sellerRows == null || read.issue
         ? "incomplete" : details.sellerRows === 0 ? "empty" : "extracted";
+    let result = cardResult;
+    let sellerCorroborated = false;
+    if (cardResult.parsed && extraction === "extracted" && details) {
+        if (cardResult.status === "MATCH_CONFIRMED" && targetTitle.head?.cls === "acc:remote") {
+            const sellerTitles = details.offers.flatMap(({ listingTitle }) => listingTitle ? [(0, parse_1.parseTitle)(listingTitle)] : []);
+            if (hasConflictingRemoteSpecs([cardResult.parsed, ...sellerTitles])) {
+                const score = Math.min(result.score, (target.approveAbovePct ?? 80) - 1);
+                result = {
+                    ...result, status: "REVIEW_REQUIRED", verdict: "review", score, noul: score / 100,
+                    needsReview: true, hasConflict: true,
+                    blockers: [...(result.blockers ?? []), "عنوان فروشندگان کارت ترب دربارهٔ فرکانس یا تعداد دکمه‌ها متناقض است"],
+                };
+            }
+        }
+        else if (cardResult.status !== "MATCH_CONFIRMED" && !details.offersTruncated) {
+            result = corroborateWithSellerTitles(target, targetTitle, cardResult, details.offers);
+            sellerCorroborated = result !== cardResult;
+        }
+    }
     const sellerTitle = !hasDetailTitle && !hasSearchTitle
         ? details?.offers.find((offer) => (0, text_1.normalizeText)(offer.listingTitle))?.listingTitle ?? undefined : undefined;
     const adminConfirmed = confirmation?.prk === card.prk && confirmation.origin === "admin_review" &&
@@ -134,6 +246,7 @@ function inspectDetails(target, card, read, confirmation) {
         extraction,
         origin: hasDetailTitle ? "product_details" : hasSearchTitle ? "search_card" : sellerTitle ? "seller_listing" : undefined,
         sellerTitle,
+        sellerCorroborated,
         adminConfirmed,
     };
 }
@@ -166,15 +279,21 @@ async function resolveTorobSource(options) {
         rejectBelowPct: options.matchConfig?.rejectBelowPct,
         approveAbovePct: options.matchConfig?.approveAbovePct,
     };
+    const targetTitle = (0, parse_1.parseTitle)(target.productName, { sku: target.sku });
+    const codeless = !targetTitle.codes.some((code) => !code.inCompat);
     const search = { queries: [], candidates: [], accepted: 0, eligible: 0 };
     const candidates = new Map();
-    const extractions = new Map();
+    const inspected = [];
     let ranked = [];
     let aiIdentityCheck = null;
     const trackSearch = () => {
         search.candidates = ranked.map((result) => {
             const observations = candidates.get(result.candidate.prk)?.observations ?? [];
-            return { ...candidateTrace(result, extractions.get(result.candidate.prk) ?? "not_requested", observations.map(({ query }) => query)), observations };
+            const item = inspected.find((entry) => entry.result.candidate.prk === result.candidate.prk);
+            const trace = candidateTrace(result, item?.extraction ?? "not_requested", observations.map(({ query }) => query));
+            if (item?.sellerCorroborated)
+                trace.reasons = [...trace.reasons.slice(0, 9), SELLER_EVIDENCE_NOTE];
+            return { ...trace, observations };
         });
         search.accepted = ranked.filter((result) => result.status === "MATCH_CONFIRMED").length;
         search.eligible = ranked.filter((result) => result.status === "MATCH_CONFIRMED" || result.status === "REVIEW_REQUIRED").length;
@@ -192,7 +311,11 @@ async function resolveTorobSource(options) {
             ...(status === "IDENTITY_MISMATCH" || status === "REVIEW_REQUIRED" ? { identityStatus: status } : {}) },
         meta: { ...meta(), ...extraMeta },
     });
-    if (!options.prk) {
+    let shortlist;
+    if (options.prk) {
+        shortlist = [{ prk: options.prk, titleFa: "", detailsUrl: options.detailsUrl }];
+    }
+    else {
         const searchDeadline = Date.now() + SEARCH_BUDGET_MS;
         let completedSearch = false;
         let unavailable = false;
@@ -227,10 +350,13 @@ async function resolveTorobSource(options) {
             const outcome = (0, matcher_1.selectBestTorobSearchMatch)(target, [...candidates.values()].map(({ card }) => card), options.matchConfig?.minSellerCount);
             ranked = outcome.allRanked;
             explanation = outcome.explanation;
-            if (outcome.confident)
+            if (outcome.confident && (!codeless || (outcome.best?.candidate.sellerCount ?? 0) > 1))
                 break;
         }
-        if (!ranked.some((result) => !result.rejected)) {
+        shortlist = ranked
+            .filter((result) => !result.rejected || (codeless && isSellerEvidenceProbeCandidate(target, targetTitle, result)))
+            .slice(0, MAX_DETAILS).map((result) => result.candidate);
+        if (!shortlist.length) {
             if (extractionIssue)
                 return fail("EXTRACTION_INCOMPLETE", "ساختار بعضی پاسخ‌ها یا شناسه‌های کارت ترب قابل استخراج نبود");
             if (!completedSearch && unavailable)
@@ -241,25 +367,27 @@ async function resolveTorobSource(options) {
             return fail("REVIEW_REQUIRED", "کارت قابل بررسی در محدودهٔ جستجوی انجام‌شده پیدا نشد");
         }
     }
-    const shortlist = options.prk
-        ? [{ prk: options.prk, titleFa: "", detailsUrl: options.detailsUrl }]
-        : ranked.filter((result) => !result.rejected).slice(0, MAX_DETAILS).map((result) => result.candidate);
-    const inspected = [];
     const detailsDeadline = Date.now() + DETAILS_BUDGET_MS;
     const inspect = async (card) => {
         const remaining = detailsDeadline - Date.now();
         if (remaining <= 0 || inspected.length >= MAX_DETAILS)
             return undefined;
         const read = await options.details(card, Math.min(remaining, DETAILS_TIMEOUT_MS));
-        const item = inspectDetails(target, card, read, options.confirmation);
-        extractions.set(card.prk, item.extraction);
+        const item = inspectDetails(target, targetTitle, card, read, options.confirmation);
         inspected.push(item);
         return item;
     };
+    let foundFragmentedCard = false;
     for (const card of shortlist) {
         const item = await inspect(card);
-        if (!item || item.read.blocked || (resolveIdentity(item) === "MATCH_CONFIRMED" && item.extraction === "extracted"))
+        if (!item || item.read.blocked)
             break;
+        if (resolveIdentity(item) === "MATCH_CONFIRMED" && item.extraction === "extracted") {
+            const sellerCount = item.read.data?.totalSellerCount ?? item.read.data?.offers.length ?? 0;
+            if (!foundFragmentedCard && sellerCount > 2)
+                break;
+            foundFragmentedCard = true;
+        }
     }
     const primary = inspected.find((item) => resolveIdentity(item) === "MATCH_CONFIRMED" &&
         (item.extraction === "extracted" || item.extraction === "empty"))
@@ -273,7 +401,8 @@ async function resolveTorobSource(options) {
     const panelIds = [candidate.prk];
     let identityStatus = resolveIdentity(primary);
     let reason = primary.adminConfirmed ? "ارتباط ثبت‌شده با تأیید مدیر و بدون تعارض مشخصات"
-        : primary.result.rejectReason ?? primary.result.blockers?.[0] ?? primary.result.notes[0] ?? "هویت کارت بر اساس عنوان و مشخصات سنجیده شد";
+        : primary.result.rejectReason ?? primary.result.blockers?.[0] ??
+            (primary.sellerCorroborated ? SELLER_EVIDENCE_NOTE : primary.result.notes[0]) ?? "هویت کارت بر اساس عنوان و مشخصات سنجیده شد";
     const searchRank = ranked.find((result) => result.candidate.prk === candidate.prk);
     if (!primary.adminConfirmed && searchRank?.status === "REVIEW_REQUIRED" && primary.result.status === "MATCH_CONFIRMED" &&
         (0, matcher_1.evaluateTorobCandidate)(target, searchRank.candidate).status === "MATCH_CONFIRMED") {
@@ -281,8 +410,9 @@ async function resolveTorobSource(options) {
         reason = searchRank.blockers?.at(-1) ?? "چند کارت هم‌زمان به محصول می‌خورند";
     }
     const blocked = inspected.find((item) => item.read.blocked);
-    const aiCandidates = [primary.result, ...ranked.filter((result) => !result.rejected && result.candidate.prk !== candidate.prk)]
-        .filter((result) => result.titleState === "present").slice(0, 10);
+    const aiCandidates = [primary.result, ...ranked.filter((result) => result.candidate.prk !== candidate.prk)
+            .map((result) => inspected.find((item) => item.result.candidate.prk === result.candidate.prk)?.result ?? result)]
+        .filter((result) => !result.rejected && result.titleState === "present").slice(0, 10);
     if (!blocked && !primary.read.issue && identityStatus !== "IDENTITY_MISMATCH" && aiCandidates.length &&
         options.matchConfig?.aiIdentityEnabled && (!primary.adminConfirmed || aiCandidates.length > 1) && await (0, client_1.aiEnabled)()) {
         aiIdentityCheck = await (0, client_1.verifyTorobMatchesWithAI)({
@@ -297,16 +427,29 @@ async function resolveTorobSource(options) {
         else if (data && identityStatus === "MATCH_CONFIRMED" && aiIdentityCheck?.verdict === "match") {
             for (const rankedCard of ranked) {
                 const id = rankedCard.candidate.prk;
-                if (id === candidate.prk || rankedCard.status !== "MATCH_CONFIRMED" || rankedCard.identityKey !== primary.result.identityKey ||
-                    !aiIdentityCheck.matchedPrks.includes(id))
+                if (!aiIdentityCheck.matchedPrks.includes(id) || !(0, matcher_1.areCompatibleConfirmedIdentities)(primary.result, rankedCard) ||
+                    inspected.some((item) => item.result.candidate.prk === id))
                     continue;
-                const item = inspected.find((entry) => entry.result.candidate.prk === id) ?? await inspect(rankedCard.candidate);
+                const item = await inspect(rankedCard.candidate);
                 if (!item || item.read.blocked)
                     break;
-                if (item.extraction === "extracted" && item.read.data && item.result.status === "MATCH_CONFIRMED" &&
-                    item.result.identityKey === primary.result.identityKey) {
+            }
+        }
+    }
+    const restriction = inspected.find((item) => item.read.blocked);
+    if (!restriction && data && identityStatus === "MATCH_CONFIRMED") {
+        const confirmed = inspected.filter((item) => (item.extraction === "extracted" || item.extraction === "empty") &&
+            item.result.status === "MATCH_CONFIRMED" && !item.result.hasConflict);
+        if (confirmed.some((a, i) => confirmed.slice(i + 1).some((b) => !(0, matcher_1.areCompatibleConfirmedIdentities)(a.result, b.result)))) {
+            identityStatus = "REVIEW_REQUIRED";
+            reason = "چند کارت با هویت یا مشخصات متفاوت هم‌زمان با محصول سایت منطبق‌اند";
+        }
+        else {
+            for (const item of confirmed) {
+                if (item !== primary && item.extraction === "extracted" && item.read.data &&
+                    (0, matcher_1.areCompatibleConfirmedIdentities)(primary.result, item.result)) {
                     panels.push(item.read.data);
-                    panelIds.push(id);
+                    panelIds.push(item.result.candidate.prk);
                 }
             }
         }
@@ -315,7 +458,6 @@ async function resolveTorobSource(options) {
     const primaryShopCount = data?.totalSellerCount ?? data?.offers.length ?? 0;
     const total = Math.max(primaryShopCount + Math.max(0, offers.length - (data?.offers.length ?? 0)), offers.length);
     let status = identityStatus;
-    const restriction = inspected.find((item) => item.read.blocked);
     if (restriction) {
         status = "SOURCE_UNAVAILABLE";
         reason = "ترب دسترسی دریافت جزئیات را محدود کرده است";

@@ -5,6 +5,7 @@ exports.brandInfo = brandInfo;
 exports.expandBrands = expandBrands;
 exports.areBrandsCompatible = areBrandsCompatible;
 exports.areBrandSetsCompatible = areBrandSetsCompatible;
+exports.areKnownBrandSetsCompatible = areKnownBrandSetsCompatible;
 exports.scanBrands = scanBrands;
 exports.brandForCodePrefix = brandForCodePrefix;
 exports.brandFromCodeShape = brandFromCodeShape;
@@ -91,7 +92,23 @@ const BRAND_DEFS = {
     faraz: { aliases: ["فراز", "faraz"] },
     khazar: { aliases: ["خزر الکتریک", "خزر", "khazar"] },
     kavian: { aliases: ["کاویان", "kavian"] },
+    // ── ریموت، جک، کرکره و آیفون
     beta: { aliases: ["بتا", "beta"] },
+    hsp: { aliases: ["اچ اس پی", "اچاسپی", "hsp"] },
+    simaran: { aliases: ["سیماران", "simaran"] },
+    taba: { aliases: ["تابا الکترونیک", "تابا", "taba electronics", "taba"] },
+    electropeyk: { aliases: ["الکترو پیک", "الکتروپیک", "electro peyk", "electropeyk", "electro pik", "electropik"] },
+    suzuki: { aliases: ["سوزوکی", "suzuki"] },
+    commax: { aliases: ["کوماکس", "کومکس", "commax"] },
+    bft: { aliases: ["بی اف تی", "بیافتی", "bft"] },
+    proteco: { aliases: ["پروتکو", "پرو تکو", "proteco"] },
+    beninca: { aliases: ["بنینکا", "بن اینکا", "beninca", "benincà"] },
+    calypso: { aliases: ["کالیپسو", "calypso"] },
+    somfy: { aliases: ["سومفی", "سامفی", "somfy"] },
+    yota: { aliases: ["یوتا", "yota"] },
+    rosta: { aliases: ["روستا", "رستا", "rosta"] },
+    silca: { aliases: ["سیلکا", "silca"] },
+    faac: { aliases: ["فک", "فاک", "اف ای ای سی", "faac"] },
     // ── دیجیتال و مصرفی
     apple: { aliases: ["اپل", "apple"] },
     honor: { aliases: ["آنر", "هانر", "honor"] },
@@ -152,17 +169,21 @@ function areBrandSetsCompatible(setA, setB) {
     }
     return false;
 }
+function areKnownBrandSetsCompatible(a, b) {
+    return !a.length || !b.length ||
+        (a.every((id) => areBrandSetsCompatible([id], b)) && b.every((id) => areBrandSetsCompatible([id], a)));
+}
 /** اسکن برندهای صریح در توکن‌ها؛ شاخص توکن‌های مصرف‌شده را هم برمی‌گرداند */
 function scanBrands(tokens) {
     const ids = new Set();
     const consumed = new Set();
-    const remoteTag = tokens.includes("ریموتگ");
+    const hasRemoteContext = tokens.some((token) => ["ریموتگ", "ریموت", "جک", "کرکره", "ایفون", "remote"].includes(token));
     for (let i = 0; i < tokens.length; i++) {
         const bucket = BRAND_INDEX.get(tokens[i]);
         if (!bucket)
             continue;
         for (const cand of bucket) {
-            if (cand.id === "beta" && !remoteTag && !["برند", "brand"].includes(tokens[i - 1]))
+            if (cand.id === "beta" && !hasRemoteContext && !["برند", "brand"].includes(tokens[i - 1]))
                 continue;
             if (cand.tokens.every((t, k) => tokens[i + k] === t)) {
                 ids.add(cand.id);
@@ -666,7 +687,7 @@ exports.STOPWORDS = new Set([
     "و", "یا", "در", "به", "از", "با", "تا", "برای", "که", "این", "آن", "را", "هم", "یک", "دارای", "بدون", "مدل", "کد", "برند", "نوع",
     "مشخصات", "قیمت", "خرید", "فروش", "فروشگاه", "ارسال", "فوری", "رایگان", "موجود", "پیش", "تحویل", "همراه", "بهمراه",
     "اصلی", "اصل", "اورجینال", "اصالت", "سلامت", "فیزیکی", "جدید", "جدیدترین", "نسخه", "نو", "اکبند", "پلمپ", "گارانتی", "ضمانت", "تضمینی",
-    "شرکتی", "رسمی", "ماهه", "ساله", "سال", "ماه", "کیفیت", "عالی", "ظرفیت", "رزولوشن", "طول", "اندازه", "سایز", "کد", "مناسب", "ویژه", "مخصوص", "جهت", "سازگار",
+    "شرکتی", "رسمی", "ماهه", "ساله", "سال", "ماه", "کیفیت", "عالی", "ظرفیت", "رزولوشن", "فرکانس", "طول", "اندازه", "سایز", "کد", "مناسب", "ویژه", "مخصوص", "جهت", "سازگار",
     "of", "the", "and", "for", "with", "new", "original", "model", "code", "series", "ser",
 ].map((w) => (0, text_1.normalizeText)(w)));
 /** کلمات عمومی دسته‌بندی (به‌تنهایی هویتی نیستند) */

@@ -24,6 +24,10 @@ const evalTarget = { productName: opts.productName, sku: opts.sku }
 const exactProduct = 'ماژول ريموت‌تگ بتا مدل RTG-A12 ۱۲ ولت'
 const exactCard = 'BETA REMOTAG Access Controller model RTG-A12 12V'
 const confirmation = { prk: fixture.prk, confirmedAt: now.toISOString(), origin: 'admin_review', decisionId: 42 }
+const remoteTarget = { productName: 'ریموت بلوتوثی 315 بنزی 5 دکمه (Hsp)', sku: '2399', anchorPriceToman: 589000 }
+const bazarCard = { prk: 'hsp-bazar', name_fa: '613 ریموت بلوتوثی 315 بنزی 5 دکمه اچ اس پی', price_toman: 580000, shop_count: 1 }
+const jahanCard = { prk: 'hsp-jahan', name_fa: 'ریموت بنزی ۵ عددی', name_en: 'Hsp', price_toman: 750000, shop_count: 1 }
+const jahanOffer = { ...rawOffer('جهان ریموت', 750000), product_title: 'ریموت بنزی بلوتوث بنزی فرکانس 315 | Hsp' }
 
 function withConfig(overrides = {}) {
   return { ...context, config: structuredClone(DEFAULT_PROFILE_CONFIG), ...overrides }
@@ -104,6 +108,173 @@ test('same brand cannot hide model, pack, accessory or conflicting structured sp
   })
   assert.equal(bilingual.status, 'REVIEW_REQUIRED')
   assert.equal(bilingual.hasConflict, true)
+})
+
+test('HSP aliases and structured remote specifications confirm the exact Torob card', () => {
+  const result = evaluateTorobCandidate(remoteTarget, { prk: bazarCard.prk, titleFa: bazarCard.name_fa, priceToman: bazarCard.price_toman })
+  assert.equal(result.status, 'MATCH_CONFIRMED')
+  assert.deepEqual(result.parsed.brands, ['hsp'])
+  assert.deepEqual(result.parsed.attrs.frequency, [315000000])
+  assert.deepEqual(result.parsed.attrs.buttons, [5])
+  assert.deepEqual(result.parsed.words, ['بلوتوثی', 'بنزی'])
+
+  for (const titleFa of [
+    'ریموت بلوتوثی بنزی 315mhz پنج دکمه‌ای اچاسپی',
+    'ریموت بلوتوثی بنزی فرکانس ۳۱۵ پنج کلیده Hsp',
+    'ریموت بلوتوثی بنزی Hsp frequency 315 5-button',
+    'ریموت کپی خور بلوتوثی بنزی ۳۱۵ مگا هرتز ۵ شاسی Hsp',
+  ]) {
+    const candidate = evaluateTorobCandidate(remoteTarget, { prk: 'alias', titleFa })
+    assert.equal(candidate.status, 'MATCH_CONFIRMED', titleFa)
+    assert.deepEqual(candidate.parsed.attrs.buttons, [5], titleFa)
+  }
+  const specs = evaluateTorobCandidate(remoteTarget, {
+    prk: 'hsp-specs', titleFa: 'ریموت بلوتوثی بنزی Hsp', specs: [{ key: 'فرکانس کاری', value: '۳۱۵' }],
+  })
+  assert.equal(specs.status, 'MATCH_CONFIRMED')
+  assert.deepEqual(specs.parsed.attrs.frequency, [315000000])
+  assert.equal(specs.parsed.attrs.buttons, undefined)
+})
+
+test('wrong remote frequencies, button counts and counterfeit markers remain hard vetoes', () => {
+  for (const [titleFa, reason] of [
+    ['ریموت بلوتوثی 433 بنزی 5 دکمه Hsp', /فرکانس/],
+    ['ریموت بلوتوثی بنزی ۴۳۳٫۹۲ مگاهرتز ۵ دکمه Hsp', /فرکانس/],
+    ['ریموت بلوتوثی بنزی 125khz 5 دکمه Hsp', /فرکانس/],
+    ['ریموت بلوتوثی 315 بنزی 4 دکمه Hsp', /تعداد دکمه/],
+    ['ریموت بلوتوثی 315 بنزی شانزده کلید Hsp', /تعداد دکمه/],
+    ['ریموت بلوتوثی 315 بنزی 5 دکمه Hsp کپی خور های کپی', /غیراصل/],
+    ['ریموت بلوتوثی 315 بنزی 5 دکمه Hsp کپی خور طرح اصل', /غیراصل/],
+  ]) {
+    const result = evaluateTorobCandidate(remoteTarget, { prk: 'wrong-hsp', titleFa })
+    assert.equal(result.status, 'IDENTITY_MISMATCH', titleFa)
+    assert.match(result.rejectReason, reason)
+  }
+  for (const unrelated of ['۳۱۵ ولت', '315 عددی', '315 میلی متر', '315Ω']) {
+    const result = evaluateTorobCandidate(remoteTarget, { prk: 'no-frequency', titleFa: `ریموت بلوتوثی بنزی Hsp ${unrelated}` })
+    assert.equal(result.parsed.attrs.frequency, undefined, unrelated)
+  }
+  const configured = evaluateTorobCandidate({ ...remoteTarget, rejectBelowPct: 1, approveAbovePct: 10 }, {
+    prk: 'wrong-hsp', titleFa: 'ریموت بلوتوثی 433 بنزی 5 دکمه Hsp',
+  })
+  assert.equal(configured.status, 'IDENTITY_MISMATCH')
+})
+
+test('codeless discovery finds and merges both HSP sellers without AI', async (t) => {
+  const queries = buildSearchQueries(remoteTarget.productName, remoteTarget.sku)
+  assert.ok(queries.length <= 5)
+  assert.ok(queries.includes('ریموت 315 hsp'))
+  assert.ok(queries.includes('ریموت بنزی hsp'))
+  const fake = installFakeTorob({
+    search: (query) => query === queries[0] ? [bazarCard] : query === 'ریموت بنزی hsp' ? [jahanCard] : [],
+    details: {
+      [bazarCard.prk]: { ...bazarCard, offers: [rawOffer('بازار قفل', 580000)] },
+      [jahanCard.prk]: { ...jahanCard, offers: [jahanOffer] },
+    },
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget, matchConfig: { aiIdentityEnabled: false } })
+  assert.equal(source.torob.status, 'MATCH_CONFIRMED', source.torob.reason)
+  assert.equal(source.prk, bazarCard.prk)
+  assert.deepEqual(source.offers.map(({ shopName, price }) => [shopName, price]), [['بازار قفل', 580000], ['جهان ریموت', 750000]])
+  assert.equal(source.totalSellerCount, 2)
+  assert.deepEqual(source.meta.mergedPanelPrks, [bazarCard.prk, jahanCard.prk])
+  assert.deepEqual(source.meta.panels, [{ prk: bazarCard.prk, sellerCount: 1 }, { prk: jahanCard.prk, sellerCount: 1 }])
+  assert.deepEqual(fake.calls.filter(({ name }) => name === 'product_details').map(({ args }) => args.prk), [bazarCard.prk, jahanCard.prk])
+  const sibling = source.torob.search.candidates.find(({ prk }) => prk === jahanCard.prk)
+  assert.equal(sibling.titleFa, jahanCard.name_fa)
+  assert.equal(sibling.extraction, 'extracted')
+  assert.ok(sibling.reasons.some((reason) => reason.includes('عنوان فروشندگان')))
+})
+
+test('a seller-corroborated card preserves its original Persian and English titles', async (t) => {
+  const card = { ...jahanCard, name_fa: 'ریموت بنزی پنج تایی' }
+  const fake = installFakeTorob({
+    search: () => [card],
+    details: { [card.prk]: { ...card, offers: [jahanOffer] } },
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
+  assert.equal(source.torob.status, 'MATCH_CONFIRMED', source.torob.reason)
+  assert.equal(source.torob.titleOrigin, 'product_details')
+  assert.equal(source.productTitle, card.name_fa)
+  assert.equal(source.productTitleEn, card.name_en)
+  assert.match(source.torob.reason, /عنوان فروشندگان/)
+})
+
+test('real multi-packs and conflicting remote cards are rejected without probing seller evidence', async (t) => {
+  const fake = installFakeTorob({
+    search: () => [
+      { ...jahanCard, price_toman: 2900000 },
+      { ...jahanCard, prk: 'explicit-pack', name_fa: 'ریموت بنزی ۵ عددی پک' },
+      { ...jahanCard, prk: 'explicit-buttons-pack', name_fa: 'ریموت بنزی ۵ دکمه ۵ عددی' },
+      { ...jahanCard, prk: 'pack-wrong-frequency', name_fa: 'ریموت بنزی فرکانس ۴۳۳ ۵ عددی' },
+      { ...jahanCard, prk: 'pack-wrong-buttons', name_fa: 'ریموت بنزی ۴ دکمه ۵ عددی' },
+      { ...jahanCard, prk: 'pack-wrong-brand', name_en: 'Simaran' },
+      { ...jahanCard, prk: 'pack-accessory', name_fa: 'ریموت بنزی پوسته ۵ عددی' },
+      { ...jahanCard, prk: 'pack-bundle', name_fa: 'ریموت بنزی ۵ عددی به همراه دوربین مداربسته' },
+      { ...jahanCard, prk: 'pack-used', name_fa: 'ریموت بنزی استوک ۵ عددی' },
+      { ...jahanCard, prk: 'pack-model', name_fa: 'ریموت بنزی مدل ABC123 ۵ عددی' },
+    ],
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
+  assert.equal(source.torob.status, 'IDENTITY_MISMATCH')
+  assert.equal(fake.calls.filter(({ name }) => name === 'product_details').length, 0)
+  assert.ok(source.torob.search.candidates.every(({ extraction }) => extraction === 'not_requested'))
+})
+
+test('mixed seller frequencies cannot auto-confirm a Torob card', async (t) => {
+  for (const [card, status] of [[jahanCard, 'IDENTITY_MISMATCH'], [bazarCard, 'REVIEW_REQUIRED']]) {
+    await t.test(card.prk, async (t) => {
+      const fake = installFakeTorob({
+        search: () => [{ ...card, shop_count: 2 }],
+        details: {
+          [card.prk]: { ...card, offers: [
+            jahanOffer,
+            { ...rawOffer('فروشنده دیگر', 760000), product_title: jahanOffer.product_title.replace('315', '433') },
+          ] },
+        },
+      })
+      t.after(fake.restore)
+      const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
+      assert.equal(source.torob.status, status)
+      assert.equal(source.torob.selected.extraction, 'extracted')
+      assert.equal(source.meta.mergedPanelPrks, undefined)
+      assert.equal(fake.calls.filter(({ name }) => name === 'product_details').length, 1)
+    })
+  }
+})
+
+test('a low-scoring incomplete codeless title can be corroborated without a pack label', async (t) => {
+  const card = { ...jahanCard, name_fa: 'ریموت' }
+  const fake = installFakeTorob({
+    search: () => [card],
+    details: { [card.prk]: { ...card, offers: [jahanOffer] } },
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({
+    ...opts, ...remoteTarget, matchConfig: { rejectBelowPct: 70, approveAbovePct: 90 },
+  })
+  assert.equal(source.torob.search.candidates[0].status, 'IDENTITY_MISMATCH')
+  assert.equal(source.torob.status, 'MATCH_CONFIRMED', source.torob.reason)
+  assert.equal(fake.calls.filter(({ name }) => name === 'product_details').length, 1)
+})
+
+test('separately corroborated cards with conflicting button counts require review', async (t) => {
+  const cards = [4, 5].map((buttons) => ({
+    prk: `hsp-${buttons}`, name_fa: 'ریموت بنزی Hsp', price_toman: 590000, shop_count: 1,
+    offers: [{ ...rawOffer(`shop-${buttons}`, 590000), product_title: `ریموت بلوتوثی 315 بنزی ${buttons} دکمه Hsp` }],
+  }))
+  const fake = installFakeTorob({
+    search: () => cards,
+    details: Object.fromEntries(cards.map((card) => [card.prk, card])),
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget, productName: 'ریموت بلوتوثی 315 بنزی (Hsp)' })
+  assert.equal(source.torob.status, 'REVIEW_REQUIRED', source.torob.reason)
+  assert.match(source.torob.reason, /مشخصات متفاوت/)
+  assert.equal(source.meta.mergedPanelPrks, undefined)
 })
 
 test('raw title states distinguish source omission, parse failure, and mapping loss', () => {

@@ -49,7 +49,7 @@ const REL_RANK: Record<CodeRel, number> = { equal: 8, alias: 7, tail: 6, ext_seg
 const PRIMARY_ATTRS = new Set([
   "mp", "ch", "cap", "ram", "ports", "volt", "amp", "watt", "va", "ah", "uf", "kvar", "ka",
   "poles", "curve", "phase", "ingress", "len", "cm", "mm2", "dim", "cat", "ctype", "rg", "speed", "poe", "inch", "cabletype", "lens", "gen",
-  "access_model", "frequency",
+  "access_model", "frequency", "buttons",
 ]);
 const SOFT_ATTRS = new Set(["wifi", "res"]);
 const ATTR_LABEL: Record<string, string> = {
@@ -60,6 +60,7 @@ const ATTR_LABEL: Record<string, string> = {
   ports: "تعداد پورت",
   volt: "ولتاژ",
   frequency: "فرکانس",
+  buttons: "تعداد دکمه",
   access_model: "مدل کنترل دسترسی",
   amp: "جریان (آمپر)",
   watt: "توان (وات)",
@@ -482,6 +483,9 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
   // ── ۶) مشخصات تایپ‌شده
   const idByCode = positiveId; // شناسایی مثبت از راه کد (equal/alias)
   const attrKeys = new Set([...Object.keys(t.attrs), ...Object.keys(c.attrs)]);
+  const bothRemotes = t.head?.cls === "acc:remote" && c.head?.cls === "acc:remote";
+  const sameRemoteFrequency = bothRemotes && t.attrs.frequency?.length === 1 && c.attrs.frequency?.length === 1 &&
+    t.attrs.frequency[0] === c.attrs.frequency[0];
   let attrMatches = 0;
   let primaryUnverified = 0;
   let primaryExtra = 0;
@@ -492,13 +496,24 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     const tv = t.attrs[key];
     const cv = c.attrs[key];
     const primary = PRIMARY_ATTRS.has(key);
-    if (primary && ((tv?.length ?? 0) > 1 || (cv?.length ?? 0) > 1)) multiValued.push(ATTR_LABEL[key] ?? key);
+    const remoteSpec = bothRemotes && (key === "frequency" || key === "buttons");
+    const label = ATTR_LABEL[key] ?? key;
+    if (primary && ((tv?.length ?? 0) > 1 || (cv?.length ?? 0) > 1)) {
+      if (remoteSpec && F.attrConflicts) veto(18, `یک عنوان چند مقدار متفاوت برای ${label} دارد`);
+      else multiValued.push(label);
+    }
     if (tv?.length && cv?.length) {
-      if (valuesIntersect(tv, cv)) {
+      if (remoteSpec ? tv.some((value) => cv.includes(value)) : valuesIntersect(tv, cv)) {
         attrMatches++;
         logit += targetCoded ? 0.35 : 0.9;
-      } else if (primary) hardConflicts.push(`${ATTR_LABEL[key] ?? key}: سایت «${showVals(tv)}» ، ترب «${showVals(cv)}»`);
-      else softConflicts.push(`${ATTR_LABEL[key] ?? key}: «${showVals(tv)}» ≠ «${showVals(cv)}»`);
+      } else if (primary) {
+        const conflict = `${label}: سایت «${showVals(tv)}» ، ترب «${showVals(cv)}»`;
+        if (remoteSpec) {
+          if (F.attrConflicts) veto(18, `تضاد مشخصات فنی: ${conflict}`);
+        } else hardConflicts.push(conflict);
+      } else softConflicts.push(`${label}: «${showVals(tv)}» ≠ «${showVals(cv)}»`);
+    } else if (key === "buttons" && sameRemoteFrequency) {
+      continue; // تعداد دکمهٔ ذکرنشده را با فرکانس مشترک می‌توان نادیده گرفت.
     } else if (tv?.length && !cv?.length) {
       // رزولوشن: mp سایت در برابر 1080p ترب
       if (key === "mp" && c.attrs.res?.length) {
@@ -644,12 +659,14 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     if (F.approveNeedsId && !positiveId) score = Math.min(score, reviewCap);
   }
   score = Math.max(0, Math.min(100, score));
-  const verdict = classifyThreeZoneScore(score, opt.rejectBelowPct, opt.approveAbovePct);
+  const verdict = vetoes.length ? "reject" : classifyThreeZoneScore(score, opt.rejectBelowPct, opt.approveAbovePct);
   if (verdict === "reject" && !rejectReason) {
     rejectReason = `امتیاز تطابق (${score}%) زیر خط قرمز رد ناظر (${opt.rejectBelowPct}%) است`;
   }
   if (!identityKey) {
     identityKey = `desc:${[...tAll].sort().join(",")}|${t.head?.cls ?? "?"}|${Object.entries(c.attrs)
+      // فرکانس مشترک اجازه می‌دهد کارت‌هایی با تعداد دکمهٔ ذکرنشده هم‌هویت باشند.
+      .filter(([key]) => key !== "buttons" || !sameRemoteFrequency)
       .map(([k, v]) => `${k}=${showVals(v)}`)
       .sort()
       .join(",")}`;
