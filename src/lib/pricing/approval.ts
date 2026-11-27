@@ -182,12 +182,7 @@ export function validateBelowCostAuthorization(
   };
 }
 
-/**
- * ارزیابی جامع حفاظت از قیمت تمام‌شده (انبار + ریپلیس) و کف سود برای اعمال تصمیم‌ها (`applyDecision` و اجرای خودکار).
- * - `force: true` عادی تنها مجوز عبور از وضعیت `pending_review`/`rejected` ناظر است و هرگز اجازهٔ فروش زیر قیمت تمام‌شده یا کف سود را نمی‌دهد.
- * - فروش زیر قیمت تمام‌شده فقط با مجوز رسمی، دلیل ممیزی و تاییدکننده مشخص (`validateBelowCostAuthorization`) مجاز است.
- * - در صورت نامشخص بودن قیمت تمام‌شده (`effectiveCost <= 0`)، اعمال خودکار مسدود است مگر سیاست صریح `allowMarketMakerWithoutCost` با کف امن بازار فعال باشد یا مجوز ممیزی ثبت شود.
- */
+/** Check the final checkout price against the current purchase cost and profit floor. */
 export function evaluateDecisionFloorSafety(input: DecisionFloorSafetyInput): DecisionFloorSafetyResult {
   const finalPrice = Number(input.finalPrice);
   const invCost = Math.max(
@@ -220,253 +215,24 @@ export function evaluateDecisionFloorSafety(input: DecisionFloorSafetyInput): De
     computedFloor,
   );
 
-  if (!Number.isFinite(finalPrice) || finalPrice <= 0) {
-    return {
-      ok: false,
-      status: "blocked_invalid_price",
-      isBelowCost: false,
-      isBelowFloor: false,
-      isCostUnknown: effectiveCost <= 0,
-      authorizedOverride: false,
-      effectiveCost,
-      effectiveFloor,
-      inventoryCost: invCost,
-      replacementCost: repCost,
-      lossAmountToman: 0,
-      lossPct: 0,
-      reason: "قیمت نهایی تصمیم نامعتبر یا غیرمثبت است",
-      auditRecord: null,
-    };
-  }
-
-  const mergedAuth: BelowCostAuthorization = {
-    ...(input.authorization ?? {}),
-    allowBelowCost: input.allowBelowCost ?? input.authorization?.allowBelowCost,
-    allowBelowFloor: input.allowBelowFloor ?? input.authorization?.allowBelowFloor,
-    reason: input.reason ?? input.belowCostReason ?? input.authorization?.reason ?? input.authorization?.belowCostReason,
-    belowCostReason: input.belowCostReason ?? input.authorization?.belowCostReason,
-    authorizedBy: input.authorizedBy ?? input.authorization?.authorizedBy,
-    policyCode: input.policyCode ?? input.authorization?.policyCode,
-    maxLossPct: input.maxLossPct ?? input.authorization?.maxLossPct,
+  const invalid = !Number.isSafeInteger(finalPrice) || finalPrice <= 0;
+  const unknown = !Number.isFinite(effectiveCost) || effectiveCost <= 0;
+  const isBelowCost = !invalid && !unknown && (strictAboveCost ? finalPrice <= effectiveCost : finalPrice < effectiveCost);
+  const isBelowFloor = !invalid && (isBelowCost || finalPrice < effectiveFloor);
+  const status = invalid ? "blocked_invalid_price" : unknown ? "blocked_unknown_cost"
+    : isBelowCost ? "blocked_below_cost" : isBelowFloor ? "blocked_below_floor" : "safe";
+  const reasons = {
+    blocked_invalid_price: "قیمت فروش باید عدد صحیح و مثبت باشد",
+    blocked_unknown_cost: "پیش از اعمال قیمت، بهای خرید یا تأمین کالا را ثبت کنید",
+    blocked_below_cost: "قیمت فروش باید بالاتر از بهای خرید یا تأمین کالا باشد",
+    blocked_below_floor: "قیمت فروش از کف سود مجاز کمتر است",
+    safe: null,
   };
-
-  if (effectiveCost <= 0) {
-    const mmAllowed =
-      Boolean(input.allowMarketMakerWithoutCost) &&
-      Boolean(input.usedMarketConsensusFloor) &&
-      !input.isProvisional &&
-      effectiveFloor > 0 &&
-      finalPrice >= effectiveFloor &&
-      (input.minConfidenceAutoApply == null ||
-        (input.confidence != null && input.confidence >= input.minConfidenceAutoApply));
-
-    if (mmAllowed) {
-      return {
-        ok: true,
-        status: "safe",
-        isBelowCost: false,
-        isBelowFloor: false,
-        isCostUnknown: true,
-        authorizedOverride: false,
-        effectiveCost: 0,
-        effectiveFloor,
-        inventoryCost: invCost,
-        replacementCost: repCost,
-        lossAmountToman: 0,
-        lossPct: 0,
-        reason: null,
-        auditRecord: null,
-      };
-    }
-
-    const authCheck = validateBelowCostAuthorization(mergedAuth, {
-      finalPrice,
-      effectiveCost: 0,
-      effectiveFloor,
-      requireBelowCost: true,
-    });
-
-    if (authCheck.valid && authCheck.allowBelowCost && (effectiveFloor <= 0 || finalPrice >= effectiveFloor || authCheck.allowBelowFloor)) {
-      return {
-        ok: true,
-        status: "authorized_below_cost",
-        isBelowCost: false,
-        isBelowFloor: effectiveFloor > 0 && finalPrice < effectiveFloor,
-        isCostUnknown: true,
-        authorizedOverride: true,
-        effectiveCost: 0,
-        effectiveFloor,
-        inventoryCost: invCost,
-        replacementCost: repCost,
-        lossAmountToman: 0,
-        lossPct: 0,
-        reason: `اعمال قیمت بدون بهای تمام‌شده با مجوز ممیزی (${authCheck.authorizedBy}): ${authCheck.reason}`,
-        auditRecord: {
-          authorizedBy: authCheck.authorizedBy!,
-          reason: authCheck.reason!,
-          policyCode: authCheck.policyCode!,
-          finalPrice,
-          effectiveCost: 0,
-          effectiveFloor,
-          lossAmountToman: 0,
-          lossPct: 0,
-          timestamp: new Date().toISOString(),
-        },
-      };
-    }
-
-    return {
-      ok: false,
-      status: "blocked_unknown_cost",
-      isBelowCost: false,
-      isBelowFloor: effectiveFloor > 0 && finalPrice < effectiveFloor,
-      isCostUnknown: true,
-      authorizedOverride: false,
-      effectiveCost: 0,
-      effectiveFloor,
-      inventoryCost: invCost,
-      replacementCost: repCost,
-      lossAmountToman: 0,
-      lossPct: 0,
-      reason:
-        "قیمت تمام‌شده/تامین کالا نامشخص است (cost_unknown) — فروش خودکار یا تایید بدون ثبت قیمت خرید یا مجوز رسمی ممیزی مجاز نیست",
-      auditRecord: null,
-    };
-  }
-
-  const isBelowCost = strictAboveCost ? finalPrice <= effectiveCost : finalPrice < effectiveCost;
-  const isBelowFloor = isBelowCost || (effectiveFloor > 0 && finalPrice < effectiveFloor);
-  const lossAmountToman = Math.max(0, effectiveCost - finalPrice);
-  const lossPct = effectiveCost > 0 ? Math.max(0, (lossAmountToman / effectiveCost) * 100) : 0;
-
-  if (isBelowCost) {
-    const authCheck = validateBelowCostAuthorization(mergedAuth, {
-      finalPrice,
-      effectiveCost,
-      effectiveFloor,
-      requireBelowCost: true,
-    });
-
-    if (!authCheck.valid) {
-      return {
-        ok: false,
-        status: "blocked_below_cost",
-        isBelowCost: true,
-        isBelowFloor: true,
-        isCostUnknown: false,
-        authorizedOverride: false,
-        effectiveCost,
-        effectiveFloor,
-        inventoryCost: invCost,
-        replacementCost: repCost,
-        lossAmountToman,
-        lossPct,
-        reason:
-          `قیمت نهایی (${finalPrice.toLocaleString("fa-IR")}) مساوی یا کمتر از قیمت تمام‌شده مؤثر (${effectiveCost.toLocaleString("fa-IR")} تومان) است — ` +
-          `${authCheck.errorReason ?? "فروش با ضرر بدون مجوز رسمی allowBelowCost، دلیل ممیزی و تاییدکننده مجاز مسدود است"}`,
-        auditRecord: null,
-      };
-    }
-
-    return {
-      ok: true,
-      status: "authorized_below_cost",
-      isBelowCost: true,
-      isBelowFloor: true,
-      isCostUnknown: false,
-      authorizedOverride: true,
-      effectiveCost,
-      effectiveFloor,
-      inventoryCost: invCost,
-      replacementCost: repCost,
-      lossAmountToman,
-      lossPct,
-      reason: `مجوز استثنایی فروش زیر قیمت تمام‌شده توسط «${authCheck.authorizedBy}» (${authCheck.policyCode}): ${authCheck.reason}`,
-      auditRecord: {
-        authorizedBy: authCheck.authorizedBy!,
-        reason: authCheck.reason!,
-        policyCode: authCheck.policyCode!,
-        finalPrice,
-        effectiveCost,
-        effectiveFloor,
-        lossAmountToman,
-        lossPct,
-        timestamp: new Date().toISOString(),
-      },
-    };
-  }
-
-  if (isBelowFloor) {
-    const authCheck = validateBelowCostAuthorization(mergedAuth, {
-      finalPrice,
-      effectiveCost,
-      effectiveFloor,
-      requireBelowCost: false,
-    });
-
-    if (!authCheck.valid) {
-      return {
-        ok: false,
-        status: "blocked_below_floor",
-        isBelowCost: false,
-        isBelowFloor: true,
-        isCostUnknown: false,
-        authorizedOverride: false,
-        effectiveCost,
-        effectiveFloor,
-        inventoryCost: invCost,
-        replacementCost: repCost,
-        lossAmountToman: 0,
-        lossPct: 0,
-        reason:
-          `قیمت نهایی (${finalPrice.toLocaleString("fa-IR")}) کمتر از کف سود مجاز (${effectiveFloor.toLocaleString("fa-IR")} تومان) است — ` +
-          `${authCheck.errorReason ?? "عبور از کف سود نیازمند مجوز صریح، دلیل ممیزی و تاییدکننده مجاز است"}`,
-        auditRecord: null,
-      };
-    }
-
-    return {
-      ok: true,
-      status: "authorized_below_floor",
-      isBelowCost: false,
-      isBelowFloor: true,
-      isCostUnknown: false,
-      authorizedOverride: true,
-      effectiveCost,
-      effectiveFloor,
-      inventoryCost: invCost,
-      replacementCost: repCost,
-      lossAmountToman: 0,
-      lossPct: 0,
-      reason: `مجوز عبور از کف سود توسط «${authCheck.authorizedBy}» (${authCheck.policyCode}): ${authCheck.reason}`,
-      auditRecord: {
-        authorizedBy: authCheck.authorizedBy!,
-        reason: authCheck.reason!,
-        policyCode: authCheck.policyCode!,
-        finalPrice,
-        effectiveCost,
-        effectiveFloor,
-        lossAmountToman: 0,
-        lossPct: 0,
-        timestamp: new Date().toISOString(),
-      },
-    };
-  }
-
+  const loss = Math.max(0, effectiveCost - (invalid ? 0 : finalPrice));
   return {
-    ok: true,
-    status: "safe",
-    isBelowCost: false,
-    isBelowFloor: false,
-    isCostUnknown: false,
-    authorizedOverride: false,
-    effectiveCost,
-    effectiveFloor,
-    inventoryCost: invCost,
-    replacementCost: repCost,
-    lossAmountToman: 0,
-    lossPct: 0,
-    reason: null,
-    auditRecord: null,
+    ok: status === "safe", status, isBelowCost, isBelowFloor, isCostUnknown: unknown,
+    authorizedOverride: false, effectiveCost, effectiveFloor, inventoryCost: invCost, replacementCost: repCost,
+    lossAmountToman: invalid ? 0 : loss, lossPct: unknown || invalid ? 0 : loss / effectiveCost * 100,
+    reason: reasons[status], auditRecord: null,
   };
 }

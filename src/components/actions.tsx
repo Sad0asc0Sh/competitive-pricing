@@ -109,7 +109,7 @@ export function RunButton({
             <>
               {" · "}
               <Link href={`/runs?run=${msg.runId}`} className="underline hover:opacity-80">
-                جزئیات اجرا #{msg.runId.toLocaleString("fa-IR")} ←
+                نتایج و لینک پنل‌های ترب ←
               </Link>
             </>
           )}
@@ -350,6 +350,7 @@ export function DecisionActions({
   initialDiscountPct,
   initialCampaignType,
   effectiveCost,
+  hardFloor,
   quickPrices,
 }: {
   decisionId?: number;
@@ -362,6 +363,7 @@ export function DecisionActions({
   initialDiscountPct?: number | null;
   initialCampaignType?: string | null;
   effectiveCost?: number | null;
+  hardFloor?: number | null;
   quickPrices?: Array<{ label: string; price: number }>;
 }) {
   const targetId = decisionId ?? id ?? 0;
@@ -369,10 +371,6 @@ export function DecisionActions({
   const toast = useToast();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [showOverrideForm, setShowOverrideForm] = useState(false);
-  const [authorizedBy, setAuthorizedBy] = useState("");
-  const [belowCostReason, setBelowCostReason] = useState("");
-
   const [showEditPanel, setShowEditPanel] = useState(false);
   const [editFinalPrice, setEditFinalPrice] = useState(
     initialFinalPrice && initialFinalPrice > 0 ? String(Math.round(initialFinalPrice)) : "",
@@ -391,25 +389,11 @@ export function DecisionActions({
       : parsedFinal;
   const previewProfit =
     effectiveCost && effectiveCost > 0 && parsedFinal > 0 ? parsedFinal - effectiveCost : null;
-  const effectiveBelowFloor =
-    showEditPanel && parsedFinal > 0
-      ? effectiveCost && effectiveCost > 0
-        ? parsedFinal <= effectiveCost
-        : isBelowFloor
-      : isBelowFloor;
-
-  const act = (
-    action: "approve" | "reject" | "retry_sync",
-    overrideOpts?: { allowBelowCost: boolean; belowCostReason: string; authorizedBy: string },
-  ) => {
-    if (action === "approve" && effectiveBelowFloor && !overrideOpts?.allowBelowCost) {
-      setShowOverrideForm(true);
-      const warn = "این تصمیم زیر کف هزینه/سود است؛ برای تایید، مجوز صریح مدیریت (Override) را ثبت کنید.";
-      setMsg({ ok: false, text: warn });
-      toast.info(warn);
-      return;
-    }
-
+  const effectiveBelowFloor = showEditPanel
+    ? !parsedFinal || !effectiveCost || parsedFinal <= effectiveCost || parsedFinal < (hardFloor ?? 0)
+    : isBelowFloor;
+  const act = (action: "approve" | "reject" | "retry_sync") => {
+    if (action !== "reject" && effectiveBelowFloor) return;
     const editPayload =
       action === "approve" && showEditPanel && parsedFinal > 0
         ? {
@@ -429,26 +413,9 @@ export function DecisionActions({
           action,
           force,
           ...editPayload,
-          ...(overrideOpts?.allowBelowCost
-            ? {
-                allowBelowCost: true,
-                belowCostReason: overrideOpts.belowCostReason,
-                authorizedBy: overrideOpts.authorizedBy,
-              }
-            : {}),
         }),
       });
-      if (
-        !ok &&
-        (data.belowCostBlocked === true ||
-          data.code === "BELOW_FLOOR_BLOCKED" ||
-          data.code === "BELOW_COST_BLOCKED")
-      ) {
-        setShowOverrideForm(true);
-      } else if (ok) {
-        setShowOverrideForm(false);
-        setShowEditPanel(false);
-      }
+      if (ok) setShowEditPanel(false);
       const text = String(data.message ?? (ok ? "انجام شد" : data.error ?? "خطا"));
       setMsg({ ok, text });
       if (ok) toast.success(text);
@@ -464,7 +431,7 @@ export function DecisionActions({
           <button
             type="button"
             className="btn-primary flex-1 text-xs sm:flex-initial"
-            disabled={pending}
+            disabled={pending || effectiveBelowFloor}
             onClick={() => act("retry_sync")}
           >
             {pending && <IconSpinner className="h-3.5 w-3.5" />}
@@ -474,13 +441,13 @@ export function DecisionActions({
           <button
             type="button"
             className={`flex-1 sm:flex-initial ${effectiveBelowFloor ? "btn-danger text-xs" : "btn-success"}`}
-            disabled={pending}
+            disabled={pending || effectiveBelowFloor}
             onClick={() => act("approve")}
           >
             {pending && <IconSpinner className="h-3.5 w-3.5" />}
             <span>
               {effectiveBelowFloor
-                ? "⚠️ تایید با مجوز زیر کف…"
+                ? "قیمت نیاز به اصلاح دارد"
                 : showEditPanel
                   ? "✅ ذخیره تغییرات و تأیید"
                   : "تأیید و اعمال"}
@@ -604,7 +571,7 @@ export function DecisionActions({
             <button
               type="button"
               className={`flex-1 text-xs sm:flex-initial ${effectiveBelowFloor ? "btn-danger" : "btn-success"}`}
-              disabled={pending || parsedFinal <= 0}
+              disabled={pending || effectiveBelowFloor}
               onClick={() => act("approve")}
             >
               {pending && <IconSpinner className="h-3.5 w-3.5" />}
@@ -621,49 +588,6 @@ export function DecisionActions({
         </div>
       )}
 
-      {showOverrideForm && (
-        <div className="w-full space-y-2 rounded-xl border border-rose-300 bg-rose-50 p-3 text-right sm:w-80">
-          <div className="text-xs font-bold text-rose-900">
-            🛡️ مجوز صریح فروش زیر کف قیمت خرید / سود
-          </div>
-          <input
-            className="input text-xs"
-            placeholder="نام تأییدکننده (مثلاً مدیر بازرگانی)"
-            value={authorizedBy}
-            onChange={(e) => setAuthorizedBy(e.target.value)}
-          />
-          <input
-            className="input text-xs"
-            placeholder="علت مجوز (حداقل ۵ کاراکتر)"
-            value={belowCostReason}
-            onChange={(e) => setBelowCostReason(e.target.value)}
-          />
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn-danger flex-1 text-xs sm:flex-initial"
-              disabled={pending || authorizedBy.trim().length < 2 || belowCostReason.trim().length < 5}
-              onClick={() =>
-                act("approve", {
-                  allowBelowCost: true,
-                  authorizedBy: authorizedBy.trim(),
-                  belowCostReason: belowCostReason.trim(),
-                })
-              }
-            >
-              {pending && <IconSpinner className="h-3.5 w-3.5" />}
-              <span>ثبت مجوز و اعمال</span>
-            </button>
-            <button
-              type="button"
-              className="btn-secondary flex-1 text-xs sm:flex-initial"
-              onClick={() => setShowOverrideForm(false)}
-            >
-              انصراف
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

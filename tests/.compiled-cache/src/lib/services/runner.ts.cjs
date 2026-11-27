@@ -475,11 +475,10 @@ async function runExpiryGuard(targets, appliedProductIds, intervalMinutes, runId
         if (remainingMs <= 0 || remainingMs > horizonMs)
             continue;
         const safePrice = p.currentFinalPrice || p.currentBasePrice || 0;
-        const realCost = p.costPrice > 0 ? p.costPrice : 0;
-        const hardFloor = p.currentHardFloorPrice ?? 0;
+        const { effectiveCostPrice: realCost, hardFloorPrice: hardFloor } = await currentSupply(p);
         // ۴.۱.۱: هرگز هزینه‌ی ساختگی (قیمت × ۰٫۸۵) به فروشگاه نرود؛ اگر نه هزینه واقعی
         // داریم و نه خط قرمز، push نمی‌کنیم (سند فروشگاه با داده نادرست آلوده نمی‌شود).
-        if (safePrice <= 0 || (realCost <= 0 && hardFloor <= 0)) {
+        if (safePrice <= 0 || realCost <= 0) {
             await (0, bootstrap_1.logActivity)("runner", `گارد انقضا: برای محصول ${p.sku} هزینه واقعی/خط قرمز موجود نیست — push «بدون کمپین» انجام نشد`, { productId: p.id, runId, safePrice, realCost, hardFloor }, "warn");
             continue;
         }
@@ -723,6 +722,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         result.reviewReasons.push("اولین استعلام خودکار بدون لینک ترب و بدون قیمت خرید همکار — نیازمند یک‌بار تایید کارت ترب در صف بازبینی");
     }
     const strictlyAboveCost = result.finalPrice != null &&
+        result.supply.effectiveCostPrice > 0 &&
         result.supply.hardFloorPrice > 0 &&
         result.finalPrice >= result.supply.hardFloorPrice &&
         result.finalPrice > result.supply.effectiveCostPrice;
@@ -744,15 +744,12 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         if (marginGate.reason)
             result.reviewReasons.push(marginGate.reason);
     }
-    const costlessPolicyAuthorized = Boolean(allowCostless &&
-        (product.torobPrk || product.torobUrl) &&
-        result.confidence >= Math.max(0.9, config.costless?.minConfidence ?? 0.9));
     // نظارت انسانی قطعی: هیچ تصمیمی بدون تأیید مدیر در پنل قیمت‌گذاری خودکار به فروشگاه ارسال نمی‌شود
     const readyForApproval = Boolean(!result.rejectedBySupervisor &&
         result.finalPrice != null &&
         !result.needsReview &&
         !result.isProvisional &&
-        (strictlyAboveCost || costlessPolicyAuthorized));
+        strictlyAboveCost);
     const status = resolveInitialDecisionStatus({
         rejectedBySupervisor: Boolean(result.rejectedBySupervisor),
         hasFinalPrice: Boolean(result.finalPrice),
@@ -807,6 +804,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     // تخصیص کمپین فقط زمانی انجام می‌شود که تصمیم رد یا خطاددار نباشد!
     if (status !== "rejected" &&
         status !== "failed" &&
+        strictlyAboveCost &&
         result.discountPct != null &&
         result.finalPrice) {
         const pick = (0, campaigns_1.pickCampaign)(campaigns, {
@@ -845,6 +843,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
                 type: pick.type,
                 campaignName: pick.campaignName,
                 badgeTheme: pick.badgeTheme,
+                endsAt: campaignEndsAt?.toISOString() ?? null,
                 showInFeaturedDesired: pickShowInFeatured,
                 cardIndex,
             },
@@ -953,7 +952,10 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         }
     }
     // قفل کردن PRK در دیتابیس فقط زمانی که تصمیم اعمال شده یا گیت تطابق هویت بالای آستانه تایید خودکار (approve) باشد!
-    const identityApproved = result.supervisor.gates.identity_match?.verdict === "approve";
+    // A cached primary PRK skips discovery on the next run and loses the secondary panels.
+    const combinedPanels = Array.isArray(source.meta?.panels) && source.meta.panels.length > 1;
+    const identityApproved = source.ok && !isSimulated && !combinedPanels &&
+        result.supervisor.gates.identity_match?.verdict === "approve";
     // P0-1 (M2): write-back قیمت خرید ممنوع. قیمت همکار فقط در replacementCost ثبت می‌شود؛
     // costPrice (هزینه موجودی) هرگز از لیست همکار بازنویسی نمی‌شود (INV-2).
     const lowestQuoteCost = (0, exports.safeInt)(result.supply.lowestQuoteCost);
@@ -1037,10 +1039,59 @@ function resolveApplyOptions(campaignEndsAtOrOpts, opts) {
         opts: opts ?? {},
     };
 }
-/**
- * اعمال ویرایش دستی مدیر (اصلاح قیمت نهایی یوزر و روشن/خاموش کردن تخفیف نمایشی خط‌خورده) روی تصمیم پیش از ارسال به فروشگاه.
- * خط قرمز کف سود پس از این تابع همچنان در `applyDecision` به‌صورت قطعی کنترل می‌شود.
- */
+/** Resolve active supplier quotes again just before sending a price. */
+async function currentSupply(p) {
+    const { config } = await (0, bootstrap_1.getProfileConfig)(p.profileId);
+    const supply = (0, sourcing_1.resolveSupplyCost)({
+        manualCostPrice: p.costPrice, supplierQuotes: p.supplierQuotes,
+        minMarginPctOverride: p.minMarginPct, minProfitAmountOverride: p.minProfitAmount, config,
+    });
+    return { effectiveCostPrice: Math.max(supply.effectiveCostPrice, p.costPrice),
+        hardFloorPrice: Math.max(supply.hardFloorPrice, p.currentHardFloorPrice ?? 0), config };
+}
+async function decisionSafety(p, d, finalPrice) {
+    const current = await currentSupply(p);
+    const safety = (0, approval_1.evaluateDecisionFloorSafety)({
+        finalPrice, finalStep: 1,
+        effectiveCostPrice: current.effectiveCostPrice > 0 ? Math.max(d.effectiveCostPrice ?? 0, current.effectiveCostPrice) : 0,
+        hardFloorPrice: Math.max(d.hardFloorPrice ?? 0, current.hardFloorPrice),
+    });
+    return { safety, config: current.config };
+}
+async function validatePromotion(p, d, finalPrice, basePrice, discountPct, campaignType, config, manualSelection) {
+    if (!discountPct && campaignType === "none" && basePrice === finalPrice)
+        return {};
+    const evidence = d.steps?.find((s) => s.step === "discount")?.data;
+    const reference = Number(evidence?.referencePrice);
+    const kind = evidence?.referenceKind;
+    if (config.discount.enabled === false || (kind !== "own_price_7d" && kind !== "market_p75") ||
+        !Number.isFinite(reference) || basePrice > reference || basePrice <= finalPrice ||
+        !Number.isInteger(discountPct) || discountPct < config.discount.minDiscountPct || discountPct > config.discount.maxDiscountPct ||
+        Math.round(basePrice * (1 - discountPct / 100)) !== finalPrice) {
+        return { error: "تخفیف با مرجع ثبت‌شده یا بازهٔ مجاز سازگار نیست. قیمت مستقیم را انتخاب کنید یا دوباره استعلام بگیرید." };
+    }
+    if (campaignType === "none")
+        return {};
+    const recorded = d.steps?.find(s => s.step === "campaign")?.data;
+    const campaigns = await index_ts_1.db.select().from(schema_1.discountCampaigns).where((0, drizzle_orm_1.eq)(schema_1.discountCampaigns.type, campaignType));
+    const history = campaignType === "flash"
+        ? await computeOwnDiscountContext(p.id, config.discount.ownPriceWindowDays ?? 7, config.discount.ownPriceMinHoldHours ?? 48)
+        : null;
+    const pick = (0, campaigns_1.pickCampaign)(campaigns, {
+        productId: p.id, category: p.category, cardIndex: Number(recorded?.cardIndex) || 1,
+        preferredCampaignType: manualSelection ? campaignType : p.preferredCampaignType,
+        finalPrice, discountPct, discountKind: kind, ownAvg7d: history?.ownAvg7d,
+        projectedNationalRank: d.projectedNationalRank, projectedLocalRank: d.projectedLocalRank,
+    });
+    if (pick.type !== campaignType || !pick.endsAt)
+        return { error: "این قیمت شرایط کمپین انتخاب‌شده را ندارد" };
+    const recordedEnd = recorded?.type === campaignType && typeof recorded.endsAt === "string"
+        ? new Date(recorded.endsAt).getTime() : Infinity;
+    const endsAt = new Date(Math.min(pick.endsAt.getTime(), recordedEnd));
+    if (!(endsAt.getTime() > Date.now()))
+        return { error: "بازهٔ کمپین تمام شده است؛ دوباره استعلام بگیرید" };
+    return { endsAt };
+}
 async function applyHumanOverrideToDecision(decisionId, override) {
     const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
     if (!d)
@@ -1097,19 +1148,21 @@ async function applyHumanOverrideToDecision(decisionId, override) {
             }
         }
     }
-    const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, p.costPrice ?? 0);
+    const { safety, config } = await decisionSafety(p, d, nextFinal);
+    if (!safety.ok)
+        return { ok: false, finalPrice: nextFinal, message: safety.reason };
+    const manualSelection = nextCampaign !== d.campaignType ||
+        d.steps.some(s => s.step === "human_edit" && s.data?.manualSelection === true);
+    const promo = await validatePromotion(p, d, nextFinal, nextBase, nextPct, nextCampaign, config, manualSelection);
+    if (promo.error)
+        return { ok: false, finalPrice: nextFinal, message: promo.error };
+    const effectiveCost = safety.effectiveCost;
     const netProfitToman = effectiveCost > 0 ? nextFinal - effectiveCost : 0;
     const netMarginPct = effectiveCost > 0 ? Math.round(((nextFinal - effectiveCost) / effectiveCost) * 10000) / 100 : 0;
-    const idempotencyKey = (0, connectors_1.buildIdempotencyKey)({
-        productId: p.id,
-        sku: p.sku,
-        basePrice: nextBase,
-        finalPrice: nextFinal,
-        discountPct: nextPct,
-        campaignType: nextCampaign,
-        decisionId: d.id,
-        confidence: d.confidence,
-    });
+    const unchanged = nextFinal === d.finalPrice && nextBase === d.basePrice &&
+        nextCampaign === d.campaignType && nextPct === d.discountPct;
+    const idempotencyKey = unchanged && d.idempotencyKey ? d.idempotencyKey
+        : `decision-${d.id}-p${p.id}-${nextFinal}-${nextBase}-${nextPct}-${nextCampaign}`;
     const nextSteps = [
         ...(Array.isArray(d.steps) ? d.steps : []),
         {
@@ -1119,7 +1172,8 @@ async function applyHumanOverrideToDecision(decisionId, override) {
                 ? `قیمت نهایی یوزر به ${nextFinal.toLocaleString("fa-IR")} تومان با ${nextPct}% تخفیف نمایشی (سقف ${nextBase.toLocaleString("fa-IR")} تومان · کمپین: ${nextCampaign}) تنظیم شد`
                 : `قیمت مستقیم نهایی یوزر به ${nextFinal.toLocaleString("fa-IR")} تومان بدون تخفیف نمایشی تنظیم شد`,
             level: "info",
-            data: { finalPrice: nextFinal, basePrice: nextBase, discountPct: nextPct, campaignType: nextCampaign },
+            data: { finalPrice: nextFinal, basePrice: nextBase, discountPct: nextPct, campaignType: nextCampaign,
+                manualSelection },
         },
     ];
     await index_ts_1.db
@@ -1141,7 +1195,7 @@ async function applyHumanOverrideToDecision(decisionId, override) {
     return { ok: true, finalPrice: nextFinal };
 }
 async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
-    const { campaignEndsAt, opts: resolvedOpts } = resolveApplyOptions(campaignEndsAtOrOpts, opts);
+    const { campaignEndsAt: requestedEnd, opts: resolvedOpts } = resolveApplyOptions(campaignEndsAtOrOpts, opts);
     const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
     if (!d || !d.finalPrice || !d.basePrice) {
         return { ok: false, code: "INVALID_DECISION", message: "تصمیم نامعتبر" };
@@ -1172,42 +1226,16 @@ async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
             message: "این تصمیم توسط ناظر SystemOne رد شده (امتیاز زیر آستانه رد) و قابل اعمال نیست. برای بازبینی، محصول را با منبع/قیمت اصلاح و دوباره استعلام بگیرید.",
         };
     }
-    const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, p.costPrice ?? 0);
-    const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p.currentHardFloorPrice ?? 0);
-    // گارد کالاهای بدون قیمت خرید: بدون هزینه تمام‌شده و کف سود، اعمال بدون تایید صریح انسانی (force) ممنوع است
-    if (effectiveCost <= 0 && effectiveFloor <= 0 && !resolvedOpts.force) {
-        return {
-            ok: false,
-            code: "MISSING_COST_BASIS",
-            message: "قیمت خرید/تامین و خط قرمز سود برای این محصول مشخص نیست؛ اعمال بدون تایید صریح انسانی (force) مجاز نیست.",
-        };
-    }
-    const belowCostReason = typeof resolvedOpts.belowCostReason === "string" ? resolvedOpts.belowCostReason.trim() : "";
-    const authorizedBy = typeof resolvedOpts.authorizedBy === "string" ? resolvedOpts.authorizedBy.trim() : "";
-    const hasExplicitBelowCostAuth = Boolean(resolvedOpts.allowBelowCost === true && belowCostReason.length >= 5 && authorizedBy.length >= 2);
-    // خط قرمز اول سیستم: حتی با force=true عادی هرگز قیمت زیر قیمت خرید یا زیر کف سود اعمال نمی‌شود!
-    // تنها مسیر مجاز: allowBelowCost=true به همراه دلیل مکتوب (حداقل ۵ نویسه) و نام تاییدکننده (authorizedBy).
-    if (effectiveCost > 0 && d.finalPrice <= effectiveCost && !hasExplicitBelowCostAuth) {
-        return {
-            ok: false,
-            code: "BELOW_COST_PRICE",
-            message: `خطای خط قرمز سود: قیمت فروش (${d.finalPrice.toLocaleString("fa-IR")}) نمی‌تواند کمتر یا مساوی قیمت خرید/تامین (${effectiveCost.toLocaleString("fa-IR")}) باشد (اعمال زیر قیمت خرید نیازمند مجوز صریح allowBelowCost، دلیل مکتوب و نام تاییدکننده است)`,
-        };
-    }
-    if (effectiveFloor > 0 && d.finalPrice < effectiveFloor && !hasExplicitBelowCostAuth) {
-        return {
-            ok: false,
-            code: "BELOW_HARD_FLOOR",
-            message: `خط قرمز فروش: قیمت نهایی (${d.finalPrice.toLocaleString("fa-IR")}) از خط قرمز فعلی (${effectiveFloor.toLocaleString("fa-IR")}) کمتر است (اعمال زیر کف سود نیازمند مجوز صریح allowBelowCost، دلیل مکتوب و نام تاییدکننده است).`,
-        };
-    }
-    const belowCostOverride = hasExplicitBelowCostAuth
-        ? {
-            allowBelowCost: true,
-            reason: belowCostReason,
-            authorizedBy,
-        }
-        : null;
+    const { safety, config } = await decisionSafety(p, d, d.finalPrice);
+    if (!safety.ok)
+        return { ok: false, code: safety.status.toUpperCase(), message: safety.reason };
+    const { effectiveCost, effectiveFloor } = safety;
+    const manualSelection = d.steps.some(s => s.step === "human_edit" && s.data?.manualSelection === true);
+    const promo = await validatePromotion(p, d, d.finalPrice, d.basePrice, d.discountPct ?? 0, d.campaignType ?? "none", config, manualSelection);
+    if (promo.error)
+        return { ok: false, code: "INVALID_PROMOTION", message: promo.error };
+    const campaignEndsAt = promo.endsAt && requestedEnd
+        ? new Date(Math.min(requestedEnd.getTime(), promo.endsAt.getTime())) : promo.endsAt ?? null;
     const idempotencyKey = d.idempotencyKey ||
         (0, connectors_1.buildIdempotencyKey)({
             productId: p.id,
@@ -1237,7 +1265,6 @@ async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
         campaignEndsAt: campaignEndsAt ? campaignEndsAt.toISOString() : null,
         decisionId: d.id,
         idempotencyKey,
-        belowCostOverride,
         confidence: d.confidence,
         projectedNationalRank: d.projectedNationalRank,
         projectedLocalRank: d.projectedLocalRank,
@@ -1279,24 +1306,6 @@ async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
         };
     }
     const confirmedFinalPrice = push.confirmedPrice ?? d.finalPrice;
-    const updatedSteps = [...(d.steps ?? [])];
-    if (belowCostOverride) {
-        updatedSteps.push({
-            step: "below_cost_override",
-            title: "مجوز ممیزی‌شده فروش زیر قیمت خرید/کف سود",
-            message: `اعمال با مجوز صریح توسط «${belowCostOverride.authorizedBy}» — دلیل: ${belowCostOverride.reason}`,
-            level: "warn",
-            data: {
-                allowBelowCost: true,
-                authorizedBy: belowCostOverride.authorizedBy,
-                reason: belowCostOverride.reason,
-                effectiveCost,
-                effectiveFloor,
-                finalPrice: confirmedFinalPrice,
-                authorizedAt: attemptTime.toISOString(),
-            },
-        });
-    }
     // فقط پس از تایید قطعی فروشگاه، قیمت‌های فعلی محصول و وضعیت applied بروزرسانی می‌شوند
     await index_ts_1.db
         .update(schema_1.products)
@@ -1309,7 +1318,7 @@ async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
         currentBadgeTheme: d.badgeTheme ?? "green-orange",
         currentShowInFeatured: d.showInFeatured ?? false,
         // P0-3: تایمر کمپین روی خودِ محصول ذخیره می‌شود تا پیوستگی و گارد انقضا کار کند
-        currentCampaignEndsAt: campaignEndsAt ?? (p.currentCampaignEndsAt ?? null),
+        currentCampaignEndsAt: campaignEndsAt,
         lastDecisionId: d.id,
         needsRefresh: false,
         status: "active",
@@ -1327,16 +1336,14 @@ async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
         pushAttempts: nextAttempts,
         storeConfirmedPrice: confirmedFinalPrice,
         idempotencyKey,
-        steps: updatedSteps,
     })
         .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
     // ۴.۲.۱ (F5): در این ساختار، قیمت محصول فقط پس از تایید قطعی فروشگاه نوشته می‌شود (بالا)؛
     // بنابراین در شکست push، «قیمت فعلی» موتور همان قیمت قبل از تصمیم می‌ماند و اجرای بعد دوباره تلاش می‌کند.
-    await (0, bootstrap_1.logActivity)("apply", `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف تاییدشده ${confirmedFinalPrice} | کمپین: ${d.campaignType}${campaignEndsAt ? ` تا ${campaignEndsAt.toISOString()}` : ""} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${resolvedOpts.force ? " (اعمال دستی با force)" : ""}${belowCostOverride ? ` [مجوز زیر خرید توسط ${belowCostOverride.authorizedBy}]` : ""}`, {
+    await (0, bootstrap_1.logActivity)("apply", `قیمت ${p.sku}: سقف معیار ${d.basePrice} با ${d.discountPct}% تخفیف → کف تاییدشده ${confirmedFinalPrice} | کمپین: ${d.campaignType}${campaignEndsAt ? ` تا ${campaignEndsAt.toISOString()}` : ""} | رتبه مشهد: #${d.projectedLocalRank ?? "-"} — ${push.message}${resolvedOpts.force ? " (اعمال دستی با force)" : ""}`, {
         decisionId: d.id,
         productId: p.id,
         forced: !!resolvedOpts.force,
-        belowCostOverride: belowCostOverride ?? undefined,
         idempotencyKey,
         confirmedPrice: confirmedFinalPrice,
         attempts: nextAttempts,
@@ -1505,12 +1512,13 @@ async function cleanupWrongTimedSaleCards(opts) {
             .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.productId, p.id));
         cleanedProducts.push(`${p.name} (${p.sku})`);
         if (safePrice > 0) {
+            const current = await currentSupply(p);
             const pushRes = await (0, connectors_1.pushToStore)({
                 productId: p.id,
                 sku: p.sku,
                 storeExternalId: p.storeExternalId,
-                ...(p.costPrice > 0 ? { effectiveCostPrice: p.costPrice } : {}),
-                hardFloorPrice: p.currentHardFloorPrice ?? 0,
+                effectiveCostPrice: current.effectiveCostPrice,
+                hardFloorPrice: current.hardFloorPrice,
                 monitoredMarketCeiling: safePrice,
                 basePrice: safePrice,
                 finalPrice: safePrice,

@@ -66,6 +66,8 @@ export const badgeThemeLabel: Record<string, string> = {
 };
 
 export const strategyLabel: Record<string, string> = {
+  single_competitor: "مقایسه با تنها رقیب معتبر",
+  hold_own_price: "حفظ قیمت فروشگاه",
   national_rank1_undercut: "رتبه ۱ کل ترب و مشهد",
   local_city_rank1_undercut: "رتبه ۱ شهر مشهد",
   local_cluster_rank1: "صدر گروه فروشندگان مشهد",

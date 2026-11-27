@@ -23,13 +23,13 @@ const labels: Record<string, string> = {
   staleSafetyBufferPct: "ضریب احتیاط روی لیست قدیمی همکاران ٪",
   neverBelowManualCost: "هرگز کمتر از قیمت خرید ثبت‌شده انبار نباشد (سازگاری قدیمی)",
   costPolicy: "سیاست تقاطع هزینه انبار و قیمت ریپلیس (replacement_floor | max_inventory_replacement | legacy_never_below_manual)",
-  allowAutoApplyWithoutCost: "اعمال خودکار قیمت معیار بازار حتی در نبود لیست/قیمت خرید (پیش‌فرض غیرفعال = همیشه ریویو)",
+  allowAutoApplyWithoutCost: "محاسبهٔ پیشنهاد بر پایهٔ اجماع بازار در نبود بهای خرید",
   allowMarketMakerWithoutCost: "مجوز صریح سیاست تجاری Market-Maker در نبود قیمت خرید (پیش‌فرض غیرفعال)",
   costlessSafePercentile: "صدک امن بازار در نبود لیست خرید (حذف نیمه ارزان مشکوک)",
   costlessSafetyMarginPct: "حاشیه ایمنی ضدضرر روی هسته بازار در نبود لیست خرید ٪",
   impliedCostBackoffPct: "فاصله تخمینی قیمت خرید از کف امن بازار در نبود لیست ٪",
   filters: "۱) فیلترهای اعتبار داده ترب",
-  minSellerCount: "حداقل تعداد فروشنده (لیستینگ ادغام‌شده)",
+  minSellerCount: "تعداد فروشندهٔ مرجع برای امتیاز اطمینان بازار",
   maxOfferAgeDays: "حداکثر قدمت قیمت رقبا در ترب (روز)",
   excludeAds: "حذف آگهی‌های تبلیغاتی (is_adv)",
   excludeOutOfStock: "حذف ناموجودها",
@@ -100,7 +100,6 @@ const labels: Record<string, string> = {
   marketUpperPercentile: "صدک سقف بازار تحت رصد (مثلاً ۸۵ یعنی صدک ۸۵ فروشندگان معتبر بدون پرت)",
   maxCeilingAboveMedianPct: "حداکثر فاصله مجاز سقف از میانه بازار ٪ (سپر ضد قیمت پرت)",
   calibrateCeilingForExactFloor: "کالیبراسیون دقیق سقف تا با درصد تخفیف صحیح دقیقاً به کف هدف برسد",
-  markupPct: "درصد افزایش روی کف (در حالت markup یا نبود داده)",
   minDiscountPct: "حداقل درصد تخفیف روی سقف ٪",
   maxDiscountPct: "حداکثر درصد تخفیف روی سقف ٪",
   ownPriceWindowDays: "پنجره تاریخی قیمت خودی برای مرجع تخفیف (روز)",
@@ -122,7 +121,7 @@ const labels: Record<string, string> = {
   costless: "۱۱) مسیر کالاهای بدون قیمت خرید (Provisional)",
   provisionalPercentile: "صدک استخراج قیمت موقت بازار در نبود قیمت خرید",
   minCredibleFresh: "حداقل فروشندگان معتبر و به‌روز برای فعال‌شدن قیمت موقت",
-  autoApply: "اجازه اعمال خودکار قیمت موقت بدون قیمت خرید (پیش‌فرض false = همیشه ریویو)",
+  autoApply: "محاسبهٔ پیشنهاد موقت بدون بهای خرید",
   engine: "۱۲) نسخه موتور",
   version: "نسخه موتور قیمت‌گذاری",
   estimator: "۱۳) تخمین‌گر احتمالی نسخه ۲ (Estimator v2)",
@@ -160,7 +159,7 @@ const selectOptions: Record<string, { value: string; label: string }[]> = {
     { value: "weighted_priority", label: "میانگین وزنی اولویت همکاران" },
   ],
   "sourcing.costPolicy": [
-    { value: "replacement_floor", label: "کف از قیمت ریپلیس (هشدار در صورت عبور از هزینه انبار)" },
+    { value: "replacement_floor", label: "مبنای تأمین از ریپلیس با رعایت کف خرید انبار" },
     { value: "max_inventory_replacement", label: "کف از بیشینه هزینه انبار و ریپلیس (محافظه‌کارانه)" },
     { value: "legacy_never_below_manual", label: "سازگاری ۳.۶: هرگز کمتر از هزینه انبار" },
   ],
@@ -179,13 +178,11 @@ const selectOptions: Record<string, { value: string; label: string }[]> = {
     { value: "market_percentile_ceiling", label: "صدک بالای بازار تحت رصد (حذف کامل پرت‌ها — پیشنهادی)" },
     { value: "highest_valid_seller", label: "بالاترین فروشنده معتبر بازار (محصور در سپر ضدپرت)" },
     { value: "trimmed_upper_cluster", label: "میانگین نیمه بالایی فروشندگان معتبر بازار" },
-    { value: "markup", label: "افزایش درصدی ثابت روی کف هدف (Markup)" },
   ],
   "discount.basePriceMode": [
     { value: "market_ceiling", label: "سقف اصولی بازار (market_ceiling)" },
     { value: "market_upper", label: "صدک بالای بازار (market_upper)" },
     { value: "cluster_ceiling", label: "سقف خوشه بالایی (cluster_ceiling)" },
-    { value: "markup", label: "افزایش درصدی روی کف (markup)" },
   ],
   "discount.referencePriority": [
     { value: "market_first", label: "اولویت سقف واقعی بازار ترب (پیشنهادی برای رقابت)" },
@@ -445,7 +442,8 @@ export function ProfileEditor({ profiles }: { profiles: PricingProfile[] }) {
       <div className="space-y-3">
         {sections.map((sec) => {
           const sectionTitle = labels[sec] ?? sec;
-          const entries = Object.entries(cfg[sec] ?? {}).filter(([, v]) => {
+          const entries = Object.entries(cfg[sec] ?? {}).filter(([key, v]) => {
+            if ((sec === "discount" && key === "markupPct") || (sec === "guards" && key === "requireHumanApproval")) return false;
             if (
               v != null &&
               typeof v === "object" &&

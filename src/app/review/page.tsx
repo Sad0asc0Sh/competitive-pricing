@@ -1,3 +1,4 @@
+import { decisionPanels } from "@/lib/pricing/listing";
 import { db } from "@/db";
 import { competitorOffers, priceDecisions, products } from "@/db/schema";
 import {
@@ -65,8 +66,6 @@ export default async function ReviewPage() {
         cost: products.costPrice,
         hardFloor: products.currentHardFloorPrice,
         current: products.currentFinalPrice,
-        torobUrl: products.torobUrl,
-        torobPrk: products.torobPrk,
       })
       .from(priceDecisions)
       .innerJoin(products, eq(products.id, priceDecisions.productId))
@@ -78,7 +77,6 @@ export default async function ReviewPage() {
         name: products.name,
         sku: products.sku,
         torobUrl: products.torobUrl,
-        torobPrk: products.torobPrk,
       })
       .from(priceDecisions)
       .innerJoin(products, eq(products.id, priceDecisions.productId))
@@ -142,16 +140,9 @@ export default async function ReviewPage() {
   }
 
   const pendingItems: ReviewPendingItem[] = rows.map(
-    ({ d, name, sku, cost, hardFloor, current, torobUrl, torobPrk }) => {
+    ({ d, name, sku, cost, hardFloor, current }) => {
       const steps = Array.isArray(d.steps) ? d.steps : [];
-      const sourceStep = steps.find((s) => s.step === "source");
-      const torobTitle =
-        typeof sourceStep?.data?.productTitle === "string" ? sourceStep.data.productTitle : null;
-      const stepPrk = typeof sourceStep?.data?.prk === "string" ? sourceStep.data.prk : null;
-      const resolvedPrk = torobPrk || stepPrk || null;
-      const resolvedTorobUrl =
-        torobUrl || (resolvedPrk ? `https://torob.com/p/${resolvedPrk}/` : null);
-
+      const panels = decisionPanels(steps);
       const reasons = steps.find((s) => s.step === "decision")?.message ?? "";
       const supStep = steps.find((s) => s.step === "supervisor");
       const supMsg = supStep?.message ?? null;
@@ -192,9 +183,9 @@ export default async function ReviewPage() {
       const readyForApproval = Boolean(
         !isBelowFloor &&
           !syncFailed &&
-          !d.marketConflict &&
+          !d.marketConflict && !d.isSimulated && effectiveCost > 0 &&
           finalPrice > 0 &&
-          (errorRiskPct <= 20 || confidence >= 0.8 || gateStep?.data?.readyForApproval === true),
+          gateStep?.data?.readyForApproval === true,
       );
 
       return {
@@ -233,9 +224,8 @@ export default async function ReviewPage() {
         isBelowFloor,
         syncFailed,
         readyForApproval,
-        torobUrl: resolvedTorobUrl,
-        torobPrk: resolvedPrk,
-        torobTitle,
+        panels,
+        effectiveFloor,
         reasons,
         supMsg,
         supOverallPct,
@@ -248,13 +238,9 @@ export default async function ReviewPage() {
     },
   );
 
-  const rejectedItems: ReviewRejectedItem[] = rejectedRows.map(({ d, name, sku, torobUrl, torobPrk }) => {
+  const rejectedItems: ReviewRejectedItem[] = rejectedRows.map(({ d, name, sku, torobUrl }) => {
     const steps = Array.isArray(d.steps) ? d.steps : [];
-    const sourceStep = steps.find((s) => s.step === "source");
-    const torobTitle = typeof sourceStep?.data?.productTitle === "string" ? sourceStep.data.productTitle : null;
-    const stepPrk = typeof sourceStep?.data?.prk === "string" ? sourceStep.data.prk : null;
-    const resolvedPrk = torobPrk || stepPrk || null;
-    const resolvedTorobUrl = torobUrl || (resolvedPrk ? `https://torob.com/p/${resolvedPrk}/` : null);
+    const panels = decisionPanels(steps);
     const supStep = steps.find((s) => s.step === "supervisor");
     const supMsg = supStep?.message ?? "رد توسط ناظر SystemOne";
     const { overallPct: supOverallPct, gates: supGates } = extractSupervisorGates(supStep);
@@ -271,8 +257,8 @@ export default async function ReviewPage() {
       supMsg,
       supOverallPct,
       supGates,
-      torobUrl: resolvedTorobUrl,
-      torobTitle,
+      panels,
+      torobUrl: panels[0] ? `https://torob.com/p/${panels[0].prk}/` : torobUrl,
     };
   });
 

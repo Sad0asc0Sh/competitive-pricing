@@ -193,7 +193,11 @@ export function mergeConfig(partial: Partial<PricingProfileConfig> | null | unde
     rank1: { ...d.rank1, ...pRank1 },
     margin: { ...d.margin, ...(p.margin ?? {}) },
     guards: { ...d.guards, ...(p.guards ?? {}) },
-    discount: { ...d.discount, ...(p.discount ?? {}) },
+    discount: {
+      ...d.discount, ...p.discount,
+      mode: p.discount?.mode === "markup" ? d.discount.mode : p.discount?.mode ?? d.discount.mode,
+      basePriceMode: p.discount?.basePriceMode === "markup" ? d.discount.basePriceMode : p.discount?.basePriceMode ?? d.discount.basePriceMode,
+    },
     rounding: { ...d.rounding, ...(p.rounding ?? {}) },
     supervisor: {
       ...d.supervisor,

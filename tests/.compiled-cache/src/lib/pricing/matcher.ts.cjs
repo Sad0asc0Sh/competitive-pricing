@@ -81,7 +81,7 @@ function priceRatio(target, candidate) {
         return p / a;
     return null;
 }
-function evaluateTorobCandidate(target, candidate, minSellerCount = 1) {
+function evaluateTorobCandidate(target, candidate, _minSellerCount = 1) {
     const rejectBelowPct = target.rejectBelowPct ?? 45;
     const approveAbovePct = target.approveAbovePct ?? 80;
     const candText = `${candidate.titleFa ?? ""} ${candidate.titleEn ?? ""}`.trim();
@@ -111,8 +111,8 @@ function evaluateTorobCandidate(target, candidate, minSellerCount = 1) {
     const notes = [...r.notes];
     if (candidate.available === false)
         notes.push("کارت در ترب ناموجود است");
-    const sellers = candidate.sellerCount ?? 1;
-    if (sellers >= Math.max(3, minSellerCount))
+    const sellers = candidate.sellerCount ?? 0;
+    if (sellers >= 2)
         notes.push(`لیستینگ ادغام‌شده معتبر (${sellers} فروشنده)`);
     else if (sellers === 1)
         notes.push("لیستینگ تک‌فروشنده‌ای");

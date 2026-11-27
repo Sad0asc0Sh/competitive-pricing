@@ -9,6 +9,7 @@ exports.normalizeTorobInPersonSeller = normalizeTorobInPersonSeller;
 exports.parseTorobJson = parseTorobJson;
 exports.searchTorobProductV4 = searchTorobProductV4;
 exports.fetchTorobPriceTrendV4 = fetchTorobPriceTrendV4;
+const listing_1 = require("../pricing/listing");
 const client_1 = require("../ai/client");
 const filters_1 = require("../pricing/filters");
 const matcher_1 = require("../pricing/matcher");
@@ -238,7 +239,7 @@ async function searchTorobProductV4(query, targetPrk, opts) {
             const shopText = str(r.shop_text ?? "")
                 .replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1728))
                 .replace(/[٠-٩]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1584));
-            const sellerCountMatch = shopText.match(/(\d+)/);
+            const sellerCountMatch = shopText.match(/(\d+)\s*(?:فروشگاه|فروشنده)/);
             const sellerCount = num(r.shop_count ?? r.sellers_count) ||
                 (sellerCountMatch ? Number(sellerCountMatch[1]) : 1);
             return {
@@ -261,17 +262,18 @@ async function searchTorobProductV4(query, targetPrk, opts) {
             approveAbovePct: opts?.matchConfig?.approveAbovePct,
         }, candidates, opts?.matchConfig?.minSellerCount ?? 1);
         let aiIdentityCheck = null;
-        const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
+        const eligibleCards = outcome.allRanked.filter((x) => !x.rejected).slice(0, 10);
+        const eligiblePrks = new Set(eligibleCards.map((x) => x.candidate.prk));
         if (opts?.matchConfig?.aiIdentityEnabled === true &&
-            candidates.length > 0 &&
-            (!outcome.confident || nonRejectedCount > 1) &&
+            eligibleCards.length > 0 &&
+            (!outcome.confident || eligibleCards.length > 1) &&
             (await (0, client_1.aiEnabled)())) {
             const aiRes = await (0, client_1.verifyTorobMatchesWithAI)({
                 productName: cleanQuery,
                 sku: opts?.sku,
                 category: opts?.category,
                 anchorPriceToman: opts?.anchorPriceToman,
-                candidates: outcome.allRanked.slice(0, 10).map((r) => ({
+                candidates: eligibleCards.map((r) => ({
                     prk: r.candidate.prk,
                     titleFa: r.candidate.titleFa,
                     titleEn: r.candidate.titleEn,
@@ -294,9 +296,9 @@ async function searchTorobProductV4(query, targetPrk, opts) {
                 }
                 if (aiRes.verdict === "match" && aiRes.primaryPrk) {
                     const picked = candidates.find((c) => c.prk === aiRes.primaryPrk);
-                    if (picked) {
+                    if (picked && eligiblePrks.has(picked.prk)) {
                         const extraMatchedPrks = aiRes.matchedPrks
-                            .filter((id) => id !== picked.prk && candidates.some((c) => c.prk === id))
+                            .filter((id) => id !== picked.prk && eligiblePrks.has(id))
                             .slice(0, 2);
                         return {
                             prk: picked.prk,
@@ -565,6 +567,7 @@ exports.torobAdapter = {
                         meta: {
                             via: detailsUrl ? "torob_v4_details_url" : "torob_v4_api",
                             ...matchMeta,
+                            panels: panelList.map((p) => (0, listing_1.listingPanel)(p.prk, p.offers, p.totalSellerCount)),
                             ...(mergedPanelPrks.length > 1 ? { mergedPanelPrks } : {}),
                         },
                     };

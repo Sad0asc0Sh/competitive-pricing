@@ -1,3 +1,4 @@
+import { listingPanel } from "@/lib/pricing/listing";
 import { aiEnabled, verifyTorobMatchesWithAI } from "@/lib/ai/client";
 import { parsePersianRelativeDate } from "@/lib/pricing/filters";
 import { selectBestTorobSearchMatch, type BestMatchOutcome } from "@/lib/pricing/matcher";
@@ -488,11 +489,12 @@ export async function fetchViaTorobMcpServer(opts: {
     }
 
     if (outcome) {
-      const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
+      const eligibleCards = outcome.allRanked.filter((x) => !x.rejected).slice(0, 10);
+      const eligiblePrks = new Set(eligibleCards.map((x) => x.candidate.prk));
       const shouldAskAiForPanels =
         opts.matchConfig?.aiIdentityEnabled === true &&
-        cardsByPrk.size > 0 &&
-        (!outcome.confident || nonRejectedCount > 1) &&
+        eligibleCards.length > 0 &&
+        (!outcome.confident || eligibleCards.length > 1) &&
         (await aiEnabled());
 
       if (shouldAskAiForPanels) {
@@ -501,7 +503,7 @@ export async function fetchViaTorobMcpServer(opts: {
           sku: opts.sku,
           category: opts.category,
           anchorPriceToman: opts.anchorPriceToman,
-          candidates: outcome.allRanked.slice(0, 10).map((r) => ({
+          candidates: eligibleCards.map((r) => ({
             prk: r.candidate.prk,
             titleFa: r.candidate.titleFa,
             titleEn: r.candidate.titleEn,
@@ -525,10 +527,10 @@ export async function fetchViaTorobMcpServer(opts: {
           }
           if (aiRes.verdict === "match" && aiRes.primaryPrk) {
             const picked = cardsByPrk.get(aiRes.primaryPrk);
-            if (picked) {
+            if (picked && eligiblePrks.has(picked.prk)) {
               prk = picked.prk;
               detailsUrl = picked.details_url ?? detailsUrl;
-              extraMatchedPrks = aiRes.matchedPrks.filter((id) => id !== prk && cardsByPrk.has(id)).slice(0, 2);
+              extraMatchedPrks = aiRes.matchedPrks.filter((id) => id !== prk && eligiblePrks.has(id)).slice(0, 2);
               matchExplanation = `تطبیق پنل ادغام با هوش مصنوعی (${1 + extraMatchedPrks.length} پنل): ${aiRes.reasoning}`;
               matchScore = outcome.allRanked.find((x) => x.candidate.prk === prk)?.score ?? outcome.best?.score ?? 85;
             }
@@ -642,6 +644,7 @@ export async function fetchViaTorobMcpServer(opts: {
       matchScore,
       matchExplanation,
       ...(aiIdentityCheck ? { aiIdentityCheck } : {}),
+      panels: panelList.map((p) => listingPanel(p.prk, p.offers, p.totalSellerCount)),
       ...(mergedPanelPrks.length > 1 ? { mergedPanelPrks } : {}),
       // اطلاعات کفایت داده: خروجی ترب «۳۰ ارزان‌ترینِ موجود» است؛ موتور باید بداند چیزی دیده نشده یا نه
       offersTruncated: converted.offersTruncated,

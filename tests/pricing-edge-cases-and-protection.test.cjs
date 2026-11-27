@@ -31,7 +31,7 @@ test('P2. force عادی هرگز کف هزینه را دور نمی‌زند', 
   assert.equal(res.isBelowCost, true)
 })
 
-test('P3. فروش زیر قیمت خرید فقط با مجوز صریح، دلیل و تاییدکننده', () => {
+test('P3. فروش زیر قیمت خرید حتی با مجوز قبلی مسدود است', () => {
   const base = { finalPrice: 950000, effectiveCostPrice: 1000000, force: true }
   assert.equal(evaluateDecisionFloorSafety({ ...base, allowBelowCost: true }).ok, false)
   assert.equal(
@@ -46,8 +46,9 @@ test('P3. فروش زیر قیمت خرید فقط با مجوز صریح، دل
     ...base,
     authorization: { allowBelowCost: true, reason: 'clearance sale', authorizedBy: 'manager-ali' },
   })
-  assert.equal(ok.ok, true)
-  assert.ok(ok.auditRecord)
+  assert.equal(ok.ok, false)
+  assert.equal(ok.status, "blocked_below_cost")
+  assert.equal(ok.auditRecord, null)
   const tooBig = evaluateDecisionFloorSafety({
     finalPrice: 400000,
     effectiveCostPrice: 1000000,
@@ -79,8 +80,20 @@ test('P5. گرد کردن هرگز قیمت را زیر کف نمی‌برد', (
   }
 })
 
-test('P6. pickCampaign: تخفیف صفر یا کمپین منقضی/آینده فعال نمی‌شود', () => {
-  assert.equal(typeof pickCampaign, 'function')
+test('P6. هیچ‌یک از سه کمپین با ترجیح دستی از شروط مرجع، درصد و زمان عبور نمی‌کند', () => {
+  for (const type of ['flash', 'featured', 'timed_sale']) {
+    const campaign = { id: 1, name: type, type, active: true, durationHours: 12, priority: 1,
+      minDiscountPct: 5, maxDiscountPct: 30, activeHours: [], activeDays: [], categories: [] }
+    const input = { preferredCampaignType: type, finalPrice: 900, discountPct: 10, discountKind: 'own_price_7d', ownAvg7d: 1000 }
+    assert.equal(pickCampaign([campaign], input).type, type)
+    for (const patch of [{ discountPct: 0 }, { discountPct: 4 }, { discountKind: 'entry_min' }, { discountKind: null }]) {
+      assert.equal(pickCampaign([campaign], { ...input, ...patch }).type, 'none')
+    }
+    for (const patch of [{ active: false }, { endsAt: '2020-01-01' }, { startsAt: '2100-01-01' }]) {
+      assert.equal(pickCampaign([{ ...campaign, ...patch }], input).type, 'none')
+    }
+    if (type === 'flash') assert.equal(pickCampaign([campaign], { ...input, ownAvg7d: 920 }).type, 'none')
+  }
 })
 
 test('P7. آمار: ورودی‌های خراب NaN تولید نمی‌کنند', () => {

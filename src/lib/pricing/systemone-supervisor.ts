@@ -1,3 +1,4 @@
+import { distinctSellerCount } from "./listing";
 import { isMarketMakerWithoutCostEnabled } from "./sourcing";
 import { clamp } from "./stats";
 import type {
@@ -150,6 +151,7 @@ export function evaluateSystemOneSupervisorSync(input: {
   floorCeiling: MarketFloorCeilingReport;
   identityMatchScorePct: number;
   selfShopInListing: boolean;
+  holdingOwnPrice?: boolean;
   finalPrice: number | null;
   basePrice: number | null;
   discountPct: number | null;
@@ -190,12 +192,23 @@ export function evaluateSystemOneSupervisorSync(input: {
   );
   const useCalibratedMarket = input.marketScoreOverridePct != null && Number.isFinite(input.marketScoreOverridePct);
   // امتیاز کالیبره هرگز به‌تنهایی «رد قطعی» نمی‌سازد (فقط ریویو)؛ رد فقط برای نبودِ کاملِ داده می‌ماند
-  const marketScorePct =
-    input.source.ok && validCount > 0
-      ? useCalibratedMarket
-        ? Math.round(clamp(Math.max(mktReject, input.marketScoreOverridePct as number), 0, 100))
-        : legacyMarketScorePct
-      : 15;
+  const sellers = distinctSellerCount(input.offers.filter((o) => o.included));
+  const healthySource = input.source.ok && !input.source.degraded && !input.source.isChallenged &&
+    !input.source.meta?.challenged && !input.source.meta?.degraded &&
+    !["challenged", "degraded", "error"].includes(input.source.sourceStatus ?? "");
+  let marketScorePct = 15;
+  if (input.source.ok && validCount > 0) {
+    marketScorePct = useCalibratedMarket
+      ? Math.round(clamp(Math.max(mktReject, input.marketScoreOverridePct as number), 0, 100))
+      : legacyMarketScorePct;
+    if (healthySource && sellers > 0 && sellers <= 3 && input.dispersion <= 0.22 &&
+        input.offers.some((o) => o.included && o.fresh)) {
+      marketScorePct = Math.max(mktReject, marketScorePct);
+    }
+    if (sellers === 1) marketScorePct = Math.min(marketScorePct, Math.max(mktReject, mktApprove - 1));
+  } else if (healthySource && input.holdingOwnPrice && input.selfShopInListing) {
+    marketScorePct = mktReject;
+  }
   const mktVerdict = classifyThreeZoneScore(marketScorePct, mktReject, mktApprove);
 
   const strictAboveCost = input.config.margin?.strictAboveCost !== false;
@@ -285,7 +298,7 @@ export function evaluateSystemOneSupervisorSync(input: {
       approveAbovePct: mktApprove,
       verdict: mktVerdict,
       weight: supCfg.gates.market_data_integrity.weight ?? 0.25,
-      reason: useCalibratedMarket
+      reason: input.holdingOwnPrice ? "تنها فروشندهٔ مشاهده‌شده خودمان هستیم؛ حفظ قیمت نیاز به بازبینی دارد" : useCalibratedMarket
         ? mktVerdict === "approve"
           ? `احتمال کالیبره‌ی درستیِ قیمت ${marketScorePct}% ≥ ${mktApprove}% (${validCount} فروشنده معتبر؛ امتیاز ساده ${legacyMarketScorePct}%)`
           : mktVerdict === "review"

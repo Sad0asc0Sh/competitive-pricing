@@ -1,3 +1,4 @@
+import { distinctSellerCount } from "./listing";
 import { clamp, mean, median, percentile, roundToStep, sortAsc } from "./stats";
 import type {
   DiscountDecisionKind,
@@ -128,7 +129,7 @@ export function marketReferenceP75(
   const included = offers.filter((o) => o.included && o.price > 0);
   const credible = included.filter((o) => o.credible);
   const pool = credible.length >= 3 ? credible : included;
-  if (!pool.length) return null;
+  if (distinctSellerCount(pool) < 2) return null;
   const prices = pool.map((o) => o.price).sort((a, b) => a - b);
   const highest = prices[prices.length - 1];
   const med = median(prices);
@@ -163,20 +164,7 @@ export function pickDiscountReference(
   cfg: PricingProfileConfig["discount"],
   opts: DiscountSourceConfig = {},
 ): { kind: DiscountDecisionKind; refPrice: number | null } {
-  const mode = cfg?.mode ?? "market_percentile_ceiling";
   const baseMode = cfg?.basePriceMode ?? "market_ceiling";
-  const markupPct = cfg?.markupPct != null && Number.isFinite(cfg.markupPct) ? Math.max(0, cfg.markupPct) : 12;
-
-  if (mode === "markup" || baseMode === "markup") {
-    if (markupPct > 0) {
-      const markupRef = Math.round(finalPrice * (1 + markupPct / 100));
-      if (markupRef > finalPrice) {
-        return { kind: "entry_min", refPrice: markupRef };
-      }
-    }
-    return { kind: "none", refPrice: null };
-  }
-
   const ownHigh = Math.round(Math.max(0, Number(opts.ownStableHigh7d ?? 0)));
   const hasOwn =
     opts.hasOwnPriceHistory &&
@@ -202,12 +190,6 @@ export function pickDiscountReference(
 
     const pRef = marketReferenceP75(offers, cfg);
     if (pRef != null && pRef > finalPrice) return { kind: "market_p75", refPrice: pRef };
-  }
-
-  // اگر کاربر صراحتاً markupPct را تغییر داده باشد و مرجع بازار بالاتر از کف نبود، از markup استفاده کن
-  if (cfg?.markupPct != null && cfg.markupPct !== 12 && markupPct > 0) {
-    const markupRef = Math.round(finalPrice * (1 + markupPct / 100));
-    if (markupRef > finalPrice) return { kind: "entry_min", refPrice: markupRef };
   }
 
   return { kind: "none", refPrice: null };
@@ -295,7 +277,7 @@ export function buildDiscount(
 
   // ۱) مرجع و درصد واقعی: بدون مرجع → بدون تخفیف
   const ref = pickDiscountReference(finalPrice, offers, cfg, opts);
-  let refPrice = ref.refPrice;
+  const refPrice = ref.refPrice;
   if (refPrice == null || refPrice <= finalPrice || ref.kind === "none") {
     return noDiscountOutcome(
       finalPrice,
@@ -365,7 +347,7 @@ export function buildDiscount(
     }
   }
 
-  if (base <= finalPrice || pct < 1) {
+  if (base <= finalPrice || base > refPrice || pct < minDisc || pct > maxDisc || Math.round(base * (1 - pct / 100)) !== finalPrice) {
     return noDiscountOutcome(
       finalPrice,
       offers,

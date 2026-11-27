@@ -1,3 +1,4 @@
+import { listingPanel } from "@/lib/pricing/listing";
 import { aiEnabled, extractOffersWithAI, verifyTorobMatchesWithAI } from "@/lib/ai/client";
 import { parsePersianRelativeDate } from "@/lib/pricing/filters";
 import { selectBestTorobSearchMatch } from "@/lib/pricing/matcher";
@@ -300,7 +301,7 @@ export async function searchTorobProductV4(
         const shopText = str(r.shop_text ?? "")
           .replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1728))
           .replace(/[٠-٩]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1584));
-        const sellerCountMatch = shopText.match(/(\d+)/);
+        const sellerCountMatch = shopText.match(/(\d+)\s*(?:فروشگاه|فروشنده)/);
         const sellerCount =
           num(r.shop_count ?? r.sellers_count) ||
           (sellerCountMatch ? Number(sellerCountMatch[1]) : 1);
@@ -330,11 +331,12 @@ export async function searchTorobProductV4(
     );
 
     let aiIdentityCheck: AIIdentityCheckMeta | null = null;
-    const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
+    const eligibleCards = outcome.allRanked.filter((x) => !x.rejected).slice(0, 10);
+    const eligiblePrks = new Set(eligibleCards.map((x) => x.candidate.prk));
     if (
       opts?.matchConfig?.aiIdentityEnabled === true &&
-      candidates.length > 0 &&
-      (!outcome.confident || nonRejectedCount > 1) &&
+      eligibleCards.length > 0 &&
+      (!outcome.confident || eligibleCards.length > 1) &&
       (await aiEnabled())
     ) {
       const aiRes = await verifyTorobMatchesWithAI({
@@ -342,7 +344,7 @@ export async function searchTorobProductV4(
         sku: opts?.sku,
         category: opts?.category,
         anchorPriceToman: opts?.anchorPriceToman,
-        candidates: outcome.allRanked.slice(0, 10).map((r) => ({
+        candidates: eligibleCards.map((r) => ({
           prk: r.candidate.prk,
           titleFa: r.candidate.titleFa,
           titleEn: r.candidate.titleEn,
@@ -365,9 +367,9 @@ export async function searchTorobProductV4(
         }
         if (aiRes.verdict === "match" && aiRes.primaryPrk) {
           const picked = candidates.find((c) => c.prk === aiRes.primaryPrk);
-          if (picked) {
+          if (picked && eligiblePrks.has(picked.prk)) {
             const extraMatchedPrks = aiRes.matchedPrks
-              .filter((id) => id !== picked.prk && candidates.some((c) => c.prk === id))
+              .filter((id) => id !== picked.prk && eligiblePrks.has(id))
               .slice(0, 2);
             return {
               prk: picked.prk,
@@ -655,6 +657,7 @@ export const torobAdapter: PriceSourceAdapter = {
             meta: {
               via: detailsUrl ? "torob_v4_details_url" : "torob_v4_api",
               ...matchMeta,
+              panels: panelList.map((p) => listingPanel(p.prk, p.offers, p.totalSellerCount)),
               ...(mergedPanelPrks.length > 1 ? { mergedPanelPrks } : {}),
             },
           };

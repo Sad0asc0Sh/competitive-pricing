@@ -1,5 +1,7 @@
 "use client";
 
+import { ListingLinks } from "./listing-links";
+import type { ListingPanel } from "@/lib/pricing/listing";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -79,9 +81,8 @@ export interface ReviewPendingItem {
   isBelowFloor: boolean;
   syncFailed: boolean;
   readyForApproval: boolean;
-  torobUrl: string | null;
-  torobPrk: string | null;
-  torobTitle: string | null;
+  panels: ListingPanel[];
+  effectiveFloor: number;
   reasons: string;
   supMsg: string | null;
   supOverallPct: number | null;
@@ -106,7 +107,7 @@ export interface ReviewRejectedItem {
   supOverallPct: number | null;
   supGates: ReviewSupervisorGate[];
   torobUrl: string | null;
-  torobTitle: string | null;
+  panels: ListingPanel[];
 }
 
 type ReviewTab = "all_pending" | "ready" | "pending_review" | "sync_issues" | "warnings" | "rejected";
@@ -144,28 +145,18 @@ export function ReviewClient({
   const [bulkPending, startBulk] = useTransition();
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
 
-  const stats = useMemo(() => {
-    const readyCount = pendingItems.filter((x) => x.readyForApproval && !x.syncFailed).length;
-    const withConf = pendingItems.filter((x) => Number.isFinite(x.confidence));
-    const avgConfPct = withConf.length
-      ? Math.round((withConf.reduce((s, x) => s + x.confidence, 0) / withConf.length) * 100)
-      : 0;
-    const avgRiskPct = withConf.length
-      ? Math.round(withConf.reduce((s, x) => s + x.errorRiskPct, 0) / withConf.length)
-      : 0;
-    return { readyCount, avgConfPct, avgRiskPct };
-  }, [pendingItems]);
+  const readyCount = pendingItems.filter((x) => x.readyForApproval).length;
 
   const counts = useMemo(
     () => ({
       all_pending: pendingItems.length,
-      ready: stats.readyCount,
+      ready: readyCount,
       pending_review: pendingItems.filter((x) => x.status === "pending_review" && !x.syncFailed).length,
       sync_issues: pendingItems.filter((x) => x.syncFailed).length,
       warnings: pendingItems.filter((x) => x.marketConflict || x.isBelowFloor).length,
       rejected: rejectedItems.length,
     }),
-    [pendingItems, rejectedItems, stats.readyCount],
+    [pendingItems, rejectedItems, readyCount],
   );
 
   const filteredPending = useMemo(() => {
@@ -191,7 +182,7 @@ export function ReviewClient({
   const selectableIds = useMemo(
     () =>
       filteredPending
-        .filter((x) => !x.isBelowFloor && !x.syncFailed && (x.finalPrice ?? 0) > 0)
+        .filter((x) => x.readyForApproval)
         .map((x) => x.id),
     [filteredPending],
   );
@@ -233,16 +224,11 @@ export function ReviewClient({
     <div className="space-y-5 sm:space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-lg font-extrabold text-slate-900 sm:text-2xl">
-            پنل قیمت‌گذاری آماری و نظارت انسانی
-          </h1>
-          <p className="mt-1 text-xs leading-5 text-slate-500 sm:text-sm">
-            قیمت‌گذاری با مدل احتمالات بیزین (سود خالص، پراکندگی بازار و ضریب خطا) محاسبه می‌شود؛ بدون تأیید شما هیچ قیمتی روی سایت اعمال نمی‌شود.
-          </p>
+          <h1 className="text-xl font-bold text-slate-900">صف بررسی قیمت‌ها</h1>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <RunButton label="🔍 استعلام ۵ کارت اول" className="btn-primary btn-sm" />
+          <RunButton label="استعلام ۵ محصول اول" className="btn-primary btn-sm" />
           <div className="relative w-full sm:w-56">
             <IconSearch className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
@@ -253,17 +239,6 @@ export function ReviewClient({
             />
           </div>
         </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="کل صف قیمت‌گذاری" value={faNum(pendingItems.length)} />
-        <StatTile label="آماده تأیید کم‌خطا" value={faNum(stats.readyCount)} tone="emerald" />
-        <StatTile
-          label="میانگین اعتماد / ضریب خطا"
-          value={pendingItems.length ? `${faNum(stats.avgConfPct)}٪ / ${faNum(stats.avgRiskPct)}٪` : "—"}
-          tone={stats.avgRiskPct <= 25 ? "indigo" : "amber"}
-        />
-        <StatTile label="ردشده (نیازمند بررسی لینک/داده)" value={faNum(rejectedItems.length)} tone="rose" />
       </div>
 
       <SegmentedTabs<ReviewTab>
@@ -319,7 +294,7 @@ export function ReviewClient({
       {tab !== "rejected" ? (
         <div className="space-y-4">
           {filteredPending.map((item) => {
-            const canBulkSelect = !item.isBelowFloor && !item.syncFailed && (item.finalPrice ?? 0) > 0;
+            const canBulkSelect = item.readyForApproval;
             const confPct = Math.round((item.confidence ?? 0) * 100);
             const quickPrices = buildQuickPrices(item);
             return (
@@ -351,6 +326,7 @@ export function ReviewClient({
                       {item.isBelowFloor && (
                         <span className="badge bg-rose-100 text-rose-800">⚠️ زیر کف سود</span>
                       )}
+                      {item.effectiveCost <= 0 && <Link className="text-xs text-amber-800 underline" href={`/products/${item.productId}`}>ثبت بهای خرید</Link>}
                       {item.marketConflict && (
                         <span className="badge bg-amber-100 text-amber-900">تعارض بازار</span>
                       )}
@@ -365,23 +341,16 @@ export function ReviewClient({
                         {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)} · {faNum(item.offersUsed)}/
                         {faNum(item.offersTotal)} پیشنهاد معتبر
                       </span>
-                      {item.torobUrl && (
-                        <a
-                          href={item.torobUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-medium text-sky-600 hover:underline"
-                        >
-                          🔗 مشاهده در ترب{item.torobTitle ? ` (${item.torobTitle.slice(0, 48)}${item.torobTitle.length > 48 ? "…" : ""})` : ""}
-                        </a>
-                      )}
+                      <ListingLinks panels={item.panels} />
+                      {item.strategy === "hold_own_price" && <span>تنها فروشندهٔ مشاهده‌شده خودمان هستیم</span>}
                     </div>
                   </div>
 
                   <DecisionActions
                     decisionId={item.id}
                     force
-                    isBelowFloor={item.isBelowFloor}
+                    hardFloor={item.effectiveFloor}
+                    isBelowFloor={item.isBelowFloor || item.effectiveCost <= 0}
                     syncFailed={item.syncFailed}
                     initialFinalPrice={item.finalPrice}
                     initialBasePrice={item.basePrice}
@@ -392,7 +361,14 @@ export function ReviewClient({
                   />
                 </div>
 
-                {/* نوار تحلیل آماری و احتمالات بیزین */}
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <Item k="قیمت پیشنهادی" v={toman(item.finalPrice)} strong />
+                  <Item k="کف مجاز فروش" v={toman(item.effectiveFloor || null)} />
+                  <Item k="میانهٔ رقبا" v={toman(item.marketMedian)} />
+                  <Item k="تخفیف و کمپین" v={item.discountPct ? `${pct(item.discountPct)} · ${campaignLabel[item.campaignType ?? "none"]}` : "بدون تخفیف"} />
+                </div>
+                <details className="space-y-3">
+                  <summary className="cursor-pointer py-1 text-xs font-semibold text-slate-700">فروشندگان و دلایل پیشنهاد قیمت</summary>
                 <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <div className="flex flex-wrap items-center gap-2">
@@ -470,22 +446,11 @@ export function ReviewClient({
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-                  <Item k="تمام‌شده همکار" v={toman(item.effectiveCost || item.cost)} />
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <Item k="بهای خرید" v={toman(item.effectiveCost || item.cost)} />
                   <Item k="قیمت فعلی سایت" v={toman(item.current)} />
-                  <Item k="میانه بازار ترب" v={toman(item.marketMedian ?? item.referencePrice)} />
-                  <Item k="خط‌خورده (سقف)" v={toman(item.basePrice)} />
-                  <Item k="پیشنهاد یوزر (نهایی)" v={toman(item.finalPrice)} strong />
-                  <Item
-                    k="تخفیف نمایشی / کمپین"
-                    v={`${item.discountPct && item.discountPct > 0 ? pct(item.discountPct) : "بدون تخفیف"} · ${campaignLabel[item.campaignType ?? "none"] ?? item.campaignType ?? "عادی"}`}
-                  />
-                  <Item
-                    k="رتبه ملی / با مشکوک"
-                    v={`${item.projectedNationalRank != null ? `#${faNum(item.projectedNationalRank)}` : "—"} / ${
-                      item.rankIncludingSuspect != null ? `#${faNum(item.rankIncludingSuspect)}` : "—"
-                    } از ${item.totalIncludingSuspect ? faNum(item.totalIncludingSuspect) : "—"}`}
-                  />
+                  {(item.discountPct ?? 0) > 0 && <Item k="قیمت پیش از تخفیف" v={toman(item.basePrice)} />}
+                  <Item k="رتبهٔ کشوری" v={item.projectedNationalRank ? faNum(item.projectedNationalRank) : "—"} />
                 </div>
 
                 <SupervisorGateChips gates={item.supGates} />
@@ -559,6 +524,7 @@ export function ReviewClient({
                     🤖 هوش مصنوعی: {item.aiMsg}
                   </p>
                 )}
+                </details>
               </div>
             );
           })}
@@ -574,29 +540,6 @@ export function ReviewClient({
             />
           )}
 
-          {/* نمایش خلاصه ردشده‌ها در پایین تب اصلی در موبایل و دسکتاپ */}
-          {tab === "all_pending" && rejectedItems.length > 0 && (
-            <div className="pt-2">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-base font-bold text-slate-900 sm:text-lg">
-                    ردشده‌های اخیر ناظر (وارد فروشگاه نمی‌شوند)
-                  </h2>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    این تصمیم‌ها به‌خاطر امتیاز کل پایین‌تر از ۴۵٪ یا رد شدن در یکی از مقیاس‌های حیاتی متوقف شده‌اند؛ از پایین کارت می‌توانید پنل ترب را تأیید یا اصلاح کنید.
-                  </p>
-                </div>
-                <button type="button" onClick={() => setTab("rejected")} className="btn-secondary btn-sm shrink-0">
-                  مشاهده همه ({faNum(rejectedItems.length)})
-                </button>
-              </div>
-              <div className="space-y-2.5">
-                {filteredRejected.slice(0, 5).map((r) => (
-                  <RejectedCard key={r.id} item={r} />
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -616,33 +559,6 @@ export function ReviewClient({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function StatTile({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  tone?: "default" | "emerald" | "indigo" | "amber" | "rose";
-}) {
-  const cls =
-    tone === "emerald"
-      ? "border-emerald-200 bg-emerald-50/70 text-emerald-800"
-      : tone === "indigo"
-        ? "border-indigo-200 bg-indigo-50/70 text-indigo-800"
-        : tone === "amber"
-          ? "border-amber-200 bg-amber-50/70 text-amber-800"
-          : tone === "rose"
-            ? "border-rose-200 bg-rose-50/70 text-rose-800"
-            : "text-slate-900";
-  return (
-    <div className={`card ${cls}`}>
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="num mt-1 text-lg font-extrabold sm:text-xl">{value}</div>
     </div>
   );
 }
@@ -699,11 +615,7 @@ function RejectedCard({ item }: { item: ReviewRejectedItem }) {
               {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)} · {faNum(item.offersUsed)}/
               {faNum(item.offersTotal)} پیشنهاد معتبر
             </span>
-            {item.torobUrl && (
-              <a href={item.torobUrl} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">
-                🔗 پنل ترب{item.torobTitle ? ` (${item.torobTitle.slice(0, 42)})` : ""}
-              </a>
-            )}
+            <ListingLinks panels={item.panels} />
           </div>
         </div>
         <span className="badge bg-rose-100 text-rose-700">⛔ ردشده — غیرقابل اعمال</span>
@@ -715,7 +627,7 @@ function RejectedCard({ item }: { item: ReviewRejectedItem }) {
       <RelinkTorobAction
         decisionId={item.id}
         initialTorobUrl={item.torobUrl}
-        canConfirmCurrent={Boolean(item.torobUrl)}
+        canConfirmCurrent={item.panels.length > 0}
       />
     </div>
   );

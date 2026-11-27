@@ -80,9 +80,6 @@ export function DashboardDecisionsSection({ decisions }: { decisions: DashboardD
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-bold text-slate-900">آخرین تصمیم‌های موتور</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
-            کشف سقف واقعی بازار بدون پرت → اعمال درصد تخفیف روی کف رقابتی
-          </p>
         </div>
         <Link href="/runs" className="btn-secondary btn-sm self-start sm:self-auto">
           همه اجراها ←
@@ -150,11 +147,11 @@ export function DashboardDecisionsSection({ decisions }: { decisions: DashboardD
                       <div className="num text-base font-extrabold text-emerald-700">{toman(d.finalPrice)}</div>
                     </div>
                     <div className="text-left">
-                      <div className="num text-xs text-slate-400 line-through">{toman(d.basePrice)}</div>
+                      {(d.discountPct ?? 0) > 0 && <div className="num text-xs text-slate-400 line-through">{toman(d.basePrice)}</div>}
                       <div className="mt-0.5 flex items-center justify-end gap-1.5">
-                        <span className="num rounded-md bg-rose-100 px-1.5 py-0.5 text-[11px] font-bold text-rose-700">
+                        {(d.discountPct ?? 0) > 0 && <span className="num rounded-md bg-rose-100 px-1.5 py-0.5 text-[11px] font-bold text-rose-700">
                           {pct(d.discountPct, 0)}
-                        </span>
+                        </span>}
                         <span
                           className={`badge border text-[11px] ${campaignColor[d.campaignType ?? "none"] ?? "bg-slate-100"}`}
                         >
@@ -207,17 +204,14 @@ export function DashboardDecisionsSection({ decisions }: { decisions: DashboardD
 
           {/* جدول دسکتاپ با اسکرول ایمن */}
           <div className="table-scroll hidden lg:block">
-            <table className="data min-w-[960px]">
+            <table className="data">
               <thead>
                 <tr>
                   <th>محصول</th>
-                  <th>خط قرمز همکار</th>
-                  <th>کف مشهد / ترب</th>
-                  <th>سقف معیار (خط‌خورده)</th>
-                  <th>تخفیف</th>
-                  <th>کف قطعی ما</th>
-                  <th>سیستم تخفیف</th>
-                  <th>رتبه مشهد / ترب</th>
+                  <th>کف مجاز فروش</th>
+                  <th>کمترین قیمت رقیب</th>
+                  <th>قیمت پیشنهادی</th>
+                  <th>تخفیف و کمپین</th>
                   <th>سود خالص</th>
                   <th>وضعیت</th>
                 </tr>
@@ -232,27 +226,15 @@ export function DashboardDecisionsSection({ decisions }: { decisions: DashboardD
                       <div className="text-xs text-slate-400">{d.sku}</div>
                     </td>
                     <td className="num font-medium text-amber-700">{toman(d.hardFloorPrice ?? d.effectiveCostPrice)}</td>
-                    <td className="num text-xs">
-                      مشهد: {toman(d.localLowestValid)}
-                      <br />
-                      ترب: {toman(d.lowestValid)}
-                    </td>
-                    <td className="num line-through decoration-slate-400">{toman(d.basePrice)}</td>
-                    <td className="num font-bold text-rose-600">{pct(d.discountPct, 0)}</td>
+                    <td className="num">{toman(d.lowestValid)}</td>
                     <td className="num font-bold text-emerald-700">{toman(d.finalPrice)}</td>
                     <td>
                       <span className={`badge border ${campaignColor[d.campaignType ?? "none"] ?? "bg-slate-100"}`}>
-                        {d.campaignName || campaignLabel[d.campaignType ?? "none"]}
+                        {(d.discountPct ?? 0) > 0 && `${pct(d.discountPct, 0)} · `}{d.campaignName || campaignLabel[d.campaignType ?? "none"]}
                       </span>
                       {d.showInFeatured && (
                         <div className="mt-0.5 text-[10px] font-medium text-indigo-700">★ منتخب صفحه اصلی</div>
                       )}
-                    </td>
-                    <td className="num">
-                      <span className="badge bg-indigo-50 text-indigo-800">
-                        مشهد {d.projectedLocalRank != null ? `#${faNum(d.projectedLocalRank)}` : "—"} | ترب{" "}
-                        {d.projectedNationalRank != null ? `#${faNum(d.projectedNationalRank)}` : "—"}
-                      </span>
                     </td>
                     <td className="num text-xs font-medium">
                       {toman(d.netProfitToman)} ({pct(d.netMarginPct)})

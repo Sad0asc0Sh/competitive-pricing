@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.default = RunsPage;
 const jsx_runtime_1 = require("react/jsx-runtime");
+const listing_1 = require("../../lib/pricing/listing");
 const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
 const runs_client_1 = require("@/components/runs-client");
@@ -74,6 +75,7 @@ async function RunsPage({ searchParams }) {
         return {
             id: d.id,
             productId: d.productId,
+            panels: (0, listing_1.decisionPanels)(rawSteps),
             name,
             sku,
             source: d.source,

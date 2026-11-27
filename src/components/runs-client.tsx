@@ -1,5 +1,7 @@
 "use client";
 
+import type { ListingPanel } from "@/lib/pricing/listing";
+import { ListingLinks } from "./listing-links";
 import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
 import { campaignLabel, faDate, faNum, pct, statusColor, statusLabel, toman } from "@/lib/format";
@@ -28,6 +30,7 @@ export interface SerializedDecisionStep {
 }
 
 export interface SerializedRunDecision {
+  panels: ListingPanel[];
   id: number;
   productId: number;
   name: string;
@@ -79,6 +82,7 @@ export function RunsClient({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [runSearch, setRunSearch] = useState("");
   const [decisionSearch, setDecisionSearch] = useState("");
+  const [panelSize, setPanelSize] = useState(0);
   const [statusFilter, setStatusFilter] = useState<DecisionStatusFilter>("all");
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
@@ -104,6 +108,7 @@ export function RunsClient({
   const filteredDecisions = useMemo(() => {
     const q = decisionSearch.trim().toLowerCase();
     return decisions.filter((d) => {
+      if (panelSize && !d.panels.some((p) => p.sellerCount === panelSize)) return false;
       if (statusFilter === "applied" && d.status !== "applied") return false;
       if (statusFilter === "pending_review" && d.status !== "pending_review") return false;
       if (statusFilter === "failed" && !["rejected", "failed", "sync_failed", "pending_sync"].includes(d.status)) {
@@ -112,7 +117,7 @@ export function RunsClient({
       if (q && !d.name.toLowerCase().includes(q) && !d.sku.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [decisions, statusFilter, decisionSearch]);
+  }, [decisions, statusFilter, decisionSearch, panelSize]);
 
   const diagnosticLogs = useMemo(
     () => runLogs.filter((l) => l.level === "error" || l.level === "warn" || Boolean(selectedRun?.error)),
@@ -306,6 +311,13 @@ export function RunsClient({
               <h2 className="text-base font-bold text-slate-900">
                 تصمیم‌های اجرای #{selectedRun ? faNum(selectedRun.id) : "—"}
               </h2>
+              <select aria-label="تعداد فروشندگان پنل ترب" className="input w-full text-xs sm:w-auto"
+                value={panelSize} onChange={(event) => setPanelSize(Number(event.target.value))}>
+                <option value={0}>همهٔ پنل‌ها</option>
+                <option value={1}>تک‌فروشنده</option>
+                <option value={2}>دو فروشنده</option>
+                <option value={3}>سه فروشنده</option>
+              </select>
               <div className="relative w-full sm:w-64">
                 <IconSearch className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
@@ -350,9 +362,9 @@ export function RunsClient({
 
             {filteredDecisions.length === 0 ? (
               <EmptyState
-                title="تصمیمی در این اجرا وجود ندارد"
+                title={decisions.length ? "موردی مطابق فیلترها پیدا نشد" : "تصمیمی در این اجرا وجود ندارد"}
                 description={
-                  selectedRun?.error
+                  decisions.length ? "جستجو یا فیلتر تعداد فروشندگان را تغییر دهید." : selectedRun?.error
                     ? `علت: ${selectedRun.error}`
                     : runLogs.length > 0
                       ? runLogs[0].message
@@ -373,6 +385,7 @@ export function RunsClient({
                               {d.name}
                             </Link>
                             <div className="text-xs text-slate-400">{d.sku}</div>
+                            <ListingLinks panels={d.panels} />
                           </div>
                           <span className={`badge shrink-0 ${statusColor[d.status] ?? "bg-slate-100"}`}>
                             {statusLabel[d.status] ?? d.status}
@@ -444,6 +457,7 @@ export function RunsClient({
                                   {d.name}
                                 </Link>
                                 <div className="text-xs text-slate-400">{d.sku}</div>
+                                <ListingLinks panels={d.panels} />
                                 {d.errorSummary && (
                                   <div
                                     className={`mt-1 line-clamp-2 text-[11px] leading-4 ${

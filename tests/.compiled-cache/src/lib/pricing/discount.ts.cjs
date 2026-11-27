@@ -5,6 +5,7 @@ exports.calibrateBaseForPct = calibrateBaseForPct;
 exports.marketReferenceP75 = marketReferenceP75;
 exports.pickDiscountReference = pickDiscountReference;
 exports.buildDiscount = buildDiscount;
+const listing_1 = require("./listing");
 const stats_1 = require("./stats");
 /**
  * کالیبراسیون دقیق سقف معیار (`basePrice`) و درصد تخفیف صحیح (`1..99`)
@@ -92,7 +93,7 @@ function marketReferenceP75(offers, cfg) {
     const included = offers.filter((o) => o.included && o.price > 0);
     const credible = included.filter((o) => o.credible);
     const pool = credible.length >= 3 ? credible : included;
-    if (!pool.length)
+    if ((0, listing_1.distinctSellerCount)(pool) < 2)
         return null;
     const prices = pool.map((o) => o.price).sort((a, b) => a - b);
     const highest = prices[prices.length - 1];
@@ -118,18 +119,7 @@ function marketReferenceP75(offers, cfg) {
     return customPctSelected ? Math.min(Math.round(pVal), highest, medCap) : Math.min(pVal, highest);
 }
 function pickDiscountReference(finalPrice, offers, cfg, opts = {}) {
-    const mode = cfg?.mode ?? "market_percentile_ceiling";
     const baseMode = cfg?.basePriceMode ?? "market_ceiling";
-    const markupPct = cfg?.markupPct != null && Number.isFinite(cfg.markupPct) ? Math.max(0, cfg.markupPct) : 12;
-    if (mode === "markup" || baseMode === "markup") {
-        if (markupPct > 0) {
-            const markupRef = Math.round(finalPrice * (1 + markupPct / 100));
-            if (markupRef > finalPrice) {
-                return { kind: "entry_min", refPrice: markupRef };
-            }
-        }
-        return { kind: "none", refPrice: null };
-    }
     const ownHigh = Math.round(Math.max(0, Number(opts.ownStableHigh7d ?? 0)));
     const hasOwn = opts.hasOwnPriceHistory &&
         Number.isFinite(ownHigh) &&
@@ -155,12 +145,6 @@ function pickDiscountReference(finalPrice, offers, cfg, opts = {}) {
         const pRef = marketReferenceP75(offers, cfg);
         if (pRef != null && pRef > finalPrice)
             return { kind: "market_p75", refPrice: pRef };
-    }
-    // اگر کاربر صراحتاً markupPct را تغییر داده باشد و مرجع بازار بالاتر از کف نبود، از markup استفاده کن
-    if (cfg?.markupPct != null && cfg.markupPct !== 12 && markupPct > 0) {
-        const markupRef = Math.round(finalPrice * (1 + markupPct / 100));
-        if (markupRef > finalPrice)
-            return { kind: "entry_min", refPrice: markupRef };
     }
     return { kind: "none", refPrice: null };
 }
@@ -225,7 +209,7 @@ function buildDiscount(finalPrice, offers, cfg, rounding, opts) {
     const minDisc = (0, stats_1.clamp)(cfg.minDiscountPct ?? 5, 1, 90);
     // ۱) مرجع و درصد واقعی: بدون مرجع → بدون تخفیف
     const ref = pickDiscountReference(finalPrice, offers, cfg, opts);
-    let refPrice = ref.refPrice;
+    const refPrice = ref.refPrice;
     if (refPrice == null || refPrice <= finalPrice || ref.kind === "none") {
         return noDiscountOutcome(finalPrice, offers, "بدون مرجع معتبر بالاتر از کف (own_price_7d یا market_p75) → تخفیف اعمال نشد (بدون کمپین)", ref);
     }
@@ -273,7 +257,7 @@ function buildDiscount(finalPrice, offers, cfg, rounding, opts) {
             pct = (0, stats_1.clamp)(Math.round(((base - finalPrice) / base) * 100), 1, maxDisc);
         }
     }
-    if (base <= finalPrice || pct < 1) {
+    if (base <= finalPrice || base > refPrice || pct < minDisc || pct > maxDisc || Math.round(base * (1 - pct / 100)) !== finalPrice) {
         return noDiscountOutcome(finalPrice, offers, "کالیبراسیون سقف روی کف و زیر مرجع ناممکن شد → تخفیف اعمال نشد (بدون کمپین)", ref);
     }
     const discountAmountToman = base - finalPrice;

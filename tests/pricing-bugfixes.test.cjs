@@ -889,3 +889,45 @@ test('P6. قفل قطعی نظارت انسانی: تمام تصمیم‌های 
   assert.equal(resolveInitialDecisionStatus({ rejectedBySupervisor: false, hasFinalPrice: false }), 'failed')
   assert.equal(resolveInitialDecisionStatus({ rejectedBySupervisor: false, hasFinalPrice: true }), 'pending_review')
 })
+
+test('پنل کوچک با مدل صحیح شناخته می‌شود؛ اعتبار هویت از قدرت شواهد بازار مستقل است', () => {
+  const { decisionPanels } = loadTsModule('src/lib/pricing/listing.ts')
+  const title = 'دوربین داهوا DH-IPC-HFW1230S-S5'
+  for (const mode of ['legacy', 'v2']) {
+    for (const shops of [['رقیب الف'], ['رقیب الف', 'رقیب ب'], ['رقیب الف', 'رقیب ب', 'رقیب ج'], ['EKG Kala']]) {
+      const offers = shops.map((shop, i) => makeRawOffer({ shop, price: 1000000 + i * 2000 }))
+      const source = { source: 'torob', productTitle: title, prk: 'panel-a', ok: true, offers, totalSellerCount: shops.length, fetchedAt: NOW }
+      const ctx = { config: makeConfig({ estimator: { mode } }), productId: 1, productName: title, costPrice: 800000, currentFinalPrice: 965385, now: NOW }
+      const r = runPricingPipeline(source, ctx)
+      assert.equal(r.supervisor.gates.identity_match.verdict, 'approve')
+      assert.notEqual(r.supervisor.gates.market_data_integrity.verdict, 'reject')
+      assert.ok(r.finalPrice >= r.supply.hardFloorPrice)
+      assert.deepEqual(decisionPanels(r.steps), [{ prk: 'panel-a', sellerCount: shops.length }])
+      if (shops.length === 1) {
+        assert.equal(r.discountPct, 0)
+        assert.equal(r.finalPrice, ctx.currentFinalPrice)
+        assert.equal(r.needsReview, true)
+        assert.equal(r.strategy, shops[0] === 'EKG Kala' ? 'hold_own_price' : 'single_competitor')
+      }
+      const wrong = runPricingPipeline({ ...source, productTitle: 'دوربین داهوا DH-IPC-HFW2431S-S2' }, ctx)
+      assert.equal(wrong.supervisor.gates.identity_match.verdict, 'reject')
+    }
+  }
+})
+
+test('شمارش فروشنده مستقل، لینک پنل‌های ترکیبی و سازگاری با تاریخچه', () => {
+  const { listingPanel, decisionPanels } = loadTsModule('src/lib/pricing/listing.ts')
+  const offer = makeEvalOffer({ shopName: 'رقیب الف', price: 1250000 })
+  const repeated = [offer, { ...offer, sellerType: 'in_person' }]
+  const primary = listingPanel('first', repeated, 2)
+  assert.equal(primary.sellerCount, 1)
+  const secondary = { prk: 'second', sellerCount: 3 }
+  assert.deepEqual(decisionPanels([{ step: 'source', data: { panels: [primary, secondary, primary] } }]), [primary, secondary])
+  assert.deepEqual(decisionPanels([{ step: 'source', data: { prk: 'old', totalSellerCount: 2 } }]), [{ prk: 'old', sellerCount: 2 }])
+  assert.deepEqual(decisionPanels([{ step: 'source', data: { prk: 'old', sourceStatus: 'error' } }]), [])
+  const cfg = DEFAULT_PROFILE_CONFIG.discount
+  assert.equal(buildDiscount(1000000, repeated, cfg, DEFAULT_PROFILE_CONFIG.rounding).discountPct, 0)
+  const own = buildDiscount(1000000, repeated, cfg, DEFAULT_PROFILE_CONFIG.rounding, { ownStableHigh7d: 1250000, hasOwnPriceHistory: true })
+  assert.equal(own.referenceKind, 'own_price_7d')
+  assert.equal(own.discountPct, 20)
+})

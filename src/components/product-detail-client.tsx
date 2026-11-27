@@ -1,5 +1,7 @@
 "use client";
 
+import { ListingLinks } from "./listing-links";
+import { decisionPanels } from "@/lib/pricing/listing";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { DecisionStep } from "@/db/schema";
@@ -109,15 +111,17 @@ export function ProductDetailClient({
 
   const latest = decisions[0];
 
-  const isDecisionBelowFloor = (d: SerializedDecision) =>
-    (d.finalPrice ?? 0) > 0 &&
-    (d.finalPrice ?? 0) <
-      Math.max(
-        d.hardFloorPrice ?? 0,
-        product.currentHardFloorPrice ?? 0,
-        d.effectiveCostPrice ?? 0,
-        product.costPrice ?? 0,
-      );
+  function actionProps(d: SerializedDecision) {
+    const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, product.costPrice);
+    const hardFloor = Math.max(d.hardFloorPrice ?? 0, product.currentHardFloorPrice ?? 0);
+    return {
+      effectiveCost, hardFloor,
+      isBelowFloor: effectiveCost <= 0 || (d.finalPrice ?? 0) <= effectiveCost || (d.finalPrice ?? 0) < hardFloor,
+      initialFinalPrice: d.finalPrice, initialBasePrice: d.basePrice,
+      initialCampaignType: d.campaignType, initialDiscountPct: d.discountPct,
+    };
+  }
+  const latestPanels = latest ? decisionPanels(latest.steps) : [];
 
   const isDecisionSyncFailed = (d: SerializedDecision) =>
     d.status === "sync_failed" || d.status === "pending_sync" || d.pushStatus === "failed";
@@ -176,14 +180,15 @@ export function ProductDetailClient({
               {product.currentShowInFeatured && (
                 <span className="badge bg-indigo-100 text-indigo-800">★ منتخب صفحه اصلی</span>
               )}
-              {product.torobUrl && (
+              <ListingLinks panels={latestPanels} />
+              {product.torobUrl && !latestPanels.length && (
                 <a
                   href={product.torobUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline"
                 >
-                  <span>صفحه ترب</span>
+                  <span>لینک ثبت‌شدهٔ محصول</span>
                   <IconExternalLink className="h-3.5 w-3.5" />
                 </a>
               )}
@@ -272,7 +277,7 @@ export function ProductDetailClient({
                   <DecisionActions
                     decisionId={latest.id}
                     force
-                    isBelowFloor={isDecisionBelowFloor(latest)}
+                    {...actionProps(latest)}
                     syncFailed={isDecisionSyncFailed(latest)}
                   />
                 )}
@@ -525,6 +530,7 @@ export function ProductDetailClient({
                         {statusLabel[d.status] ?? d.status}
                       </span>
                     </div>
+                    <ListingLinks panels={decisionPanels(d.steps)} />
                     <div className="m-row-kv">
                       <span>کف نهایی / سقف معیار</span>
                       <span className="num">
@@ -558,7 +564,7 @@ export function ProductDetailClient({
                         <DecisionActions
                           decisionId={d.id}
                           force
-                          isBelowFloor={isDecisionBelowFloor(d)}
+                          {...actionProps(d)}
                           syncFailed={isDecisionSyncFailed(d)}
                         />
                       </div>
@@ -588,7 +594,7 @@ export function ProductDetailClient({
                     {decisions.map((d) => (
                       <tr key={d.id}>
                         <td className="num">{d.id}</td>
-                        <td className="text-xs whitespace-nowrap">{faDate(d.createdAt)}</td>
+                        <td className="text-xs whitespace-nowrap">{faDate(d.createdAt)}<ListingLinks panels={decisionPanels(d.steps)} /></td>
                         <td className="num">{toman(d.hardFloorPrice ?? d.effectiveCostPrice)}</td>
                         <td className="num text-slate-400 line-through">{toman(d.basePrice)}</td>
                         <td className="num font-medium text-emerald-700">{toman(d.finalPrice)}</td>
@@ -611,7 +617,7 @@ export function ProductDetailClient({
                             <DecisionActions
                               decisionId={d.id}
                               force
-                              isBelowFloor={isDecisionBelowFloor(d)}
+                              {...actionProps(d)}
                               syncFailed={isDecisionSyncFailed(d)}
                             />
                           )}

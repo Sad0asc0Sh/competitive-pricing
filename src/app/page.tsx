@@ -74,20 +74,13 @@ export default async function DashboardPage() {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 space-y-2.5">
           <h1 className="text-lg font-extrabold leading-snug text-slate-900 sm:text-xl lg:text-2xl">
-            مرکز فرماندهی قیمت‌گذاری، کشف کف و سقف بازار و ۳ سیستم تخفیف
+            مدیریت قیمت فروش
           </h1>
 
-          {/* وضعیت سرویس‌ها در قالب چیپ‌های خوانا */}
+          <p className="text-sm text-slate-600">استعلام بعدی {faDate(nextRun)}</p>
+          <details>
+            <summary className="cursor-pointer text-xs text-slate-600">وضعیت اتصال سرویس‌ها</summary>
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Link
-              href="/settings"
-              className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600 transition hover:border-slate-300"
-            >
-              <span className="h-2 w-2 rounded-full bg-indigo-500" />
-              <span>استعلام بعدی:</span>
-              <b className="text-slate-900">{faDate(nextRun)}</b>
-            </Link>
-
             <Link
               href="/settings"
               className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 transition ${
@@ -164,23 +157,21 @@ export default async function DashboardPage() {
               </span>
             </Link>
           </div>
+          </details>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <Link href="/campaigns" className="btn-secondary flex-1 sm:flex-initial">
-            🎛️ استودیو تخفیف
-          </Link>
-          <Link href="/simulate" className="btn-secondary flex-1 sm:flex-initial">
-            🧪 آزمایشگاه شبیه‌ساز
-          </Link>
+          <Link href="/review" className="btn-primary">بررسی قیمت‌ها ({faNum(pending)})</Link>
           <div className="w-full sm:w-auto">
-            <RunButton label="استعلام کارت‌های فعال" className="btn-primary w-full sm:w-auto" />
+            <RunButton label="استعلام ۵ محصول اول" className="btn-secondary w-full sm:w-auto" />
           </div>
         </div>
       </div>
 
       {/* اجرای سریع روی رنج کارت‌ها (روی موبایل جمع‌شونده برای دسترسی فوری به آمار) */}
-      <CardRangeRunner totalCards={total} defaultCollapsedOnMobile />
+      <details className="card"><summary className="cursor-pointer text-sm font-medium">استعلام بازهٔ محصولات</summary>
+        <CardRangeRunner totalCards={total} />
+      </details>
 
       {/* کارت‌های KPI */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
@@ -190,7 +181,9 @@ export default async function DashboardPage() {
         <Stat title="زمان‌بندی‌های فعال" value={faNum(sch.length)} href="/settings" accent="emerald" />
       </div>
 
-      {/* وضعیت ۳ سیستم تخفیف */}
+      <DashboardDecisionsSection decisions={serializedDecisions} />
+
+      <details className="card space-y-3"><summary className="cursor-pointer font-medium">وضعیت کمپین‌های تخفیف</summary>
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {(["flash", "featured", "timed_sale", "none"] as const).map((t) => {
           const s = campaignStats.find((c) => (c.campaign ?? "none") === t);
@@ -210,10 +203,9 @@ export default async function DashboardPage() {
         })}
       </div>
 
-      {/* بخش آخرین تصمیم‌های موتور (واکنش‌گرا + فیلتر و جستجو) */}
-      <DashboardDecisionsSection decisions={serializedDecisions} />
+      </details>
 
-      {/* اجراهای اخیر و لاگ فعالیت */}
+      <details className="card space-y-3"><summary className="cursor-pointer font-medium">سوابق اجرا و فعالیت</summary>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card">
           <div className="mb-3 flex items-center justify-between">
@@ -274,6 +266,7 @@ export default async function DashboardPage() {
           </ul>
         </div>
       </div>
+      </details>
     </div>
   );
 }

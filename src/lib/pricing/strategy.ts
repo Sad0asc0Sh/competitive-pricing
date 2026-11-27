@@ -3,6 +3,8 @@ import type { CompetitivePositionReport, PricingProfileConfig, SupplyCostResolut
 
 export interface StrategyOutcome {
   strategy:
+    | "single_competitor"
+    | "hold_own_price"
     | "national_rank1_undercut"
     | "local_city_rank1_undercut"
     | "local_cluster_rank1"
@@ -106,6 +108,9 @@ export interface StrategyOptions {
   skipGapRule?: boolean;
   /** خروجی ترب بریده شده (offers_truncated): نبودِ فروشنده در شهر پیش‌فرض دلیل بر نبودنش نیست */
   truncated?: boolean;
+  currentPrice?: number | null;
+  onlyCompetitor?: boolean;
+  ownOnly?: boolean;
 }
 
 export function decideTargetPrice(
@@ -114,6 +119,15 @@ export function decideTargetPrice(
   supply?: SupplyCostResolution,
   opts?: StrategyOptions,
 ): StrategyOutcome {
+  if (opts?.ownOnly && opts.currentPrice && opts.currentPrice > 0) {
+    return { strategy: "hold_own_price", competitionTier: "no_data", targetPrice: opts.currentPrice,
+      explanation: "تنها پیشنهاد متعلق به فروشگاه خودمان است؛ قیمت فعلی با رعایت کف خرید حفظ می‌شود" };
+  }
+  if (opts?.onlyCompetitor && market.lowest != null) {
+    return { strategy: "single_competitor", competitionTier: "market_reference",
+      targetPrice: Math.max(supply?.hardFloorPrice ?? 0, Math.min(opts.currentPrice || market.lowest, market.lowest)),
+      explanation: "فقط یک رقیب معتبر دیده شد؛ قیمت فعلی در صورت رقابتی بودن و پوشش کف سود حفظ می‌شود" };
+  }
   if (market.reference == null || market.lowest == null) {
     return {
       strategy: "no_data",

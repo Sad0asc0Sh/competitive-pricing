@@ -50,6 +50,15 @@ function computeUndercutDelta(competitorPrice, cfg) {
     return Math.max(fallbackAmount, pctDelta, 1);
 }
 function decideTargetPrice(market, cfg, supply, opts) {
+    if (opts?.ownOnly && opts.currentPrice && opts.currentPrice > 0) {
+        return { strategy: "hold_own_price", competitionTier: "no_data", targetPrice: opts.currentPrice,
+            explanation: "تنها پیشنهاد متعلق به فروشگاه خودمان است؛ قیمت فعلی با رعایت کف خرید حفظ می‌شود" };
+    }
+    if (opts?.onlyCompetitor && market.lowest != null) {
+        return { strategy: "single_competitor", competitionTier: "market_reference",
+            targetPrice: Math.max(supply?.hardFloorPrice ?? 0, Math.min(opts.currentPrice || market.lowest, market.lowest)),
+            explanation: "فقط یک رقیب معتبر دیده شد؛ قیمت فعلی در صورت رقابتی بودن و پوشش کف سود حفظ می‌شود" };
+    }
     if (market.reference == null || market.lowest == null) {
         return {
             strategy: "no_data",

@@ -1,3 +1,4 @@
+import { distinctSellerCount, listingPanel } from "./listing";
 import { summarizeMarket } from "./aggregate";
 import { computeConfidence } from "./confidence";
 import { buildDiscount } from "./discount";
@@ -140,6 +141,9 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       totalSellerCount: source.totalSellerCount,
       productTitle: source.productTitle,
       prk: source.prk,
+      panels: source.ok && source.source === "torob" && source.prk
+        ? source.meta?.panels ?? [listingPanel(source.prk, source.offers, source.totalSellerCount)]
+        : [],
       sourceStatus: source.sourceStatus ?? (source.ok ? "ok" : "error"),
       isChallenged: isSourceChallenged,
       degraded: isSourceDegraded,
@@ -295,23 +299,20 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     });
   }
 
-  if (source.totalSellerCount < cfg.filters.minSellerCount) {
-    reviewReasons.push(
-      `تعداد فروشنده (${source.totalSellerCount}) کمتر از حداقل ${cfg.filters.minSellerCount} — احتمالاً لیستینگ ادغام‌نشده`,
-    );
-    log({
-      step: "listing",
-      title: "اعتبار لیستینگ",
-      message: `تعداد فروشنده کم است (${source.totalSellerCount} < ${cfg.filters.minSellerCount}); این لیستینگ به‌عنوان معیار مستقل نیاز به دقت دارد`,
-      level: "warn",
-    });
-  } else {
-    log({
-      step: "listing",
-      title: "اعتبار لیستینگ",
-      message: `لیستینگ ادغام‌شده با ${source.totalSellerCount} فروشنده — معتبر`,
-    });
-  }
+  const sellerCount = listingPanel(source.prk ?? "", source.offers, source.totalSellerCount).sellerCount;
+  const ownOnly = source.ok && !isSourceChallenged && !isSourceDegraded &&
+    source.sourceStatus !== "truncated" && sellerCount === 1 && selfShopInListing &&
+    source.offers.every(ownShopMatcher) &&
+    source.offers.some(o => o.price > 0 && o.inStock !== false && !o.isAd && !o.priceUnreliable) &&
+    !source.isTruncated && !source.meta?.isTruncated && !source.meta?.offersTruncated;
+  log({
+    step: "listing",
+    title: "فروشندگان پنل ترب",
+    message: ownOnly ? "تنها فروشندهٔ مشاهده‌شده فروشگاه خودمان است"
+      : sellerCount === 1 ? "پنل تک‌فروشنده؛ قیمت بازار به یک فروشگاه وابسته است"
+      : sellerCount ? `در پنل‌های بررسی‌شده ${fa(sellerCount)} فروشنده گزارش شده است` : "تعداد فروشندگان مشخص نیست",
+    data: { sellerCount, ownOnly },
+  });
 
   // ---------- 2) فیلترهای اعتبار داده + تفکیک شهر پیش‌فرض (مشهد)
   const offers = applyValidityFilters(
@@ -480,7 +481,11 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       source.meta?.isTruncated ||
       source.meta?.offersTruncated === true,
   );
+  const singleCompetitor = distinctSellerCount(offers.filter((o) => o.included)) === 1;
   const strategyOpts = {
+    onlyCompetitor: singleCompetitor,
+    currentPrice: ctx.currentFinalPrice,
+    ownOnly,
     skipGapRule: useValidity && est.chaseConfirmedLow,
     truncated: v2 && est.truncationAware && offersTruncated,
   };
@@ -627,6 +632,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     },
   });
 
+  if (singleCompetitor) reviewReasons.push("فقط یک رقیب معتبر مشاهده شد؛ قیمت او نیاز به بازبینی دارد");
   if (market.count < cfg.guards.minValidOffers) {
     reviewReasons.push(`تعداد پیشنهاد معتبر (${market.count}) کمتر از حداقل ${cfg.guards.minValidOffers}`);
   }
@@ -777,6 +783,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     price24hAgo: ctx.price24hAgo,
   };
   const guarded = applyGuards(target, guardCtx, cfg.guards, cfg.rounding, {
+    preserveCurrent: strategy === "hold_own_price" || strategy === "single_competitor",
     direction: UNDERCUT_ANCHOR_STRATEGIES.has(strategy) ? "floor" : "nearest",
   });
   reviewReasons.push(...guarded.reviewReasons);
@@ -851,9 +858,12 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       });
       weighOffers(clones);
       const m = summarizeMarket(clones, cfg.aggregation, marketOpts);
-      const st = decideTargetPrice(m, cfg.rank1, supply, strategyOpts);
+      const st = decideTargetPrice(m, cfg.rank1, supply, {
+        ...strategyOpts, onlyCompetitor: distinctSellerCount(clones.filter(o => o.included)) === 1,
+      });
       if (st.targetPrice == null) return { finalPrice: null, strategy: st.strategy };
       const g = applyGuards(st.targetPrice, guardCtx, cfg.guards, cfg.rounding, {
+        preserveCurrent: st.strategy === "single_competitor",
         direction: UNDERCUT_ANCHOR_STRATEGIES.has(st.strategy) ? "floor" : "nearest",
       });
       return { finalPrice: g.price, strategy: st.strategy };
@@ -1016,6 +1026,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     floorCeiling: disc.floorCeiling,
     identityMatchScorePct,
     selfShopInListing: selfConfirmsIdentity,
+    holdingOwnPrice: ownOnly && strategy === "hold_own_price",
     finalPrice,
     basePrice,
     discountPct: disc.discountPct,
@@ -1083,7 +1094,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       ? `⛔ ${formatSupervisorRejectMessage(supervisor)}: داده یا قیمت شرایط ایمنی را ندارد و متوقف شد`
       : needsReview
         ? `⏳ ارسال به بخش ریویو (بازبینی): ${reviewReasons.join("؛ ")} (پیشنهاد: سقف ${fa(basePrice)} با ${disc.discountPct}% تخفیف → کف ${fa(finalPrice)} تومان)`
-        : `✅ تایید ناظر SystemOne (${supervisor.overallScorePct}% ≥ ${supervisor.approveAbovePct}%) و اعمال خودکار: سقف معیار ${fa(basePrice)} با ${disc.discountPct}% تخفیف → کف قطعی ${fa(finalPrice)} تومان | ${
+        : `✅ تایید ناظر SystemOne (${supervisor.overallScorePct}% ≥ ${supervisor.approveAbovePct}%) ؛ آمادهٔ بازبینی مدیر: سقف معیار ${fa(basePrice)} با ${disc.discountPct}% تخفیف → کف قطعی ${fa(finalPrice)} تومان | ${
             isProvisional ? "قیمت Provisional بدون قیمت خرید تاییدنشده است" : `سود خالص: ${fa(position.netProfitToman)} تومان`
           }`,
     level: rejectedBySupervisor ? "error" : needsReview ? "warn" : "info",

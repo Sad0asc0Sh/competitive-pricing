@@ -67,6 +67,7 @@ export function applyGuards(
   rounding: PricingProfileConfig["rounding"],
   opts?: {
     /** جهت گرد کردن: undercut-anchor → floor (هرگز بالای رقیب)، کف → ceil (هرگز زیر کف) */
+    preserveCurrent?: boolean;
     direction?: "floor" | "ceil" | "nearest";
   },
 ): GuardOutcome {
@@ -78,10 +79,7 @@ export function applyGuards(
   const rawCost = Math.max(0, Math.round(Number(ctx.costPrice) || 0));
   const invCost = Math.max(0, Math.round(Number(ctx.inventoryCost) || 0));
   const repCost = Math.max(0, Math.round(Number(ctx.replacementCost) || 0));
-  const effectiveCost =
-    ctx.costPolicy === "replacement_floor"
-      ? Math.max(rawCost, repCost)
-      : Math.max(rawCost, invCost, repCost);
+  const effectiveCost = Math.max(rawCost, invCost, repCost);
   const strictAboveCost = ctx.strictAboveCost !== false;
 
   const computedFloor =
@@ -210,7 +208,7 @@ export function applyGuards(
 
   // ۳) گرد کردن نهایی با تضمین ریاضی عدم عبور از خط قرمز کف خرید و سود
   const effectiveStep = Math.max(1, Math.round(Number(rounding.finalStep) || 1000));
-  if (heldByHysteresis && curPrice != null && curPrice >= minAllowedPrice) {
+  if ((heldByHysteresis || (opts?.preserveCurrent && price === curPrice)) && curPrice != null && curPrice >= minAllowedPrice) {
     price = Math.round(curPrice);
   } else if (floorEnforced || opts?.direction === "ceil") {
     const ceilTarget = Math.max(price, minAllowedPrice);

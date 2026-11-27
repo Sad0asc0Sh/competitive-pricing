@@ -136,7 +136,7 @@ function priceRatio(target: ProductMatchTarget, candidate: TorobCandidateCard): 
 export function evaluateTorobCandidate(
   target: ProductMatchTarget,
   candidate: TorobCandidateCard,
-  minSellerCount = 1,
+  _minSellerCount = 1,
 ): ScoredCandidateResult {
   const rejectBelowPct = target.rejectBelowPct ?? 45;
   const approveAbovePct = target.approveAbovePct ?? 80;
@@ -169,8 +169,8 @@ export function evaluateTorobCandidate(
 
   const notes = [...r.notes];
   if (candidate.available === false) notes.push("کارت در ترب ناموجود است");
-  const sellers = candidate.sellerCount ?? 1;
-  if (sellers >= Math.max(3, minSellerCount)) notes.push(`لیستینگ ادغام‌شده معتبر (${sellers} فروشنده)`);
+  const sellers = candidate.sellerCount ?? 0;
+  if (sellers >= 2) notes.push(`لیستینگ ادغام‌شده معتبر (${sellers} فروشنده)`);
   else if (sellers === 1) notes.push("لیستینگ تک‌فروشنده‌ای");
 
   const rejected = r.verdict === "reject";

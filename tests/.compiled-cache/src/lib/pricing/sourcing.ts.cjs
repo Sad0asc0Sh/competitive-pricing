@@ -306,7 +306,7 @@ function resolveSupplyCost(input) {
         }
         else if (policy === "replacement_floor" && manualCost > effectiveCostPrice) {
             inventoryReplacementWarning =
-                `قیمت فروش ممکن است زیر هزینه‌ی موجودی انبار (${manualCost.toLocaleString("fa-IR")}) تعیین شود؛ ملاک ریپلیس ارزان‌تر (${effectiveCostPrice.toLocaleString("fa-IR")}) است`;
+                `کف فروش با رعایت هزینه‌ی موجودی انبار (${manualCost.toLocaleString("fa-IR")}) تعیین می‌شود؛ هزینهٔ تأمین مجدد (${effectiveCostPrice.toLocaleString("fa-IR")}) است`;
             warnings.push(inventoryReplacementWarning);
             explanation += ` (قیمت ریپلیس ملاک است؛ انبار گران‌تر: ${manualCost.toLocaleString("fa-IR")} تومان)`;
         }
@@ -355,7 +355,7 @@ function resolveSupplyCost(input) {
             overheadAmount = 0;
             effectiveCostPrice = replacementCandidate;
             inventoryReplacementWarning =
-                `قیمت فروش ممکن است زیر هزینه‌ی موجودی انبار (${manualCost.toLocaleString("fa-IR")}) تعیین شود؛ ملاک ریپلیس ارزان‌تر (${effectiveCostPrice.toLocaleString("fa-IR")}) است`;
+                `کف فروش با رعایت هزینه‌ی موجودی انبار (${manualCost.toLocaleString("fa-IR")}) تعیین می‌شود؛ هزینهٔ تأمین مجدد (${effectiveCostPrice.toLocaleString("fa-IR")}) است`;
             warnings.push(inventoryReplacementWarning);
             explanation = `قیمت ریپلیس (${effectiveCostPrice.toLocaleString("fa-IR")} تومان) ملاک است؛ انبار گران‌تر: ${manualCost.toLocaleString("fa-IR")} تومان`;
         }
@@ -384,7 +384,7 @@ function resolveSupplyCost(input) {
         explanation = "بدون لیست همکار و قیمت خرید اولیه — در انتظار استخراج هوشمند قیمت معیار و کف امن از بازار ترب";
     }
     const hardFloorPrice = computeHardFloorPrice({
-        effectiveCostPrice,
+        effectiveCostPrice: Math.max(manualCost, effectiveCostPrice, explicitReplacementCost),
         minMarginPct,
         minProfitAmountToman: minProfitAmount,
         fixedCostToman: mCfg.fixedCostToman ?? 0,

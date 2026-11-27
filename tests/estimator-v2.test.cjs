@@ -19,7 +19,7 @@ const DAY = 86400000
 // ---------------------------------------------------------------------------------------------
 // ۱) بازگشت امن (rollback): estimator.mode="legacy" باید دقیقاً خروجی ثبت‌شدهٔ موتور اصلی ۴.۱.۲ را بدهد
 // ---------------------------------------------------------------------------------------------
-test('E1. rollback: حالت legacy روی ۳۰۰ سناریوی تصادفی تصمیم قیمت را دقیقاً مثل موتور اصلی ۴.۱.۲ می‌دهد', () => {
+test('E1. rollback: حالت legacy روی ۳۰۰ سناریوی تصادفی با سیاست بازار تک‌رقیب و خط مبنای ۴.۱.۲', () => {
   const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'legacy-4.1.2-snapshot.json'), 'utf8'))
   const scenarios = makeScenarios(fx.n, fx.seed, new Date(fx.now))
   assert.equal(scenarios.length, fx.rows.length)
@@ -33,9 +33,20 @@ test('E1. rollback: حالت legacy روی ۳۰۰ سناریوی تصادفی ت
   const diffs = []
   let sameReview = 0
   scenarios.forEach((sc, i) => {
-    const got = pickComparable(runPricingPipeline(sc.source, { ...sc.ctx, config: cfg }))
+    const result = runPricingPipeline(sc.source, { ...sc.ctx, config: cfg })
+    const got = pickComparable(result)
     const want = fx.rows[i]
-    for (const k of PRICE_FIELDS) {
+    // Single-shop markets use the current price or sole competitor as anchor in both estimators.
+    const uniqueShops = new Set(result.offers.filter(o => o.included).map(o => o.shopId || o.shopName))
+    if (uniqueShops.size === 1) {
+      assert.equal(got.strategy, 'single_competitor')
+      assert.equal(got.tier, 'market_reference')
+      assert.equal(got.discountPct, 0)
+      assert.equal(got.finalPrice, got.basePrice)
+      assert.ok(got.finalPrice >= result.supply.hardFloorPrice)
+    }
+    const fields = uniqueShops.size === 1 ? ['confidence', 'isProvisional'] : PRICE_FIELDS
+    for (const k of fields) {
       if (JSON.stringify(got[k]) !== JSON.stringify(want[k])) diffs.push(`#${i}.${k}: got ${JSON.stringify(got[k])} want ${JSON.stringify(want[k])}`)
     }
     if (got.needsReview === want.needsReview) sameReview++

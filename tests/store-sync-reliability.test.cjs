@@ -189,7 +189,7 @@ test('S7. تطبیق پاسخ فروشگاه: قیمت تاییدشدهٔ متف
   }
 })
 
-test('S8. گارد محلی: زیر قیمت خرید/کف بدون مجوز بدون هیچ درخواست شبکه‌ای مسدود می‌شود؛ مجوز کامل payload را با belowCostOverride می‌فرستد', async () => {
+test('S8. گارد محلی: تمام کانکتورها حتی با مجوز سابق فروش زیر کف را قبل از ارسال متوقف می‌کنند', async () => {
   let m = mockFetch(async () => okDry)
   try {
     const r = await sgeoooleAdapter.push(CFG, { ...PAYLOAD, finalPrice: 1900000 })
@@ -214,10 +214,19 @@ test('S8. گارد محلی: زیر قیمت خرید/کف بدون مجوز ب�
       campaignType: 'none',
       belowCostOverride: { allowBelowCost: true, reason: 'تصفیه انبار', authorizedBy: 'admin@ekgkala.ir' },
     })
-    assert.equal(r.ok, true)
-    const body = JSON.parse(m.calls[m.calls.length - 1].init.body)
-    assert.equal(body.belowCostOverride.authorizedBy, 'admin@ekgkala.ir')
-    assert.equal(body.pricingMeta.belowCostOverride.allowBelowCost, true)
+    assert.equal(r.code, 'BELOW_COST_PRICE')
+    for (const adapter of Object.values(conn.adapters)) {
+      for (const patch of [
+        { effectiveCostPrice: 0 },
+        { basePrice: 2700000, finalPrice: 2430000, discountPct: 50 },
+        { finalPrice: 1900000, belowCostOverride: { allowBelowCost: true, reason: 'clearance', authorizedBy: 'manager' } },
+      ]) {
+        const result = await adapter.push(CFG, { ...PAYLOAD, ...patch })
+        assert.equal(result.stage, 'precheck', adapter.type)
+        assert.equal(result.ok, false)
+      }
+    }
+    assert.equal(m.calls.length, 0)
   } finally {
     m.restore()
   }

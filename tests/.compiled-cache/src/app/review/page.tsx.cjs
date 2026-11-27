@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.dynamic = void 0;
 exports.default = ReviewPage;
 const jsx_runtime_1 = require("react/jsx-runtime");
+const listing_1 = require("../../lib/pricing/listing");
 const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
 const review_client_1 = require("@/components/review-client");
@@ -58,8 +59,6 @@ async function ReviewPage() {
             cost: schema_1.products.costPrice,
             hardFloor: schema_1.products.currentHardFloorPrice,
             current: schema_1.products.currentFinalPrice,
-            torobUrl: schema_1.products.torobUrl,
-            torobPrk: schema_1.products.torobPrk,
         })
             .from(schema_1.priceDecisions)
             .innerJoin(schema_1.products, (0, drizzle_orm_1.eq)(schema_1.products.id, schema_1.priceDecisions.productId))
@@ -71,7 +70,6 @@ async function ReviewPage() {
             name: schema_1.products.name,
             sku: schema_1.products.sku,
             torobUrl: schema_1.products.torobUrl,
-            torobPrk: schema_1.products.torobPrk,
         })
             .from(schema_1.priceDecisions)
             .innerJoin(schema_1.products, (0, drizzle_orm_1.eq)(schema_1.products.id, schema_1.priceDecisions.productId))
@@ -132,13 +130,9 @@ async function ReviewPage() {
             }
         }
     }
-    const pendingItems = rows.map(({ d, name, sku, cost, hardFloor, current, torobUrl, torobPrk }) => {
+    const pendingItems = rows.map(({ d, name, sku, cost, hardFloor, current }) => {
         const steps = Array.isArray(d.steps) ? d.steps : [];
-        const sourceStep = steps.find((s) => s.step === "source");
-        const torobTitle = typeof sourceStep?.data?.productTitle === "string" ? sourceStep.data.productTitle : null;
-        const stepPrk = typeof sourceStep?.data?.prk === "string" ? sourceStep.data.prk : null;
-        const resolvedPrk = torobPrk || stepPrk || null;
-        const resolvedTorobUrl = torobUrl || (resolvedPrk ? `https://torob.com/p/${resolvedPrk}/` : null);
+        const panels = (0, listing_1.decisionPanels)(steps);
         const reasons = steps.find((s) => s.step === "decision")?.message ?? "";
         const supStep = steps.find((s) => s.step === "supervisor");
         const supMsg = supStep?.message ?? null;
@@ -169,9 +163,9 @@ async function ReviewPage() {
         const errorRiskPct = Math.max(0, Math.min(100, Math.round((1 - (pRight ?? confidence)) * 100)));
         const readyForApproval = Boolean(!isBelowFloor &&
             !syncFailed &&
-            !d.marketConflict &&
+            !d.marketConflict && !d.isSimulated && effectiveCost > 0 &&
             finalPrice > 0 &&
-            (errorRiskPct <= 20 || confidence >= 0.8 || gateStep?.data?.readyForApproval === true));
+            gateStep?.data?.readyForApproval === true);
         return {
             id: d.id,
             productId: d.productId,
@@ -208,9 +202,8 @@ async function ReviewPage() {
             isBelowFloor,
             syncFailed,
             readyForApproval,
-            torobUrl: resolvedTorobUrl,
-            torobPrk: resolvedPrk,
-            torobTitle,
+            panels,
+            effectiveFloor,
             reasons,
             supMsg,
             supOverallPct,
@@ -221,13 +214,9 @@ async function ReviewPage() {
             competitors: offersByDecision.get(d.id) ?? [],
         };
     });
-    const rejectedItems = rejectedRows.map(({ d, name, sku, torobUrl, torobPrk }) => {
+    const rejectedItems = rejectedRows.map(({ d, name, sku, torobUrl }) => {
         const steps = Array.isArray(d.steps) ? d.steps : [];
-        const sourceStep = steps.find((s) => s.step === "source");
-        const torobTitle = typeof sourceStep?.data?.productTitle === "string" ? sourceStep.data.productTitle : null;
-        const stepPrk = typeof sourceStep?.data?.prk === "string" ? sourceStep.data.prk : null;
-        const resolvedPrk = torobPrk || stepPrk || null;
-        const resolvedTorobUrl = torobUrl || (resolvedPrk ? `https://torob.com/p/${resolvedPrk}/` : null);
+        const panels = (0, listing_1.decisionPanels)(steps);
         const supStep = steps.find((s) => s.step === "supervisor");
         const supMsg = supStep?.message ?? "رد توسط ناظر SystemOne";
         const { overallPct: supOverallPct, gates: supGates } = extractSupervisorGates(supStep);
@@ -244,8 +233,8 @@ async function ReviewPage() {
             supMsg,
             supOverallPct,
             supGates,
-            torobUrl: resolvedTorobUrl,
-            torobTitle,
+            panels,
+            torobUrl: panels[0] ? `https://torob.com/p/${panels[0].prk}/` : torobUrl,
         };
     });
     return (0, jsx_runtime_1.jsx)(review_client_1.ReviewClient, { pendingItems: pendingItems, rejectedItems: rejectedItems });

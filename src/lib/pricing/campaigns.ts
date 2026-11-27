@@ -97,7 +97,8 @@ export function pickCampaign(
   }
 
   // بدون تخفیف مثبت (> 0%) هیچ کمپینی نباید فعال شود (حتی اگر صراحتاً هدف‌گذاری شده باشد)
-  if (!Number.isFinite(input.discountPct) || input.discountPct <= 0) {
+  if (!Number.isFinite(input.discountPct) || input.discountPct <= 0 ||
+      (input.discountKind !== "own_price_7d" && input.discountKind !== "market_p75")) {
     return {
       type: "none",
       campaignId: null,
@@ -106,7 +107,7 @@ export function pickCampaign(
       badgeTheme: "green-orange",
       showInFeatured: false,
       endsAt: null,
-      reason: "درصد تخفیف صفر است — کمپین تخفیف بدون تخفیف واقعی فعال نمی‌شود",
+      reason: "کمپین به تخفیف مثبت با مرجع معتبر نیاز دارد",
     };
   }
 
@@ -157,15 +158,9 @@ export function pickCampaign(
     if (c.type === "timed_sale" && !isExplicitlyTargeted) return false;
 
     // P2-6: flash فقط با افت واقعی ≥ ۸٪ نسبت به میانگین ۷ روزه خودی
-    if (c.type === "flash" && !isExplicitlyTargeted && !flashGatingOk) return false;
+    if (c.type === "flash" && !flashGatingOk) return false;
 
-    if (!isExplicitlyTargeted) {
-      if (input.discountPct < c.minDiscountPct || input.discountPct > c.maxDiscountPct) {
-        return false;
-      }
-    } else if (input.discountPct > c.maxDiscountPct) {
-      return false;
-    }
+    if (input.discountPct < c.minDiscountPct || input.discountPct > c.maxDiscountPct) return false;
 
     if (Array.isArray(c.targetProductIds) && c.targetProductIds.length > 0) {
       if (input.productId == null || !c.targetProductIds.includes(input.productId)) {
@@ -213,30 +208,6 @@ export function pickCampaign(
   const cardIdxLabel = input.cardIndex ?? 1;
 
   if (!eligible.length) {
-    if (
-      input.preferredCampaignType &&
-      ["flash", "featured", "timed_sale"].includes(input.preferredCampaignType) &&
-      input.discountPct > 0
-    ) {
-      const pType = input.preferredCampaignType as SgeoooleCampaignType;
-      const fallbackName =
-        pType === "flash"
-          ? "پیشنهاد لحظه‌ای"
-          : pType === "featured"
-            ? "پیشنهاد شگفت‌انگیز"
-            : "فروش ویژه زمان‌دار";
-      return {
-        type: pType,
-        campaignId: null,
-        name: fallbackName,
-        campaignName: fallbackName,
-        badgeTheme: pType === "flash" ? "gold-red" : pType === "featured" ? "red-purple" : "green-orange",
-        showInFeatured: input.preferredShowInFeatured ?? true,
-        endsAt: new Date(now.getTime() + (pType === "flash" ? 12 : 48) * 3600 * 1000),
-        reason: `تخصیص مستقیم بر اساس تنظیم اختصاصی کارت محصول (${TYPE_TITLE[pType]})`,
-      };
-    }
-
     return {
       type: "none",
       campaignId: null,

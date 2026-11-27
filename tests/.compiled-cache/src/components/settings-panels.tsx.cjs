@@ -23,13 +23,13 @@ const labels = {
     staleSafetyBufferPct: "ضریب احتیاط روی لیست قدیمی همکاران ٪",
     neverBelowManualCost: "هرگز کمتر از قیمت خرید ثبت‌شده انبار نباشد (سازگاری قدیمی)",
     costPolicy: "سیاست تقاطع هزینه انبار و قیمت ریپلیس (replacement_floor | max_inventory_replacement | legacy_never_below_manual)",
-    allowAutoApplyWithoutCost: "اعمال خودکار قیمت معیار بازار حتی در نبود لیست/قیمت خرید (پیش‌فرض غیرفعال = همیشه ریویو)",
+    allowAutoApplyWithoutCost: "محاسبهٔ پیشنهاد بر پایهٔ اجماع بازار در نبود بهای خرید",
     allowMarketMakerWithoutCost: "مجوز صریح سیاست تجاری Market-Maker در نبود قیمت خرید (پیش‌فرض غیرفعال)",
     costlessSafePercentile: "صدک امن بازار در نبود لیست خرید (حذف نیمه ارزان مشکوک)",
     costlessSafetyMarginPct: "حاشیه ایمنی ضدضرر روی هسته بازار در نبود لیست خرید ٪",
     impliedCostBackoffPct: "فاصله تخمینی قیمت خرید از کف امن بازار در نبود لیست ٪",
     filters: "۱) فیلترهای اعتبار داده ترب",
-    minSellerCount: "حداقل تعداد فروشنده (لیستینگ ادغام‌شده)",
+    minSellerCount: "تعداد فروشندهٔ مرجع برای امتیاز اطمینان بازار",
     maxOfferAgeDays: "حداکثر قدمت قیمت رقبا در ترب (روز)",
     excludeAds: "حذف آگهی‌های تبلیغاتی (is_adv)",
     excludeOutOfStock: "حذف ناموجودها",
@@ -100,7 +100,6 @@ const labels = {
     marketUpperPercentile: "صدک سقف بازار تحت رصد (مثلاً ۸۵ یعنی صدک ۸۵ فروشندگان معتبر بدون پرت)",
     maxCeilingAboveMedianPct: "حداکثر فاصله مجاز سقف از میانه بازار ٪ (سپر ضد قیمت پرت)",
     calibrateCeilingForExactFloor: "کالیبراسیون دقیق سقف تا با درصد تخفیف صحیح دقیقاً به کف هدف برسد",
-    markupPct: "درصد افزایش روی کف (در حالت markup یا نبود داده)",
     minDiscountPct: "حداقل درصد تخفیف روی سقف ٪",
     maxDiscountPct: "حداکثر درصد تخفیف روی سقف ٪",
     ownPriceWindowDays: "پنجره تاریخی قیمت خودی برای مرجع تخفیف (روز)",
@@ -122,7 +121,7 @@ const labels = {
     costless: "۱۱) مسیر کالاهای بدون قیمت خرید (Provisional)",
     provisionalPercentile: "صدک استخراج قیمت موقت بازار در نبود قیمت خرید",
     minCredibleFresh: "حداقل فروشندگان معتبر و به‌روز برای فعال‌شدن قیمت موقت",
-    autoApply: "اجازه اعمال خودکار قیمت موقت بدون قیمت خرید (پیش‌فرض false = همیشه ریویو)",
+    autoApply: "محاسبهٔ پیشنهاد موقت بدون بهای خرید",
     engine: "۱۲) نسخه موتور",
     version: "نسخه موتور قیمت‌گذاری",
     estimator: "۱۳) تخمین‌گر احتمالی نسخه ۲ (Estimator v2)",
@@ -158,7 +157,7 @@ const selectOptions = {
         { value: "weighted_priority", label: "میانگین وزنی اولویت همکاران" },
     ],
     "sourcing.costPolicy": [
-        { value: "replacement_floor", label: "کف از قیمت ریپلیس (هشدار در صورت عبور از هزینه انبار)" },
+        { value: "replacement_floor", label: "مبنای تأمین از ریپلیس با رعایت کف خرید انبار" },
         { value: "max_inventory_replacement", label: "کف از بیشینه هزینه انبار و ریپلیس (محافظه‌کارانه)" },
         { value: "legacy_never_below_manual", label: "سازگاری ۳.۶: هرگز کمتر از هزینه انبار" },
     ],
@@ -177,13 +176,11 @@ const selectOptions = {
         { value: "market_percentile_ceiling", label: "صدک بالای بازار تحت رصد (حذف کامل پرت‌ها — پیشنهادی)" },
         { value: "highest_valid_seller", label: "بالاترین فروشنده معتبر بازار (محصور در سپر ضدپرت)" },
         { value: "trimmed_upper_cluster", label: "میانگین نیمه بالایی فروشندگان معتبر بازار" },
-        { value: "markup", label: "افزایش درصدی ثابت روی کف هدف (Markup)" },
     ],
     "discount.basePriceMode": [
         { value: "market_ceiling", label: "سقف اصولی بازار (market_ceiling)" },
         { value: "market_upper", label: "صدک بالای بازار (market_upper)" },
         { value: "cluster_ceiling", label: "سقف خوشه بالایی (cluster_ceiling)" },
-        { value: "markup", label: "افزایش درصدی روی کف (markup)" },
     ],
     "discount.referencePriority": [
         { value: "market_first", label: "اولویت سقف واقعی بازار ترب (پیشنهادی برای رقابت)" },
@@ -340,7 +337,9 @@ function ProfileEditor({ profiles }) {
                                             setName(e.target.value);
                                         } })] }), (0, jsx_runtime_1.jsxs)("button", { type: "button", className: "btn-primary w-full lg:w-auto", disabled: pending, onClick: () => save(false), children: [pending && (0, jsx_runtime_1.jsx)(icons_1.IconSpinner, { className: "h-4 w-4" }), (0, jsx_runtime_1.jsx)("span", { children: "\uD83D\uDCBE \u0630\u062E\u06CC\u0631\u0647 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644" })] }), (0, jsx_runtime_1.jsx)("button", { type: "button", className: "btn-secondary w-full lg:w-auto", disabled: pending, onClick: () => save(true), children: "\u2795 \u0630\u062E\u06CC\u0631\u0647 \u0628\u0647\u200C\u0639\u0646\u0648\u0627\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062C\u062F\u06CC\u062F" })] }), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between", children: [(0, jsx_runtime_1.jsxs)("div", { className: "relative flex-1 sm:max-w-sm", children: [(0, jsx_runtime_1.jsx)(icons_1.IconSearch, { className: "pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-slate-400" }), (0, jsx_runtime_1.jsx)("input", { className: "input pr-9 text-xs", placeholder: "\u062C\u0633\u062A\u062C\u0648 \u062F\u0631 \u062A\u0645\u0627\u0645 \u067E\u0627\u0631\u0627\u0645\u062A\u0631\u0647\u0627\u06CC \u0645\u0648\u062A\u0648\u0631 (\u0645\u062B\u0644\u0627\u064B \u0645\u0634\u0647\u062F\u060C \u062D\u0627\u0634\u06CC\u0647 \u0633\u0648\u062F\u060C \u062A\u062E\u0641\u06CC\u0641)\u2026", value: paramQuery, onChange: (e) => setParamQuery(e.target.value) })] }), (0, jsx_runtime_1.jsxs)("div", { className: "flex items-center gap-2", children: [(0, jsx_runtime_1.jsx)("button", { type: "button", onClick: () => setAllOpen(true), className: "btn-secondary btn-sm flex-1 sm:flex-initial", children: "\u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 \u0647\u0645\u0647 \u0628\u062E\u0634\u200C\u0647\u0627" }), (0, jsx_runtime_1.jsx)("button", { type: "button", onClick: () => setAllOpen(false), className: "btn-secondary btn-sm flex-1 sm:flex-initial", children: "\u0628\u0633\u062A\u0646 \u0647\u0645\u0647" })] })] }), msg && (0, jsx_runtime_1.jsx)("div", { className: "rounded-xl bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-800", children: msg })] }), (0, jsx_runtime_1.jsx)("div", { className: "space-y-3", children: sections.map((sec) => {
                     const sectionTitle = labels[sec] ?? sec;
-                    const entries = Object.entries(cfg[sec] ?? {}).filter(([, v]) => {
+                    const entries = Object.entries(cfg[sec] ?? {}).filter(([key, v]) => {
+                        if ((sec === "discount" && key === "markupPct") || (sec === "guards" && key === "requireHumanApproval"))
+                            return false;
                         if (v != null &&
                             typeof v === "object" &&
                             (!Array.isArray(v) || (v.length > 0 && typeof v[0] === "object"))) {

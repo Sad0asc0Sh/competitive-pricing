@@ -8,6 +8,7 @@ exports.callTorobMcpToolWithDiag = callTorobMcpToolWithDiag;
 exports.callTorobMcpTool = callTorobMcpTool;
 exports.mergeTorobPanelOffers = mergeTorobPanelOffers;
 exports.fetchViaTorobMcpServer = fetchViaTorobMcpServer;
+const listing_1 = require("../pricing/listing");
 const client_1 = require("../ai/client");
 const filters_1 = require("../pricing/filters");
 const matcher_1 = require("../pricing/matcher");
@@ -335,10 +336,11 @@ async function fetchViaTorobMcpServer(opts) {
                 break;
         }
         if (outcome) {
-            const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
+            const eligibleCards = outcome.allRanked.filter((x) => !x.rejected).slice(0, 10);
+            const eligiblePrks = new Set(eligibleCards.map((x) => x.candidate.prk));
             const shouldAskAiForPanels = opts.matchConfig?.aiIdentityEnabled === true &&
-                cardsByPrk.size > 0 &&
-                (!outcome.confident || nonRejectedCount > 1) &&
+                eligibleCards.length > 0 &&
+                (!outcome.confident || eligibleCards.length > 1) &&
                 (await (0, client_1.aiEnabled)());
             if (shouldAskAiForPanels) {
                 const aiRes = await (0, client_1.verifyTorobMatchesWithAI)({
@@ -346,7 +348,7 @@ async function fetchViaTorobMcpServer(opts) {
                     sku: opts.sku,
                     category: opts.category,
                     anchorPriceToman: opts.anchorPriceToman,
-                    candidates: outcome.allRanked.slice(0, 10).map((r) => ({
+                    candidates: eligibleCards.map((r) => ({
                         prk: r.candidate.prk,
                         titleFa: r.candidate.titleFa,
                         titleEn: r.candidate.titleEn,
@@ -370,10 +372,10 @@ async function fetchViaTorobMcpServer(opts) {
                     }
                     if (aiRes.verdict === "match" && aiRes.primaryPrk) {
                         const picked = cardsByPrk.get(aiRes.primaryPrk);
-                        if (picked) {
+                        if (picked && eligiblePrks.has(picked.prk)) {
                             prk = picked.prk;
                             detailsUrl = picked.details_url ?? detailsUrl;
-                            extraMatchedPrks = aiRes.matchedPrks.filter((id) => id !== prk && cardsByPrk.has(id)).slice(0, 2);
+                            extraMatchedPrks = aiRes.matchedPrks.filter((id) => id !== prk && eligiblePrks.has(id)).slice(0, 2);
                             matchExplanation = `تطبیق پنل ادغام با هوش مصنوعی (${1 + extraMatchedPrks.length} پنل): ${aiRes.reasoning}`;
                             matchScore = outcome.allRanked.find((x) => x.candidate.prk === prk)?.score ?? outcome.best?.score ?? 85;
                         }
@@ -467,6 +469,7 @@ async function fetchViaTorobMcpServer(opts) {
             matchScore,
             matchExplanation,
             ...(aiIdentityCheck ? { aiIdentityCheck } : {}),
+            panels: panelList.map((p) => (0, listing_1.listingPanel)(p.prk, p.offers, p.totalSellerCount)),
             ...(mergedPanelPrks.length > 1 ? { mergedPanelPrks } : {}),
             // اطلاعات کفایت داده: خروجی ترب «۳۰ ارزان‌ترینِ موجود» است؛ موتور باید بداند چیزی دیده نشده یا نه
             offersTruncated: converted.offersTruncated,

@@ -60,9 +60,6 @@ async function GET(req, { params }) {
  * body: {
  *   action: 'approve' | 'reject' | 'retry_sync' | 'relink_torob',
  *   force?: boolean,
- *   allowBelowCost?: boolean,
- *   belowCostReason?: string,
- *   authorizedBy?: string,
  *   finalPrice?: number | null,
  *   useDisplayDiscount?: boolean | null,
  *   basePrice?: number | null,
@@ -83,9 +80,6 @@ async function POST(req, { params }) {
     const body = (await req.json().catch(() => ({})));
     const action = body.action;
     const force = body.force === true;
-    const allowBelowCost = body.allowBelowCost === true;
-    const belowCostReason = typeof body.belowCostReason === "string" ? body.belowCostReason.trim() : "";
-    const authorizedBy = typeof body.authorizedBy === "string" ? body.authorizedBy.trim() : "";
     if (action === "reject") {
         await runnerService.rejectDecision(decisionId);
         return server_1.NextResponse.json({ ok: true, message: "تصمیم رد شد" });
@@ -139,20 +133,6 @@ async function POST(req, { params }) {
     if (action !== "approve" && action !== "retry_sync") {
         return server_1.NextResponse.json({ ok: false, error: "action نامعتبر" }, { status: 400 });
     }
-    if (allowBelowCost) {
-        if (belowCostReason.length < 5 || authorizedBy.length < 2) {
-            const msg = "برای تایید زیر قیمت خرید یا کف سود، ثبت دلیل معتبر (حداقل ۵ کاراکتر) و نام تاییدکننده (authorizedBy) الزامی است.";
-            return server_1.NextResponse.json({
-                ok: false,
-                code: "INVALID_BELOW_COST_OVERRIDE",
-                belowCostBlocked: true,
-                error: msg,
-                message: msg,
-            }, { status: 400 });
-        }
-    }
-    // Defence-in-depth floor guard at API boundary:
-    // Ordinary force=true MUST NOT bypass cost or hard profit floors without explicit authorized override.
     const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
     if (!d) {
         return server_1.NextResponse.json({ ok: false, error: "تصمیم یافت نشد", message: "تصمیم یافت نشد" }, { status: 404 });
@@ -176,10 +156,10 @@ async function POST(req, { params }) {
     const effectiveFloor = Math.max(d.hardFloorPrice ?? 0, p?.currentHardFloorPrice ?? 0, effectiveCost);
     const isBelowCostOrFloor = (effectiveCost > 0 && finalPrice <= effectiveCost) ||
         (effectiveFloor > 0 && finalPrice < effectiveFloor);
-    if (isBelowCostOrFloor && !allowBelowCost) {
+    if (isBelowCostOrFloor) {
         const floorLabel = Math.max(effectiveCost, effectiveFloor).toLocaleString("fa-IR");
         const finalLabel = finalPrice.toLocaleString("fa-IR");
-        const msg = `خط قرمز قیمت‌گذاری: قیمت نهایی (${finalLabel}) پایین‌تر از کف مجاز/قیمت خرید (${floorLabel}) است. تایید معمولی یا force مجاز به عبور از کف هزینه نیست؛ نیازمند مجوز صریح زیر قیمت خرید (allowBelowCost + دلیل + نام تاییدکننده) است.`;
+        const msg = `خط قرمز قیمت‌گذاری: قیمت نهایی (${finalLabel}) پایین‌تر از کف مجاز/قیمت خرید (${floorLabel}) است. قیمت فروش را اصلاح کنید.`;
         return server_1.NextResponse.json({
             ok: false,
             code: "BELOW_FLOOR_BLOCKED",
@@ -188,12 +168,7 @@ async function POST(req, { params }) {
             message: msg,
         }, { status: 422 });
     }
-    const applyOpts = {
-        force,
-        allowBelowCost,
-        belowCostReason: allowBelowCost ? belowCostReason : undefined,
-        authorizedBy: allowBelowCost ? authorizedBy : undefined,
-    };
+    const applyOpts = { force };
     const extRunner = runnerService;
     if (hasHumanOverride && typeof extRunner.applyHumanOverrideToDecision === "function") {
         const ov = await extRunner.applyHumanOverrideToDecision(decisionId, {

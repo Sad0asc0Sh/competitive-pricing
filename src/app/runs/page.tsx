@@ -1,3 +1,4 @@
+import { decisionPanels } from "@/lib/pricing/listing";
 import { db } from "@/db";
 import { activityLogs, priceDecisions, priceRuns, products } from "@/db/schema";
 import {
@@ -86,6 +87,7 @@ export default async function RunsPage({ searchParams }: { searchParams: Promise
     return {
       id: d.id,
       productId: d.productId,
+      panels: decisionPanels(rawSteps),
       name,
       sku,
       source: d.source,

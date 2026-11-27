@@ -1,3 +1,4 @@
+import { evaluateDecisionFloorSafety } from "@/lib/pricing/approval";
 import crypto from "node:crypto";
 import { db } from "@/db";
 import { storeConnectors, type StoreConnector } from "@/db/schema";
@@ -9,12 +10,6 @@ import {
   type SgeoooleSyncAck,
 } from "@/lib/store/sgeooole-ack";
 import { eq } from "drizzle-orm";
-
-export interface BelowCostOverrideMeta {
-  allowBelowCost: boolean;
-  reason: string;
-  authorizedBy: string;
-}
 
 /** payload استاندارد که به فروشگاه ارسال می‌شود */
 export interface PricePushPayload {
@@ -37,7 +32,6 @@ export interface PricePushPayload {
   campaignEndsAt?: string | null;
   decisionId: number;
   idempotencyKey?: string | null;
-  belowCostOverride?: BelowCostOverrideMeta | null;
   confidence: number;
   projectedNationalRank?: number | null;
   projectedLocalRank?: number | null;
@@ -108,15 +102,23 @@ export function computePricingSyncSignature(
   return crypto.createHmac("sha256", String(secret)).update(`${timestamp}.${canonical}`, "utf8").digest("hex");
 }
 
-function hasValidBelowCostOverride(override?: BelowCostOverrideMeta | null): boolean {
-  return Boolean(
-    override &&
-      override.allowBelowCost === true &&
-      typeof override.reason === "string" &&
-      override.reason.trim().length >= 5 &&
-      typeof override.authorizedBy === "string" &&
-      override.authorizedBy.trim().length >= 2,
-  );
+function validateCheckout(p: PricePushPayload): PushResult | null {
+  const safety = evaluateDecisionFloorSafety({ ...p, finalStep: 1 });
+  const codes = {
+    blocked_invalid_price: "INVALID_PRICE", blocked_unknown_cost: "MISSING_COST_BASIS",
+    blocked_below_cost: "BELOW_COST_PRICE", blocked_below_floor: "BELOW_HARD_FLOOR",
+  };
+  if (!safety.ok) return {
+    ok: false, code: codes[safety.status as keyof typeof codes], message: safety.reason!,
+    stage: "precheck", retryable: false, attempts: 0,
+  };
+  if (!Number.isSafeInteger(p.basePrice) || p.basePrice < p.finalPrice ||
+      !Number.isInteger(p.discountPct) || p.discountPct < 0 || p.discountPct >= 100 ||
+      Math.round(p.basePrice * (1 - p.discountPct / 100)) !== p.finalPrice) {
+    return { ok: false, code: "INVALID_DISCOUNT", stage: "precheck", retryable: false, attempts: 0,
+      message: "قیمت پس از تخفیف با قیمت فروش تأییدشده برابر نیست" };
+  }
+  return null;
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Response> {
@@ -168,21 +170,13 @@ export function buildSgeoooleRequestPayload(p: PricePushPayload) {
     (isFlash ? "gold-red" : isSpecial ? "red-purple" : "green-orange");
 
   const idempotencyKey = buildIdempotencyKey(p);
-  const belowCostOverride = hasValidBelowCostOverride(p.belowCostOverride)
-    ? {
-        allowBelowCost: true,
-        reason: p.belowCostOverride!.reason.trim(),
-        authorizedBy: p.belowCostOverride!.authorizedBy.trim(),
-      }
-    : undefined;
-
   return {
     sku: p.sku,
     productCode: p.storeExternalId?.toUpperCase().startsWith("KY-") ? p.storeExternalId.toUpperCase() : undefined,
     productId: p.storeExternalId && !p.storeExternalId.toUpperCase().startsWith("KY-") ? p.storeExternalId : undefined,
     decisionId: p.decisionId,
     idempotencyKey,
-    ...(belowCostOverride ? { belowCostOverride } : {}),
+
     // فیلدهای استاندارد مدل Product در sgeooole:
     // نکته کلیدی: در timed_sale قیمت پایه روی Product برابر سقف معیار (basePrice) قرار می‌گیرد و تخفیف از طریق مدل Sale اعمال می‌شود؛
     // اگر تخفیف نمایشی بدون کمپین خاص فعال باشد (campaignType="none" با discountPct > 0) نیز سقف و درصد تخفیف حفظ می‌شود.
@@ -216,7 +210,7 @@ export function buildSgeoooleRequestPayload(p: PricePushPayload) {
     pricingMeta: {
       decisionId: p.decisionId,
       idempotencyKey,
-      ...(belowCostOverride ? { belowCostOverride } : {}),
+
       confidence: p.confidence,
       projectedNationalRank: p.projectedNationalRank ?? null,
       projectedLocalRank: p.projectedLocalRank ?? null,
@@ -367,30 +361,8 @@ export async function verifyStoreDryRun(
 const sgeooole: StoreConnectorAdapter = {
   type: "sgeooole",
   async push(cfg, p, opts) {
-    const overrideAllowed = hasValidBelowCostOverride(p.belowCostOverride);
-
-    // حفاظت نهایی قبل از ارسال به سایت: هرگز قیمت فروش <= قیمت خرید نباشد (مگر با مجوز صریح ممیزی‌شده)
-    if (!overrideAllowed && p.effectiveCostPrice && p.effectiveCostPrice > 0 && p.finalPrice <= p.effectiveCostPrice) {
-      return {
-        ok: false,
-        code: "BELOW_COST_PRICE",
-        stage: "precheck",
-        retryable: false,
-        attempts: 1,
-        message: `مسدود شد: قیمت نهایی (${p.finalPrice}) کمتر یا مساوی قیمت خرید/تامین (${p.effectiveCostPrice}) است!`,
-      };
-    }
-
-    if (!overrideAllowed && p.hardFloorPrice && p.hardFloorPrice > 0 && p.finalPrice < p.hardFloorPrice) {
-      return {
-        ok: false,
-        code: "BELOW_HARD_FLOOR",
-        stage: "precheck",
-        retryable: false,
-        attempts: 1,
-        message: `مسدود شد: قیمت نهایی (${p.finalPrice}) کمتر از خط قرمز کف سود (${p.hardFloorPrice}) است!`,
-      };
-    }
+    const blocked = validateCheckout(p);
+    if (blocked) return blocked;
 
     const baseUrl = (cfg.baseUrl ?? process.env.SGEOOOLE_API_URL ?? "").replace(/\/$/, "");
     const apiKey = (cfg.apiKey ?? process.env.SGEOOOLE_PRICING_SECRET ?? process.env.STORE_WEBHOOK_SECRET ?? "").trim();
@@ -530,7 +502,7 @@ const sgeooole: StoreConnectorAdapter = {
           ? Number(dataObj.finalPrice)
           : Math.round(p.finalPrice);
 
-      if (!Number.isFinite(confirmedFinalPrice) || Math.abs(confirmedFinalPrice - Math.round(p.finalPrice)) > 1) {
+      if (confirmedFinalPrice !== p.finalPrice) {
         return {
           ok: false,
           code: "STORE_RECONCILIATION_MISMATCH",
@@ -587,6 +559,8 @@ const sgeooole: StoreConnectorAdapter = {
 const woocommerce: StoreConnectorAdapter = {
   type: "woocommerce",
   async push(cfg, p) {
+    const blocked = validateCheckout(p);
+    if (blocked) return blocked;
     const base = (cfg.baseUrl ?? process.env.WC_BASE_URL ?? "").replace(/\/$/, "");
     const key = cfg.consumerKey ?? process.env.WC_CONSUMER_KEY ?? "";
     const secret = cfg.consumerSecret ?? process.env.WC_CONSUMER_SECRET ?? "";
@@ -617,6 +591,8 @@ const woocommerce: StoreConnectorAdapter = {
 const webhook: StoreConnectorAdapter = {
   type: "webhook",
   async push(cfg, p) {
+    const blocked = validateCheckout(p);
+    if (blocked) return blocked;
     const url = cfg.url ?? process.env.STORE_WEBHOOK_URL ?? "";
     const secret = cfg.secret ?? process.env.STORE_WEBHOOK_SECRET ?? "";
     if (!url) return { ok: false, message: "آدرس وب‌هوک تنظیم نشده" };
