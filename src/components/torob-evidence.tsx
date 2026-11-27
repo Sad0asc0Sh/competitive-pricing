@@ -1,0 +1,132 @@
+import { faNum, torobStatusLabel } from "@/lib/format";
+import type { TorobDataOrigin, TorobInquiryAudit, TorobOfferEvidence, TorobOfferIdentity } from "@/lib/pricing/types";
+
+const transportLabels: Record<TorobDataOrigin, string> = {
+  torob_mcp: "MCP ترب",
+  torob_api: "API ترب",
+  torob_page: "صفحهٔ محصول ترب",
+};
+const sourceLabels: Record<TorobOfferIdentity["sources"][number], string> = {
+  seller_listing: "عنوان فروشنده",
+  seller_specs: "مشخصات فروشنده",
+  product_details: "جزئیات کارت",
+  search_card: "عنوان کارت در جست‌وجو",
+};
+const specLabels: Record<string, string> = {
+  frequency: "فرکانس", buttons: "تعداد دکمه", bluetooth: "بلوتوث", access_model: "مدل",
+  volt: "ولتاژ", cap: "ظرفیت", ch: "تعداد کانال", ports: "تعداد پورت", mp: "مگاپیکسل",
+};
+
+function specValue(key: string, value: string | number): string {
+  if (key === "bluetooth") return value === "yes" ? "دارد" : "ندارد";
+  if (key === "frequency" && typeof value === "number") {
+    if (value >= 1_000_000) return `${faNum(value / 1_000_000, 3)} مگاهرتز`;
+    if (value >= 1_000) return `${faNum(value / 1_000, 3)} کیلوهرتز`;
+    return `${faNum(value)} هرتز`;
+  }
+  return typeof value === "number" ? faNum(value) : value;
+}
+
+function Specs({ specs, expected }: Pick<TorobOfferIdentity, "specs"> & { expected?: TorobOfferIdentity["expectedSpecs"] }) {
+  const fields = [...new Set([...Object.keys(specs ?? {}), ...Object.keys(expected ?? {})])];
+  if (!fields.length) return null;
+  return (
+    <ul className="flex flex-wrap gap-x-3 gap-y-1">
+      {fields.map((key) => {
+        const actual = specs?.[key] ?? [];
+        const wanted = expected?.[key] ?? [];
+        const tone = !wanted.length ? "" : !actual.length ? "text-amber-800" :
+          actual.length === wanted.length && actual.every((value) => wanted.includes(value)) ? "text-emerald-800" : "text-rose-800";
+        return <li key={key} className={tone}>
+          <strong>{specLabels[key] ?? key}</strong> · {actual.map((value) => specValue(key, value)).join(" / ") || "ذکر نشده"}
+          {wanted.length > 0 && <span> · محصول سایت {wanted.map((value) => specValue(key, value)).join(" / ")}</span>}
+        </li>;
+      })}
+    </ul>
+  );
+}
+
+function ImageLinks({ urls }: { urls?: string[] }) {
+  const images = urls?.filter((url) => typeof url === "string" && url.startsWith("https://"));
+  if (!images?.length) return null;
+  return <div className="flex flex-wrap gap-3">
+    {images.map((url, index) => <a key={url} href={url} target="_blank" rel="noreferrer" className="text-indigo-700 underline">تصویر {faNum(index + 1)}</a>)}
+  </div>;
+}
+
+export function TorobOfferDetails({ evidence }: { evidence: TorobOfferEvidence }) {
+  const identity = evidence.identity;
+  if (!identity) return null;
+  const color = identity.status === "MATCH_CONFIRMED" ? "bg-emerald-50 text-emerald-800" :
+    identity.status === "REVIEW_REQUIRED" ? "bg-amber-50 text-amber-900" : "bg-rose-50 text-rose-800";
+  return (
+    <details className="mt-1 max-w-lg text-xs whitespace-normal text-slate-700">
+      <summary className="cursor-pointer">
+        <span className={`badge ${color}`}>{torobStatusLabel[identity.status]}</span>
+      </summary>
+      <div className="mt-2 space-y-1.5 rounded-lg border border-slate-200 bg-slate-50 p-2 leading-5">
+        <p>{identity.reason}</p>
+        <div className="flex flex-wrap gap-x-2">
+          <a className="text-indigo-700 underline" href={`https://torob.com/p/${encodeURIComponent(identity.prk)}/`} target="_blank" rel="noreferrer">کارت ترب</a>
+          {identity.origin && <span>{transportLabels[identity.origin]}</span>}
+          {identity.sources.map((source) => <span key={source}>{sourceLabels[source]}</span>)}
+        </div>
+        <Specs specs={identity.specs} expected={identity.expectedSpecs} />
+        {Boolean(identity.brands?.length || identity.models?.length) && <p dir="auto">{[...(identity.brands ?? []), ...(identity.models ?? [])].join(" · ")}</p>}
+        {identity.packageUnits != null && <p>تعداد در بسته · {faNum(identity.packageUnits)}</p>}
+        {identity.sharedImage && <p>نشانی تصویر مشترک در کارت و پیشنهاد فروشنده ثبت شد.</p>}
+        <ImageLinks urls={evidence.imageUrls} />
+      </div>
+    </details>
+  );
+}
+
+export function TorobSearchDetails({ audit }: { audit?: TorobInquiryAudit }) {
+  if (!audit?.search && !audit?.candidate) return null;
+  const queries = audit.search?.queries ?? [];
+  const cards = audit.search?.candidates?.length ? audit.search.candidates : audit.candidate ? [audit.candidate] : [];
+  const counts = audit.offerIdentityCounts;
+  return (
+    <details className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-700">
+      <summary className="cursor-pointer font-semibold">شواهد جست‌وجو و تطبیق ترب</summary>
+      {counts && <p>
+        {faNum(counts.MATCH_CONFIRMED)} پیشنهاد هم‌هویت · {faNum(counts.REVIEW_REQUIRED)} نیازمند بررسی · {faNum(counts.IDENTITY_MISMATCH)} نامنطبق
+      </p>}
+      {queries.length > 0 && <ol className="space-y-1">
+        {queries.map((query, index) => <li key={query.query}>
+          {faNum(index + 1)}. {query.query} · {faNum(query.mapped)} کارت
+          {query.origin && <span> · {transportLabels[query.origin]}</span>}
+          {query.issue && <span className="text-amber-800"> · {query.issue}</span>}
+        </li>)}
+      </ol>}
+      <div className="space-y-1.5">
+        {cards.map((card) => {
+          const selected = audit.candidate?.prk === card.prk;
+          const inspection = card.inspection;
+          const observed = inspection ?? card;
+          const title = card.titleFa || card.titleEn || "عنوان کارت دریافت نشد";
+          return (
+            <details key={card.prk} className="rounded-lg border border-slate-200 bg-white p-2">
+              <summary className="cursor-pointer leading-5">
+                <strong>{title}</strong> · {torobStatusLabel[observed.status]}{selected && " · کارت منتخب"}
+              </summary>
+              <div className="mt-2 space-y-2 leading-5">
+                {card.titleFa && card.titleEn && <p dir="auto">{card.titleEn}</p>}
+                {card.queries.length > 0 && <p>عبارت‌های جست‌وجو · {[...new Set(card.queries)]
+                  .map((index) => queries[index - 1]?.query).filter(Boolean).join("، ")}</p>}
+                {card.observations?.some(({ titleFa, titleEn }) => titleFa !== card.titleFa || titleEn !== card.titleEn) &&
+                  <ul>{card.observations.map(({ query, titleFa, titleEn }, i) => <li key={i}>{faNum(query)} · {[titleFa, titleEn].filter(Boolean).join(" / ") || "عنوان دریافت نشد"}</li>)}</ul>}
+                {inspection && <p>عنوان در جزئیات · {[inspection.titleFa, inspection.titleEn].filter(Boolean).join(" / ") || "دریافت نشد"}</p>}
+                {observed.origin && <p>{transportLabels[observed.origin]}</p>}
+                {!inspection && card.extraction === "not_requested" && <p>جزئیات این کارت در محدودهٔ استعلام دریافت نشد.</p>}
+                <Specs specs={observed.specs} />
+                <ImageLinks urls={observed.imageUrls} />
+                {observed.reasons.length > 0 && <ul className="list-inside list-disc">{observed.reasons.map((reason, i) => <li key={i}>{reason}</li>)}</ul>}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </details>
+  );
+}

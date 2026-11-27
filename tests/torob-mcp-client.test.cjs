@@ -17,7 +17,7 @@ const MOUNT = card('mount', 'پایه دوربین هایک ویژن مدل DS-1
 const SIBLING = card('sib', 'دوربین مداربسته تحت شبکه هایک ویژن مدل DS-2CD1043G0-I', 'Hikvision DS-2CD1043G0-I IP Camera', 3100000)
 
 function market(prices) {
-  return prices.map((p, i) => mcpOffer({ shop: `ف${i}`, price: p, ageDays: 0.2 + i * 0.1, score: 4.7, votes: 90 }))
+  return prices.map((p, i) => ({ ...mcpOffer({ shop: `ف${i}`, price: p, ageDays: 0.2 + i * 0.1, score: 4.7, votes: 90 }), product_title: NAME }))
 }
 
 test('buildSearchQueries: نام کامل ← کد مدل ← برند+کد، بدون تکرار', () => {
@@ -61,6 +61,24 @@ test('جستجو به محض «تایید خودکار» متوقف می‌شو�
   } finally {
     fake.restore()
   }
+})
+
+test('model-code search resumes when a confirmed card has no independently verified offers', async (t) => {
+  const sibling = card('good-later', GOOD.name_fa, GOOD.name_en)
+  const fake = installFakeTorob({
+    search: (query) => query === NAME ? [GOOD] : [sibling],
+    details: {
+      good: { ...GOOD, offers: [mcpOffer({ shop: 'missing-title', price: 2350000 })] },
+      [sibling.prk]: { ...sibling, offers: market([2380000, 2400000, 2410000]) },
+    },
+  })
+  t.after(fake.restore)
+  const result = await client.fetchViaTorobMcpServer({ mcpUrl: 'http://fake', productName: NAME, now: NOW })
+  assert.equal(result.torob.status, 'MATCH_CONFIRMED')
+  assert.equal(result.prk, sibling.prk)
+  assert.equal(result.offers.find(({ shopName }) => shopName === 'missing-title').torobIdentity.status, 'REVIEW_REQUIRED')
+  assert.equal(fake.calls.filter(({ name }) => name === 'product_details').length, 2)
+  assert.ok(fake.calls.filter(({ name }) => name === 'search_products').length <= 3)
 })
 
 test('همهٔ کارت‌ها نامرتبط ⇒ رد در جستجو (بدون قیمت‌گذاری روی کارت اشتباه)', async () => {

@@ -127,7 +127,14 @@ function runPricingPipeline(source, ctx) {
         },
     });
     // ۴.۲.۱: همان تشخیص‌دهندهٔ فیلتر (کلید فشرده) — قبلاً اینجا مقایسهٔ خام و در فیلتر مقایسهٔ نرمال‌شده بود و ناهم‌خوان بودند
-    const selfShopInListing = source.offers.some((o) => ownShopMatcher({ shopName: o.shopName, shopId: o.shopId }));
+    const identityAssessed = source.torob?.offerIdentityEvaluated === true;
+    const identityConfirmed = source.offers.filter((offer) => offer.torobIdentity
+        ? offer.torobIdentity.status === "MATCH_CONFIRMED" : !identityAssessed);
+    const confirmedSet = new Set(identityConfirmed);
+    const marketSource = identityAssessed
+        ? { ...source, offers: identityConfirmed, totalSellerCount: (0, listing_1.distinctSellerCount)(identityConfirmed) }
+        : source;
+    const selfShopInListing = identityConfirmed.some((o) => ownShopMatcher({ shopName: o.shopName, shopId: o.shopId }));
     let identityMatchScorePct = 92;
     // آیا حضور فروشگاه خودمان به‌عنوان «تأیید متقاطع هویت» پذیرفته می‌شود؟ (پیش‌فرض بله؛ تضاد هویتی آن را باطل می‌کند)
     let selfConfirmsIdentity = selfShopInListing;
@@ -275,7 +282,7 @@ function runPricingPipeline(source, ctx) {
     const ownOnly = source.ok && !isSourceChallenged && !isSourceDegraded &&
         source.sourceStatus !== "truncated" && sellerCount === 1 && selfShopInListing &&
         source.offers.every(ownShopMatcher) &&
-        source.offers.some(o => o.price > 0 && o.inStock !== false && !o.isAd && !o.priceUnreliable) &&
+        identityConfirmed.some(o => o.price > 0 && o.inStock !== false && !o.isAd && !o.priceUnreliable) &&
         !source.isTruncated && !source.meta?.isTruncated && !source.meta?.offersTruncated;
     log({
         step: "listing",
@@ -287,7 +294,12 @@ function runPricingPipeline(source, ctx) {
     });
     // ---------- 2) فیلترهای اعتبار داده + تفکیک شهر پیش‌فرض (مشهد)
     const canValidateOffers = !source.torob || source.torob.status === "MATCH_CONFIRMED" || source.torob.status === "NO_VALID_OFFERS";
-    const offers = canValidateOffers ? (0, filters_1.applyValidityFilters)(source.offers, cfg.filters, now, cfg.rank1, softStaleness ? { softStaleness: true, hardMaxAgeDays: est.hardMaxOfferAgeDays } : undefined) : source.offers.map((offer) => ({ ...offer, included: false, weight: 0, excludeReason: source.torob?.reason }));
+    const offers = (canValidateOffers ? (0, filters_1.applyValidityFilters)(source.offers, cfg.filters, now, cfg.rank1, softStaleness ? { softStaleness: true, hardMaxAgeDays: est.hardMaxOfferAgeDays } : undefined) : source.offers.map((offer) => ({ ...offer, included: false, weight: 0, excludeReason: source.torob?.reason })))
+        .map((offer, index) => confirmedSet.has(source.offers[index]) ? offer : {
+        ...offer, included: false, weight: 0,
+        excludeReason: offer.torobIdentity?.reason ?? "هویت مستقل پیشنهاد فروشنده احراز نشده است",
+    });
+    const marketOffers = identityAssessed ? offers.filter((_, index) => confirmedSet.has(source.offers[index])) : offers;
     const excludedByFilter = offers.filter((o) => !o.included);
     const localValidBeforeOutlier = offers.filter((o) => o.included && o.isLocalCity).length;
     const reasonCounts = {};
@@ -317,7 +329,7 @@ function runPricingPipeline(source, ctx) {
             data: { cheapestPrice: echo.cheapestPrice, shopNames: echo.shopNames },
         });
     }
-    const positiveRawPrices = source.offers
+    const positiveRawPrices = identityConfirmed
         .map((o) => o.price)
         .filter((p) => Number.isFinite(p) && p > 0);
     const lowestRaw = positiveRawPrices.length ? Math.min(...positiveRawPrices) : null;
@@ -451,6 +463,11 @@ function runPricingPipeline(source, ctx) {
             validLocalInPersonOffers: canValidateOffers ? offers.filter((o) => o.included && o.sellerType === "in_person" && o.isLocalCity).length : null,
             sellerRows: source.torob.sellerRows,
             reportedSellers: source.torob.reportedSellers,
+            ...(identityAssessed ? { offerIdentityCounts: {
+                    MATCH_CONFIRMED: identityConfirmed.length,
+                    REVIEW_REQUIRED: source.offers.filter((offer) => !offer.torobIdentity || offer.torobIdentity.status === "REVIEW_REQUIRED").length,
+                    IDENTITY_MISMATCH: source.offers.filter((offer) => offer.torobIdentity?.status === "IDENTITY_MISMATCH").length,
+                } } : {}),
         };
         log({
             step: "torob_inquiry",
@@ -478,7 +495,7 @@ function runPricingPipeline(source, ctx) {
             explanation: "بدون داده کافی برای کشف کف و سقف بازار",
         };
         const supervisor = (0, systemone_supervisor_1.evaluateSystemOneSupervisorSync)({
-            productName: ctx.productName, source, offers, supply, position: emptyPosition, floorCeiling: emptyFloorCeiling,
+            productName: ctx.productName, source: marketSource, offers: marketOffers, supply, position: emptyPosition, floorCeiling: emptyFloorCeiling,
             identityMatchScorePct, selfShopInListing: selfConfirmsIdentity, finalPrice: null, basePrice: null,
             discountPct: null, dispersion: market.dispersion, config: cfg, torobInquiryStatus: torobInquiry?.status,
         });
@@ -875,7 +892,7 @@ function runPricingPipeline(source, ctx) {
         },
     });
     // ---------- 8.۵) امتیاز اعتماد (v2: کالیبره از تحلیل سناریوها | legacy: ترکیب ساده)
-    const conf = (0, confidence_1.computeConfidence)(market, { totalSellerCount: source.totalSellerCount, offersTotal: source.offers.length }, cfg);
+    const conf = (0, confidence_1.computeConfidence)(market, { totalSellerCount: marketSource.totalSellerCount, offersTotal: marketOffers.length }, cfg);
     let confidenceScore = conf.score;
     let confidenceBreakdown = { ...conf.breakdown };
     if (scenarioAnalysis) {
@@ -911,8 +928,8 @@ function runPricingPipeline(source, ctx) {
     // ---------- 9) ناظر بالاسر SubQ SystemOne (تصمیم‌گیری ۴ مقیاسی با قانون ۳ بازه‌ای 0..45..80..100%)
     const supervisor = (0, systemone_supervisor_1.evaluateSystemOneSupervisorSync)({
         productName: ctx.productName,
-        source,
-        offers,
+        source: marketSource,
+        offers: marketOffers,
         supply,
         position,
         floorCeiling: disc.floorCeiling,

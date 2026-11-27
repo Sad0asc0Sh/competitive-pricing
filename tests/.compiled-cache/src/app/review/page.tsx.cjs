@@ -127,6 +127,7 @@ async function ReviewPage() {
                     price: o.price,
                     sellerType: o.sellerType,
                     listingTitle: o.torobEvidence?.listingTitle ?? null,
+                    torobEvidence: o.torobEvidence,
                     shopScore: o.shopScore,
                     isLocalCity: o.isLocalCity,
                     included: o.included,

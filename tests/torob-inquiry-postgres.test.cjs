@@ -59,6 +59,8 @@ test('PostgreSQL runner and authenticated review persist extracted offers and sc
     assert.equal(storedOffers.length, 2)
     assert.ok(storedOffers.every((offer) => !offer.included && offer.torobEvidence.currency === 'toman'))
     assert.equal(storedOffers[0].torobEvidence.listingTitle, offers[0].product_title)
+    assert.equal(storedOffers[0].torobEvidence.identity.status, 'REVIEW_REQUIRED')
+    assert.equal(storedOffers[0].torobEvidence.identity.prk, fixture.prk)
 
     const url = `http://localhost/api/decisions/${decisionId}`
     const params = { params: Promise.resolve({ id: String(decisionId) }) }
@@ -90,7 +92,10 @@ test('PostgreSQL runner and authenticated review persist extracted offers and sc
     assert.ok(previous.steps.some(({ step }) => step === 'torob_link_confirmation'))
     assert.ok(linked.lastDecisionId > decisionId)
     const [next] = await db.select().from(priceDecisions).where(eq(priceDecisions.id, linked.lastDecisionId))
-    assert.equal(next.steps.find(({ step }) => step === 'torob_inquiry').data.status, 'MATCH_CONFIRMED')
+    const nextInquiry = next.steps.find(({ step }) => step === 'torob_inquiry').data
+    assert.equal(nextInquiry.identityStatus, 'MATCH_CONFIRMED')
+    assert.equal(nextInquiry.status, 'REVIEW_REQUIRED')
+    assert.equal(next.offersUsed, 0)
     assert.equal(next.status, 'pending_review')
     assert.ok(fake.calls.slice(callsBefore).some(({ name }) => name === 'product_details'))
     assert.ok(fake.calls.slice(callsBefore).every(({ name }) => name !== 'search_products'))

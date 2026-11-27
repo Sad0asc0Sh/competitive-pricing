@@ -23,6 +23,7 @@ export interface TorobCandidateCard {
   shopName?: string | null;
   titleEvidence?: { fields: string[]; parsed: boolean };
   specs?: IdentitySpec[];
+  imageUrls?: string[];
 }
 
 export interface ProductMatchTarget {

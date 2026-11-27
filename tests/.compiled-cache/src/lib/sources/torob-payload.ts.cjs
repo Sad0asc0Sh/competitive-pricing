@@ -8,6 +8,7 @@ exports.prkFromTorobUrl = prkFromTorobUrl;
 exports.torobProductUrl = torobProductUrl;
 exports.safeTorobDetailsUrl = safeTorobDetailsUrl;
 exports.offerSourceUrl = offerSourceUrl;
+exports.readTorobImages = readTorobImages;
 exports.torobStock = torobStock;
 exports.torobPrice = torobPrice;
 exports.countOf = countOf;
@@ -109,6 +110,25 @@ function offerSourceUrl(...values) {
     }
     return undefined;
 }
+function readTorobImages(row) {
+    const values = [row.image, row.image_url, row.thumbnail, row.thumbnail_url];
+    for (const images of [row.image_urls, row.images, row.product_images]) {
+        if (Array.isArray(images)) {
+            values.push(...images.slice(0, 6).map((image) => record(image)?.url ?? record(image)?.image_url ?? image));
+        }
+    }
+    return [...new Set(values.flatMap((value) => {
+            if (typeof value !== "string" || value.length > 320)
+                return [];
+            try {
+                const url = new URL(value);
+                return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash ? [url.href] : [];
+            }
+            catch {
+                return [];
+            }
+        }))].slice(0, 4);
+}
 function torobStock(value) {
     if (typeof value === "boolean")
         return value;
@@ -174,6 +194,7 @@ function decodeTorobSearch(payload, limit) {
             available: torobStock(r.available ?? r.availability ?? r.stock_status),
             detailsUrl: safeTorobDetailsUrl(r.details_url ?? r.more_info_url, prk, true),
             shopName,
+            imageUrls: readTorobImages(r),
         });
     }
     const upstreamRowCount = countOf(data?.page_count) ?? rows.length;
@@ -185,7 +206,7 @@ function readTorobSpecs(row) {
     const specs = [];
     const add = (key, value) => {
         const label = firstText(key);
-        const text = typeof value === "number" ? String(value) : firstText(value);
+        const text = typeof value === "number" || typeof value === "boolean" ? String(value) : firstText(value);
         if (label && text && text.length <= 100 && specs.length < 80)
             specs.push({ key: label, value: text });
     };
@@ -194,7 +215,16 @@ function readTorobSpecs(row) {
             continue;
         for (const item of collection.slice(0, 80)) {
             const spec = record(item);
-            if (spec)
+            if (!spec)
+                continue;
+            if (Array.isArray(spec.items)) {
+                for (const item of spec.items.slice(0, 80)) {
+                    const nested = record(item);
+                    if (nested)
+                        add(nested.key ?? nested.title, nested.value ?? nested.text);
+                }
+            }
+            else
                 add(spec.key ?? spec.title ?? spec.name, spec.value ?? spec.text);
         }
     }

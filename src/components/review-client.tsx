@@ -2,7 +2,8 @@
 
 import { ListingLinks } from "./listing-links";
 import type { ListingPanel } from "@/lib/pricing/listing";
-import type { TorobCandidateTrace, TorobInquiryReport } from "@/lib/pricing/types";
+import type { TorobCandidateTrace, TorobInquiryReport, TorobOfferEvidence } from "@/lib/pricing/types";
+import { TorobOfferDetails } from "./torob-evidence";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -35,6 +36,7 @@ export interface ReviewCompetitorItem {
   price: number;
   sellerType: string;
   listingTitle: string | null;
+  torobEvidence?: TorobOfferEvidence | null;
   shopScore: number | null;
   isLocalCity: boolean;
   included: boolean;
@@ -500,6 +502,7 @@ export function ReviewClient({
                             {!c.included && c.excludeReason && (
                               <div className="truncate text-[10px] text-amber-700">حذف: {c.excludeReason}</div>
                             )}
+                            {c.torobEvidence && <TorobOfferDetails evidence={c.torobEvidence} />}
                           </div>
                           <div className="num shrink-0 font-semibold">{toman(c.price)}</div>
                         </div>

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DEFAULT_MATCH_FLAGS = void 0;
 exports.relateCodes = relateCodes;
+exports.conflictingPrimarySpec = conflictingPrimarySpec;
 exports.compareParsed = compareParsed;
 const systemone_supervisor_1 = require("../systemone-supervisor");
 const lexicon_1 = require("./lexicon");
@@ -20,7 +21,7 @@ const REL_RANK = { equal: 8, alias: 7, tail: 6, ext_seg: 5, stem: 4, ext_chars: 
 const PRIMARY_ATTRS = new Set([
     "mp", "ch", "cap", "ram", "ports", "volt", "amp", "watt", "va", "ah", "uf", "kvar", "ka",
     "poles", "curve", "phase", "ingress", "len", "cm", "mm2", "dim", "cat", "ctype", "rg", "speed", "poe", "inch", "cabletype", "lens", "gen",
-    "access_model", "frequency", "buttons",
+    "access_model", "frequency", "buttons", "bluetooth",
 ]);
 const SOFT_ATTRS = new Set(["wifi", "res"]);
 const ATTR_LABEL = {
@@ -32,6 +33,7 @@ const ATTR_LABEL = {
     volt: "ولتاژ",
     frequency: "فرکانس",
     buttons: "تعداد دکمه",
+    bluetooth: "بلوتوث",
     access_model: "مدل کنترل دسترسی",
     amp: "جریان (آمپر)",
     watt: "توان (وات)",
@@ -162,6 +164,21 @@ function valuesIntersect(a, b) {
     return false;
 }
 const showVals = (v) => v.join("/");
+function isExactRemoteSpec(key) {
+    return key === "frequency" || key === "buttons" || key === "bluetooth";
+}
+function conflictingPrimarySpec(a, b) {
+    const bothRemotes = a.head?.cls === "acc:remote" && b.head?.cls === "acc:remote";
+    for (const [key, left] of Object.entries(a.attrs)) {
+        const right = b.attrs[key];
+        if (!PRIMARY_ATTRS.has(key) || !left.length || !right?.length)
+            continue;
+        const match = bothRemotes && isExactRemoteSpec(key) ? left.some((value) => right.includes(value)) : valuesIntersect(left, right);
+        if (!match)
+            return `${ATTR_LABEL[key] ?? key} متناقض است (${showVals(left)} در برابر ${showVals(right)})`;
+    }
+    return undefined;
+}
 function stem(w) {
     return w.replace(/(?:های|ها|ان|ی|ه|ات)$/u, "");
 }
@@ -464,7 +481,7 @@ function compareParsed(t, c, opt) {
         const tv = t.attrs[key];
         const cv = c.attrs[key];
         const primary = PRIMARY_ATTRS.has(key);
-        const remoteSpec = bothRemotes && (key === "frequency" || key === "buttons");
+        const remoteSpec = bothRemotes && isExactRemoteSpec(key);
         const label = ATTR_LABEL[key] ?? key;
         if (primary && ((tv?.length ?? 0) > 1 || (cv?.length ?? 0) > 1)) {
             if (remoteSpec && F.attrConflicts)
