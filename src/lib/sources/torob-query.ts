@@ -275,6 +275,10 @@ export function buildSearchQueryPlan(productName: string, sku?: string | null): 
       if (descriptor && rf) {
         add([...head, hasBt ? "بلوتوثی" : undefined, descriptor, rf].filter(Boolean).join(" "), "technical", "expand", 88);
         add([...head, hasBt ? "بلوتوثی" : undefined, "طرح", descriptor, rf].filter(Boolean).join(" "), "alternative_wording", "expand", 86);
+        add([...head, "طرح", descriptor, rf].filter(Boolean).join(" "), "alternative_wording", "expand", 79);
+      }
+      if (hasBt && rf && descriptor) {
+        add([...head, "بلوتوثی", rf].filter(Boolean).join(" "), "technical", "expand", 81);
       }
       if (brandFa && (rf || descriptor)) {
         add([...head, descriptor, rf, brandFa].filter(Boolean).join(" "), "brand", "expand", 84);
@@ -288,6 +292,9 @@ export function buildSearchQueryPlan(productName: string, sku?: string | null): 
       if (descriptor && typeof buttons === "number") {
         const wordCount = PERSIAN_DIGITS_WORD.get(buttons);
         if (wordCount) add([...head, descriptor, wordCount, "دکمه"].join(" "), "alternative_wording", "expand", 74);
+      }
+      if (hasBt && freqSpec?.alternatives[0]) {
+        add(`bluetooth remote ${freqSpec.alternatives[0]}`, "alternative_wording", "expand", 70);
       }
       if (brandFa || brand) {
         add([...head, hasBt ? "بلوتوثی" : undefined, brandFa ?? brand].filter(Boolean).join(" "), "broad_fallback", "expand", 68);

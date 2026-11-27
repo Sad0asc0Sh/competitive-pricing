@@ -443,3 +443,60 @@ test('Cache effectiveness: second call reuses clean search/detail results withou
   assert.ok(second.torob.coverage.cacheHitRate === 1)
   assert.equal(second.offers.length, first.offers.length)
 })
+
+test('21. Live-like interactive density: diversity balances pagination/alt-wording/sellers/similar and prevents starvation of incomplete card', async (t) => {
+  const ccebNoise = { prk: 'live-cceb', name_fa: 'ریموت بلوتوث 315', name_en: 'کد 114', price_toman: 255000, shop_count: 1 }
+  const dfc0Model = { prk: 'live-dfc0', name_fa: 'ریموت بلوتوث HSP مدل لوکس H21 تاشو فرکانس ۳۱۵ مگاهرتز', price_toman: 960000, shop_count: 2 }
+  const cardNoBrand = { prk: 'live-0d39', name_fa: 'ریموت بلوتوثی 315 بنزی 5 دکمه', price_toman: 589000, shop_count: 1 }
+  const cardLuxury = { prk: 'live-5154', name_fa: 'ریموت بلوتوثی 315 لوکس بنزی', price_toman: 790000, shop_count: 1 }
+  const page2Card = { prk: 'live-46f3', name_fa: 'ریموت بلوتوثی بنزی ۵ دکمه ۳۱۵', price_toman: 650000, shop_count: 1 }
+  const similarCard = { prk: 'live-sim-1', name_fa: 'ریموت بلوتوثی بنزی فرکانس 315 HSP', price_toman: 640000, shop_count: 1 }
+  const tarhNoiseCarParts = Array.from({ length: 12 }, (_, i) => ({
+    prk: `noise-car-${i}`, name_fa: `کنسول وسط خودرو بنزی ${i}`, price_toman: 2500000, shop_count: 1,
+  }))
+  const fake = makeMcpHarness({
+    searchFn: (args) => {
+      if (args.category === '991') {
+        return { products: [{ ...CARD_C, name_fa: 'ریموت بلوتوثی بنزی فرکانس ۳۱۵' }], page: 1, has_next_page: false }
+      }
+      if (args.query.includes('طرح بنزی')) {
+        return { products: [CARD_C], page: 1, has_next_page: false }
+      }
+      if (args.sort === 'sellers') {
+        return { products: [cardLuxury, CARD_A], page: 1, has_next_page: false }
+      }
+      if ((args.page ?? 1) === 2) {
+        return { products: [page2Card, dfc0Model], page: 2, has_next_page: false }
+      }
+      return {
+        products: [CARD_A, CARD_B, ccebNoise, dfc0Model, cardNoBrand, { ...CARD_C, name_fa: 'ریموت بلوتوثی بنزی فرکانس ۳۱۵' }, ...tarhNoiseCarParts],
+        page: 1,
+        has_next_page: true,
+        total_matches: 60,
+        suggested_categories: [{ id: 991, title: 'ریموت کنترل' }],
+      }
+    },
+    similarFn: () => [similarCard],
+    detailsMap: {
+      [CARD_A.prk]: cardPayload(CARD_A),
+      [CARD_B.prk]: cardPayload(CARD_B),
+      [CARD_C.prk]: cardPayload(CARD_C),
+      'live-0d39': { prk: 'live-0d39', name_fa: cardNoBrand.name_fa, offers: [hydrateOffer({ shop_name: 'ای کا جی کالا', price_toman: 589000, product_title: cardNoBrand.name_fa })] },
+      'live-5154': { prk: 'live-5154', name_fa: cardLuxury.name_fa, offers: [hydrateOffer({ shop_name: 'مهدیران', price_toman: 790000, product_title: cardLuxury.name_fa })] },
+      'live-46f3': { prk: 'live-46f3', name_fa: page2Card.name_fa, offers: [hydrateOffer({ shop_name: 'قفل مشهد', price_toman: 650000, product_title: page2Card.name_fa })] },
+      'live-sim-1': { prk: 'live-sim-1', name_fa: similarCard.name_fa, offers: [hydrateOffer({ shop_name: 'مشابه ریموت', price_toman: 640000, product_title: similarCard.name_fa })] },
+      'live-cceb': { prk: 'live-cceb', name_fa: ccebNoise.name_fa, offers: [hydrateOffer({ shop_name: 'کد 114', price_toman: 255000, product_title: 'ریموت بلوتوث 315 کد 114' })] },
+      'live-dfc0': { prk: 'live-dfc0', name_fa: dfc0Model.name_fa, offers: [hydrateOffer({ shop_name: 'اکتیوآلارم', price_toman: 960000, product_title: dfc0Model.name_fa })] },
+    },
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ mcpUrl: 'http://fixture.invalid/mcp', ...TARGET, mode: 'interactive', now: NOW })
+  assert.ok(source.offers.some((o) => o.shopName === 'بازار قفل' && o.torobIdentity.status === 'MATCH_CONFIRMED'))
+  assert.ok(source.offers.some((o) => o.shopName === 'جهان ریموت' && o.torobIdentity.status === 'REVIEW_REQUIRED'))
+  assert.ok(source.offers.some((o) => o.shopName === 'ولتاتک' && o.torobIdentity.status === 'REVIEW_REQUIRED'), 'interactive mode must inspect Card C (ولتاتک) directly')
+  assert.ok(!source.offers.some((o) => o.shopName === 'کد 114'), 'low-score off-price probe must not starve Card C')
+  assert.ok(source.torob.coverage.sortModesUsed.includes('sellers'), 'Phase 2 must diversify to sellers sort instead of pure pagination')
+  assert.ok(source.torob.coverage.categoriesUsed.includes('991'), 'numeric category id must be decoded and queried when noisy')
+  assert.equal(source.torob.coverage.similarProbesExecuted, 1, 'similar_products probe must execute for fragmented primary')
+  assert.ok(source.torob.search.queries.some((q) => q.query.includes('طرح بنزی')), 'alternative wording query must execute in Phase 2')
+})

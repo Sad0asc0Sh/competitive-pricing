@@ -221,7 +221,8 @@ export function decodeTorobSearch(payload: unknown, limit: number, requestedPage
     : Array.isArray(data?.categories) ? data.categories : [];
   const suggestedCategories = rawCats.flatMap((item) => {
     const cat = record(item);
-    const id = firstText(cat?.id, cat?.category_id);
+    const rawId = cat?.id ?? cat?.category_id ?? cat?.cat_id;
+    const id = typeof rawId === "number" && Number.isSafeInteger(rawId) ? String(rawId) : firstText(rawId);
     const title = firstText(cat?.title, cat?.name);
     return id && title ? [{ id, title }] : [];
   }).slice(0, 8);

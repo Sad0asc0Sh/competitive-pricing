@@ -74,11 +74,20 @@ function cardForSellerEvidence(target: ProductMatchTarget, targetTitle: ParsedTi
 export function isSellerEvidenceProbeCandidate(target: ProductMatchTarget, targetTitle: ParsedTitle, result: ScoredCandidateResult): boolean {
   const card = result.parsed;
   if (!card?.head || card.head.cls !== targetTitle.head?.cls) return false;
+  const anchor = target.anchorPriceToman;
+  const cardPrice = result.candidate.priceToman;
+  if (anchor && anchor > 0 && cardPrice && cardPrice > 0) {
+    const ratio = cardPrice / anchor;
+    if (ratio < 0.45 || ratio > 2.1) return false;
+  }
   const sharedBrand = Boolean(brands(card).length && brands(targetTitle).length && areKnownBrandSetsCompatible(brands(card), brands(targetTitle)));
   const sharedDescriptor = card.words.some((word) => targetTitle.words.includes(word));
   const sharedSpec = Object.entries(card.attrs).some(([key, values]) =>
     targetTitle.attrs[key]?.some((value) => values.includes(value)));
   if (!sharedBrand && !sharedDescriptor && !sharedSpec) return false;
+  if (targetTitle.words.length > 0 && !sharedBrand && !sharedDescriptor && (result.rawScore ?? result.score) < (target.rejectBelowPct ?? 45)) {
+    return false;
+  }
   const evidence = cardForSellerEvidence(target, targetTitle, result);
   if (!evidence) return false;
   if (evidence.ambiguousPack) return true;

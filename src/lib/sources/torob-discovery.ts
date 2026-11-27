@@ -756,11 +756,27 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
 
   const buildExpansionActions = (): QueuedSearchAction[] => {
     const actions: QueuedSearchAction[] = [];
+    const expandExecutedCount = search.queries.filter((q) =>
+      q.strategy && ["alternative_wording", "vocabulary_expansion", "broad_fallback"].includes(q.strategy)).length;
+    const phase2ExecCount = Math.max(0, search.queries.length - fastQueries.length);
+    const paginationExecutedCount = search.queries.filter((q) => q.strategy === "pagination").length;
+    const sellersSortExecuted = sortModesUsed.has("sellers");
+
     // 1. Diversified planned expansion queries (alternative wording, brandless tech, Persian brands).
+    let boostedAlt = false;
+    let boostedBrand = false;
     for (const planned of queryPlan) {
       const action = toAction(planned);
       if (!executedKeys.has(searchCacheKey({ page: 1, sort: "popularity", ...action.req }))) {
-        actions.push(action);
+        let priority = action.priority;
+        if (planned.phase === "expand" && expandExecutedCount === 0 && !boostedAlt && planned.strategy === "alternative_wording") {
+          priority = 94;
+          boostedAlt = true;
+        } else if (planned.phase === "expand" && !boostedBrand && planned.strategy === "brand" && phase2ExecCount > 0) {
+          priority = 89;
+          boostedBrand = true;
+        }
+        actions.push({ ...action, priority });
       }
     }
     // 2. Vocabulary expansions from Torob suggestions and high-alignment observed titles.
@@ -780,25 +796,33 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     for (const planned of vocabExpansions) {
       actions.push(toAction(planned));
     }
-    // 3. Selective page-2/3 retrieval for streams with has_next_page and strong promising yield.
+    // 3. Selective page-2/3 retrieval balanced against query & sort diversity.
     const paginatable = [...streamLastPage.entries()]
       .filter(([, stream]) => stream.hasNextPage && stream.page < budgets.maxPagesPerQuery)
       .sort((a, b) => b[1].promisingYield - a[1].promisingYield || (b[1].totalMatches ?? 0) - (a[1].totalMatches ?? 0));
-    for (const [streamKey, stream] of paginatable.slice(0, 2)) {
+    paginatable.slice(0, 2).forEach(([streamKey, stream], idx) => {
       const nextPage = stream.page + 1;
       const req: TorobSearchRequest = { query: stream.query, limit: ROW_LIMIT, page: nextPage, sort: stream.sort ?? "popularity", category: stream.category };
       if (!executedKeys.has(searchCacheKey(req))) {
-        actions.push({ req, strategy: "pagination", priority: 87 + Math.min(8, stream.promisingYield * 2), streamKey });
+        const yieldBoost = Math.min(1, stream.promisingYield);
+        const basePrio = nextPage === 2 && idx === 0 && paginationExecutedCount === 0
+          ? 91
+          : nextPage === 2
+            ? Math.max(76, 85 - paginationExecutedCount * 4)
+            : Math.max(70, (mode === "extended" ? 82 : 74) - paginationExecutedCount * 3);
+        const lowYieldPenalty = nextPage > 2 && stream.promisingYield === 0 ? 6 : 0;
+        actions.push({ req, strategy: "pagination", priority: basePrio + yieldBoost - lowYieldPenalty, streamKey });
       }
-    }
-    // 4. Alternative sort modes (sellers & price) when top stream has overflow / many results.
+    });
+    // 4. Alternative sort modes (sellers & price) when top popularity stream has overflow / many results.
     const richStream = [...streamLastPage.values()]
-      .filter((s) => s.page === 1 && (s.hasNextPage || (s.totalMatches ?? 0) > ROW_LIMIT || s.rows >= ROW_LIMIT))
+      .filter((s) => (s.sort ?? "popularity") === "popularity" && !s.category &&
+        (s.page > 1 || s.hasNextPage || (s.totalMatches ?? 0) > ROW_LIMIT || s.rows >= ROW_LIMIT))
       .sort((a, b) => b.promisingYield - a.promisingYield)[0];
     if (richStream) {
       for (const [sort, strategy, prio] of [
-        ["sellers", "sort_sellers", 89] as const,
-        ["price", "sort_price", 77] as const,
+        ["sellers", "sort_sellers", sellersSortExecuted ? 78 : 93] as const,
+        ["price", "sort_price", 82] as const,
       ]) {
         const req: TorobSearchRequest = { query: richStream.query, limit: ROW_LIMIT, page: 1, sort };
         if (!executedKeys.has(searchCacheKey(req))) {
@@ -806,10 +830,13 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
         }
       }
     }
-    // 5. Category-restricted search when unfiltered broad searches suffer heavy class noise.
+    // 5. Category-restricted search when unfiltered broad searches suffer heavy class/off-domain noise.
     if (discoveredCategories.length && ranked.length >= 10) {
-      const classMismatchCount = ranked.filter((r) => r.parsed?.head && targetTitle.head && r.parsed.head.cls !== targetTitle.head.cls).length;
-      if (classMismatchCount / ranked.length >= 0.4) {
+      const classMismatchCount = ranked.filter((r) =>
+        (targetTitle.head && r.parsed?.head && r.parsed.head.cls !== targetTitle.head.cls) ||
+        (targetTitle.head && !r.parsed?.head && r.rejected),
+      ).length;
+      if (classMismatchCount >= 4 && classMismatchCount / ranked.length >= 0.35) {
         const bestCat = discoveredCategories.find((c) => {
           const catParsed = parseTitle(c.title);
           return !targetTitle.head || !catParsed.head || catParsed.head.cls === targetTitle.head.cls;
@@ -818,7 +845,7 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
         if (bestCat && baseQuery) {
           const req: TorobSearchRequest = { query: baseQuery, limit: ROW_LIMIT, page: 1, sort: "popularity", category: bestCat.id };
           if (!executedKeys.has(searchCacheKey(req))) {
-            actions.push({ req, strategy: "category", priority: 75, streamKey: `${normalizeText(baseQuery)}|popularity|${bestCat.id}` });
+            actions.push({ req, strategy: "category", priority: 95, streamKey: `${normalizeText(baseQuery)}|popularity|${bestCat.id}` });
           }
         }
       }
@@ -889,10 +916,20 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
 
       let zeroGainStreak = 0;
       const triedStrategies = new Set<string>();
-      while (budgetExhaustedReason === "none" && searchRequestsUsed < budgets.maxSearchRequests && deadline - Date.now() > 0) {
+      const fragmentedCandidateSignal = confirmedCards.some((r) => (r.candidate.sellerCount ?? 1) <= 2);
+      const reserveSimilarSearchSlot = Boolean(
+        inspected.length === 0 &&
+        !options.prk &&
+        options.similar &&
+        budgets.maxSearchRequests >= 8 &&
+        similarProbesExecuted === 0 &&
+        (codeless || fragmentedCandidateSignal),
+      );
+      const loopSearchCap = reserveSimilarSearchSlot ? budgets.maxSearchRequests - 1 : budgets.maxSearchRequests;
+      while (budgetExhaustedReason === "none" && searchRequestsUsed < loopSearchCap && deadline - Date.now() > 0) {
         const queue = buildExpansionActions();
         if (!queue.length) break;
-        const batch = queue.slice(0, Math.min(budgets.searchConcurrency, budgets.maxSearchRequests - searchRequestsUsed));
+        const batch = queue.slice(0, Math.min(budgets.searchConcurrency, loopSearchCap - searchRequestsUsed));
         const outcomes = await Promise.all(batch.map((action) => executeSearchAction(action, deadline)));
         const blocked = outcomes.find((o) => o.blocked);
         if (blocked) return fail("SOURCE_UNAVAILABLE", "ترب دسترسی جستجو را محدود کرده است", { challenged: blocked.challenged, accessRestricted: true });
@@ -911,7 +948,7 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
           zeroGainStreak = 0;
         }
       }
-      if (searchRequestsUsed >= budgets.maxSearchRequests && budgetExhaustedReason === "none") {
+      if (!reserveSimilarSearchSlot && searchRequestsUsed >= budgets.maxSearchRequests && budgetExhaustedReason === "none") {
         // Only mark request_budget exhausted if expansion actions still remain.
         if (buildExpansionActions().length > 0) {
           budgetExhaustedReason = "search_requests";
@@ -931,7 +968,7 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     if (searchFailure) return searchFailure;
   }
 
-  const buildInspectionOrder = (): { cards: TorobCandidateCard[]; hasHighPriorityLeft: (inspectedSet: Set<string>) => boolean } => {
+  const buildInspectionOrder = (detailCapOverride?: number): { cards: TorobCandidateCard[]; hasHighPriorityLeft: (inspectedSet: Set<string>) => boolean } => {
     if (options.prk) {
       return {
         cards: [{ prk: options.prk, titleFa: "", detailsUrl: options.detailsUrl }],
@@ -950,6 +987,7 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     const picked = new Set<string>();
     const shortlist: TorobCandidateCard[] = [];
     const bucketCounts = new Map<string, number>();
+    const coveredStreams = new Set<string>();
 
     const addCard = (card: TorobCandidateCard, respectBucket: boolean): boolean => {
       if (picked.has(card.prk)) return false;
@@ -959,6 +997,10 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
       picked.add(card.prk);
       bucketCounts.set(bucket, count + 1);
       shortlist.push(card);
+      const streams = candidates.get(card.prk)?.searchKeys;
+      if (streams) {
+        for (const s of streams) coveredStreams.add(s);
+      }
       return true;
     };
 
@@ -972,21 +1014,26 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     for (const item of scored) {
       if (item.result.status === "MATCH_CONFIRMED") addCard(item.result.candidate, false);
     }
-    // 3. Reserve up to 2 probe slots for plausible quantity-label / incomplete-title probes.
+    // 3. Reserve up to 2 probe slots for high-relevance quantity-label / seller-evidence probes.
     let probeCount = 0;
     for (const item of scored) {
       if (probeCount >= 2) break;
-      if (item.probe && addCard(item.result.candidate, true)) probeCount++;
+      if (item.probe && item.priority >= 115 && addCard(item.result.candidate, true)) probeCount++;
     }
-    // 4. Query-diversity pass: ensure top candidate from each search query/page/sort gets representation.
-    const coveredStreams = new Set<string>();
+    // 4a. Top-tier high-alignment candidates within 22 pts of best remaining so far-weaker stream outliers don't jump ahead.
+    const topUnpickedHigh = scored.find((item) => !picked.has(item.result.candidate.prk) && item.highAlignment)?.priority ?? 0;
     for (const item of scored) {
-      if (!item.highAlignment) continue;
+      if (item.highAlignment && item.priority >= topUnpickedHigh - 22) {
+        addCard(item.result.candidate, true);
+      }
+    }
+    // 4b. Query-diversity pass: ensure strong remaining candidates across uncovered search/page/sort streams get represented.
+    const topDiverseBase = scored.find((item) => !picked.has(item.result.candidate.prk) && item.highAlignment)?.priority ?? 0;
+    for (const item of scored) {
+      if (!item.highAlignment || item.priority < topDiverseBase - 35) continue;
       const streams = candidates.get(item.result.candidate.prk)?.searchKeys;
       if (streams && [...streams].some((s) => !coveredStreams.has(s))) {
-        if (addCard(item.result.candidate, true)) {
-          for (const s of streams) coveredStreams.add(s);
-        }
+        addCard(item.result.candidate, true);
       }
     }
     // 5. Remaining high-alignment and reviewable candidates respecting duplicate-title diversity cap.
@@ -995,16 +1042,25 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     for (const item of scored) addCard(item.result.candidate, false);
 
     const highPriorityPrks = new Set(
-      scored.filter((s) => s.result.status === "MATCH_CONFIRMED" || s.probe || s.highAlignment || knownPrkSet.has(s.result.candidate.prk))
+      scored.filter((s) => s.result.status === "MATCH_CONFIRMED" || (s.probe && s.priority >= 115) || s.highAlignment || knownPrkSet.has(s.result.candidate.prk))
         .map((s) => s.result.candidate.prk),
     );
+    const effectiveCap = detailCapOverride ?? budgets.maxDetails;
     return {
-      cards: shortlist.slice(0, Math.max(0, budgets.maxDetails - inspected.length)),
+      cards: shortlist.slice(0, Math.max(0, effectiveCap - inspected.length)),
       hasHighPriorityLeft: (doneSet: Set<string>) => [...highPriorityPrks].some((prk) => !doneSet.has(prk)),
     };
   };
 
-  const initialPlan = buildInspectionOrder();
+  const reserveDetailSlotForSimilar = Boolean(
+    !options.prk &&
+    options.similar &&
+    budgets.maxDetails >= 6 &&
+    budgets.maxSearchRequests >= 8 &&
+    candidates.size > budgets.maxDetails &&
+    ranked.some((r) => r.status === "MATCH_CONFIRMED" && (r.candidate.sellerCount ?? 1) <= 2),
+  );
+  const initialPlan = buildInspectionOrder(reserveDetailSlotForSimilar ? budgets.maxDetails - 1 : budgets.maxDetails);
   if (!initialPlan.cards.length) {
     if (extractionIssue) return fail("EXTRACTION_INCOMPLETE", "ساختار بعضی پاسخ‌ها یا شناسه‌های کارت ترب قابل استخراج نبود");
     if (!completedSearch && unavailable) return fail("SOURCE_UNAVAILABLE", "پاسخی از جستجوی ترب دریافت نشد");
@@ -1096,8 +1152,7 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     options.similar &&
     !accessRestricted &&
     budgetExhaustedReason === "none" &&
-    searchTimeLeft > 800 &&
-    inspected.length < budgets.maxDetails
+    searchTimeLeft > 800
   ) {
     const confirmedPrimary = inspected.find((item) => verifiedOffers(item).length > 0);
     const hasFragmentation = Boolean(
@@ -1123,13 +1178,13 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
       }
       if (!simRead.blocked && !simRead.unavailable && simRead.data !== undefined) {
         const simDecoded = decodeTorobSearch(simRead.data, ROW_LIMIT, 1);
-        const { newPromising } = ingestCards(simDecoded, search.queries.length + 1, `similar:${confirmedPrimary.result.candidate.prk}`);
+        ingestCards(simDecoded, search.queries.length + 1, `similar:${confirmedPrimary.result.candidate.prk}`);
         recomputeRanking();
-        if (newPromising > 0) {
-          await inspectShortlist(buildInspectionOrder());
-        }
       }
     }
+  }
+  if (reserveDetailSlotForSimilar && inspected.length < budgets.maxDetails && !accessRestricted) {
+    await inspectShortlist(buildInspectionOrder());
   }
 
   // Closed-loop search resumption when Phase 1 stopped early for coded match with 0 verified offers,
@@ -1140,23 +1195,29 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     if (resumedFailure) return resumedFailure;
     await inspectShortlist(buildInspectionOrder());
   } else if (!options.prk && !accessRestricted && searchTimeLeft > 800 && searchRequestsUsed < budgets.maxSearchRequests &&
-      inspected.length < budgets.maxDetails && budgetExhaustedReason === "none" &&
-      (codeless || mode === "extended" || noVerifiedOffersYet)) {
+      budgetExhaustedReason === "none" && (codeless || mode === "extended" || noVerifiedOffersYet)) {
     const sellerTitles = inspected.flatMap((i) => i.offers.map((o) => o.listingTitle).filter((t): t is string => Boolean(t)));
     const sellerVocab = (codeless && (!inspected.some((item) => verifiedOffers(item).length > 0) || mode === "extended"))
       ? extractVocabularyExpansions(profile, sellerTitles, [], executedNormalizedQueries, 1)
       : [];
-    if (sellerVocab.length) {
+    const fallbackAction = sellerVocab.length
+      ? toAction(sellerVocab[0])
+      : buildExpansionActions()[0];
+    if (fallbackAction && (sellerVocab.length > 0 || noVerifiedOffersYet || mode === "extended")) {
       const searchStart = Date.now();
-      const outcome = await executeSearchAction(toAction(sellerVocab[0]), searchStart + searchTimeLeft);
+      const outcome = await executeSearchAction(fallbackAction, searchStart + searchTimeLeft);
       searchDurationMs += Date.now() - searchStart;
       searchTimeLeft = Math.max(0, searchTimeLeft - (Date.now() - searchStart));
       if (outcome.blocked) return fail("SOURCE_UNAVAILABLE", "ترب دسترسی جستجو را محدود کرده است", { challenged: outcome.challenged, accessRestricted: true });
       recomputeRanking();
-      if (outcome.newPromising > 0) {
+      if (outcome.newPromising > 0 && inspected.length < budgets.maxDetails) {
         await inspectShortlist(buildInspectionOrder());
       }
     }
+  }
+  if (!options.prk && searchRequestsUsed >= budgets.maxSearchRequests && budgetExhaustedReason === "none" && buildExpansionActions().length > 0) {
+    budgetExhaustedReason = "search_requests";
+    if (stoppingReason === "scope_completed") stoppingReason = "request_budget";
   }
 
   verifyDurationMs = Date.now() - verifyStart;
