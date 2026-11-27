@@ -8,15 +8,6 @@ exports.normalizeProductText = normalizeProductText;
 exports.extractModelAndSpecTokens = extractModelAndSpecTokens;
 exports.evaluateTorobCandidate = evaluateTorobCandidate;
 exports.selectBestTorobSearchMatch = selectBestTorobSearchMatch;
-/**
- * موتور تطابق محصول v2 — انتخاب «کارت درست» ترب برای یک محصول فروشگاه و راستی‌آزمایی هویت.
- *
- * تفاوت اصلی با v1: به‌جای جمع امتیاز شباهت واژگان (که مدل‌های هم‌خانواده را هم بالای ۸۰٪ می‌برد)،
- * هویت کالا به‌صورت ساختاریافته استخراج و مقایسه می‌شود (برند، کد مدل، نوع کالا، مشخصات تایپ‌شده، پک/استوک/لوازم جانبی)
- * و «تایید خودکار» فقط با شناسایی مثبت (کد مدل یکسان/هم‌ارز، یا مشخصات کاملِ کالای بی‌کد) صادر می‌شود.
- * جزئیات: src/lib/pricing/match/*.ts  و  docs/MATCHER_V2.md
- */
-const systemone_supervisor_1 = require("./systemone-supervisor");
 const compare_1 = require("./match/compare");
 const parse_1 = require("./match/parse");
 const text_1 = require("./match/text");
@@ -86,21 +77,35 @@ function evaluateTorobCandidate(target, candidate, _minSellerCount = 1) {
     const approveAbovePct = target.approveAbovePct ?? 80;
     const candText = `${candidate.titleFa ?? ""} ${candidate.titleEn ?? ""}`.trim();
     if (!(0, text_1.normalizeText)(candText)) {
+        const titleState = candidate.titleEvidence?.parsed ? "mapping_missing"
+            : candidate.titleEvidence?.fields.length ? "parser_missing" : "source_missing";
         return {
             candidate,
             score: 0,
             noul: 0,
-            verdict: "reject",
-            rejected: true,
-            needsReview: false,
-            rejectReason: "عنوان کارت در ترب خالی است",
+            verdict: "review",
+            status: "EXTRACTION_INCOMPLETE",
+            titleState,
+            rejected: false,
+            needsReview: true,
             matchedModelTokens: [],
             missingModelTokens: [],
-            notes: [],
+            notes: ["عنوان قابل استفاده برای سنجش هویت کارت دریافت نشد"],
         };
     }
     const t = (0, parse_1.parseTitle)(target.productName, { sku: target.sku, brand: target.brand });
-    const c = (0, parse_1.parseTitle)(candText);
+    let c = (0, parse_1.parseIdentityTitle)(candText, candidate.specs);
+    if ((0, text_1.normalizeText)(candidate.titleFa) && (0, text_1.normalizeText)(candidate.titleEn)) {
+        const fa = (0, parse_1.parseTitle)(candidate.titleFa);
+        const en = (0, parse_1.parseTitle)(candidate.titleEn);
+        const faCodes = fa.codes.filter((code) => !code.inCompat);
+        const enCodes = en.codes.filter((code) => !code.inCompat);
+        const conflict = faCodes.length && enCodes.length &&
+            !faCodes.some((a) => enCodes.some((b) => ["equal", "alias", "tail"].includes((0, compare_1.relateCodes)(a, b))));
+        if (conflict) {
+            c = { ...c, evidenceConflicts: [...(c.evidenceConflicts ?? []), "عنوان فارسی و لاتین کارت کد مدل متفاوتی دارند"] };
+        }
+    }
     const r = (0, compare_1.compareParsed)(t, c, {
         priceRatio: priceRatio(target, candidate),
         anchorPriceToman: target.anchorPriceToman,
@@ -122,6 +127,12 @@ function evaluateTorobCandidate(target, candidate, _minSellerCount = 1) {
         score: r.score,
         noul: Math.round(r.score) / 100,
         verdict: r.verdict,
+        status: rejected ? "IDENTITY_MISMATCH" : r.verdict === "approve" ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
+        titleState: "present",
+        parsed: c,
+        scoreComponents: r.scoreComponents,
+        rawScore: r.rawScore,
+        hasConflict: r.hasConflict,
         rejected,
         needsReview: r.verdict === "review",
         rejectReason: rejected ? r.rejectReason : undefined,
@@ -146,14 +157,14 @@ function selectBestTorobSearchMatch(target, candidates, minSellerCount = 1) {
     }
     const rejectBelowPct = target.rejectBelowPct ?? 45;
     const approveAbovePct = target.approveAbovePct ?? 80;
-    const reviewCap = Math.max(rejectBelowPct + 5, approveAbovePct - 6);
+    const reviewCap = Math.min(approveAbovePct - 1, Math.max(rejectBelowPct + 5, approveAbovePct - 6));
     let evaluated = candidates.map((c) => evaluateTorobCandidate(target, c, minSellerCount));
     // قاعدهٔ ابهام بین‌کارتی: اگر دو کارت با «هویت متفاوت» یا مشخصات اصلی متضاد هر دو تایید خودکار شدند، هیچ‌کدام خودکار نیست
     const approved = evaluated.filter((x) => x.verdict === "approve");
     const keys = new Set(approved.map((x) => x.identityKey));
     let crossCardConflict = keys.size > 1;
     if (!crossCardConflict && approved.length > 1) {
-        const parsedCards = approved.map((x) => (0, parse_1.parseTitle)(`${x.candidate.titleFa ?? ""} ${x.candidate.titleEn ?? ""}`.trim()));
+        const parsedCards = approved.map((x) => x.parsed);
         for (let i = 0; i < parsedCards.length && !crossCardConflict; i++) {
             for (let j = i + 1; j < parsedCards.length; j++) {
                 const a = parsedCards[i].attrs;
@@ -177,7 +188,8 @@ function selectBestTorobSearchMatch(target, candidates, minSellerCount = 1) {
                 ...x,
                 score: Math.min(x.score, reviewCap),
                 noul: Math.min(x.score, reviewCap) / 100,
-                verdict: (0, systemone_supervisor_1.classifyThreeZoneScore)(Math.min(x.score, reviewCap), rejectBelowPct, approveAbovePct),
+                verdict: "review",
+                status: "REVIEW_REQUIRED",
                 needsReview: true,
                 blockers: [...(x.blockers ?? []), "چند کارت با هویت یا مشخصات متفاوت هم‌زمان با محصول سایت منطبق‌اند"],
                 notes: [...x.notes, "⚠ چند کارت با هویت متفاوت هم‌زمان با محصول سایت منطبق‌اند؛ انتخاب با بازبین"],
@@ -189,6 +201,9 @@ function selectBestTorobSearchMatch(target, candidates, minSellerCount = 1) {
             return a.rejected ? 1 : -1;
         if (VERDICT_RANK[b.verdict] !== VERDICT_RANK[a.verdict])
             return VERDICT_RANK[b.verdict] - VERDICT_RANK[a.verdict];
+        if (a.titleState !== b.titleState && (a.titleState === "present" || b.titleState === "present")) {
+            return a.titleState === "present" ? -1 : 1;
+        }
         if (b.score !== a.score)
             return b.score - a.score;
         const sa = a.candidate.sellerCount ?? 0;
@@ -199,7 +214,7 @@ function selectBestTorobSearchMatch(target, candidates, minSellerCount = 1) {
     });
     // کارت‌های هم‌هویت (تکرار لیستینگ): از میان آنها پرفروشنده‌ترینِ موجود جلو بیاید
     const head = allRanked[0];
-    if (head && !head.rejected) {
+    if (head?.identityKey && !head.rejected) {
         const sameId = allRanked.filter((x) => !x.rejected && x.identityKey === head.identityKey && x.verdict === head.verdict);
         if (sameId.length > 1) {
             sameId.sort((a, b) => {
@@ -212,8 +227,17 @@ function selectBestTorobSearchMatch(target, candidates, minSellerCount = 1) {
             allRanked.splice(0, allRanked.length, ...sameId, ...rest);
         }
     }
-    const nonRejected = allRanked.filter((x) => !x.rejected);
+    const nonRejected = allRanked.filter((x) => !x.rejected && x.titleState === "present");
     if (!nonRejected.length) {
+        if (allRanked.some((x) => x.status === "EXTRACTION_INCOMPLETE")) {
+            return {
+                best: null,
+                allRanked,
+                confident: false,
+                verdict: "review",
+                explanation: "داوری هویت برخی کارت‌های ترب به دلیل عنوان ناقص به دریافت جزئیات نیاز دارد",
+            };
+        }
         const topRejected = allRanked[0];
         return {
             best: null,

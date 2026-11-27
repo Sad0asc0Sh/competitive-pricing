@@ -500,7 +500,7 @@ export async function torobGet<T = unknown>(path: string, opts?: { retries?: num
           );
           // 4xx is the caller's fault, not a blip: 404 for a deleted product must
           // not be retried three times, and other 4xx are the same class.
-          if (resStatus < 500 && resStatus !== 429) {
+          if (resStatus < 500) {
             fatal = true;
             throw lastError;
           }

@@ -1,14 +1,17 @@
-import { listingPanel } from "@/lib/pricing/listing";
-import { aiEnabled, extractOffersWithAI, verifyTorobMatchesWithAI } from "@/lib/ai/client";
 import { parsePersianRelativeDate } from "@/lib/pricing/filters";
-import { selectBestTorobSearchMatch } from "@/lib/pricing/matcher";
-import { parsePriceToToman } from "@/lib/pricing/sourcing";
-import type { AIIdentityCheckMeta, MarketPriceTrend, RawOffer, SourceResult } from "@/lib/pricing/types";
+import { normalizeText } from "@/lib/pricing/match/text";
+import type { TorobCandidateCard } from "@/lib/pricing/matcher";
+import type { MarketPriceTrend, RawOffer } from "@/lib/pricing/types";
 import { getTorobRelayConfig, syncTorobRelayToMcp } from "@/lib/torob-relay/config";
 import { fetchViaEncryptedRelay } from "@/lib/torob-relay/crypto";
-import { browserHeaders, fetchWithRetry, politeDelay } from "./humanize";
-import { analyzeMcpPriceHistory, fetchViaTorobMcpServer, mergeTorobPanelOffers } from "./torob-mcp-client";
-import type { PriceSourceAdapter, SourceMatchConfig, SourceProduct } from "./types";
+import { politeDelay } from "./humanize";
+import { resolveTorobSource, type TorobRead } from "./torob-discovery";
+import { analyzeMcpPriceHistory, fetchViaTorobMcpServer } from "./torob-mcp-client";
+import {
+  cleanPrk, countOf, firstText, offerSourceUrl, prkFromTorobUrl, readTorobSpecs, readTorobTitles, record,
+  safeTorobDetailsUrl, torobPrice, torobStock, type TorobDetailsData, type TorobRecord,
+} from "./torob-payload";
+import type { PriceSourceAdapter, SourceProduct } from "./types";
 
 const DEFAULT_TOROB_API_BASE = "https://api.torob.com";
 
@@ -16,746 +19,275 @@ export function getTorobApiBase(): string {
   return (process.env.TOROB_API_BASE || DEFAULT_TOROB_API_BASE).replace(/\/+$/, "");
 }
 
-interface TorobTransportResponse {
-  ok: boolean;
-  status: number;
-  contentType: string;
-  bodyText: string;
-  error?: string;
-}
-
-async function torobTransportGet(
-  target: "api" | "site",
-  path: string,
-  headers: Record<string, string>,
-  opts: { retries?: number; timeoutMs?: number } = {},
-): Promise<TorobTransportResponse> {
-  const relay = await getTorobRelayConfig();
-  if (relay.enabled && relay.configured && relay.mode === "encrypted_relay") {
-    const relayed = await fetchViaEncryptedRelay({
-      relayUrl: relay.url,
-      relayKey: relay.relayKey,
-      target,
-      path,
-      headers,
-      timeoutMs: opts.timeoutMs ?? 12_000,
-    });
-    const status = relayed.status ?? 502;
-    const ok = relayed.ok && status >= 200 && status < 300;
-    return {
-      ok,
-      status,
-      contentType: relayed.contentType ?? "",
-      bodyText: relayed.body ?? "",
-      error: ok ? undefined : relayed.error || `Relay HTTP ${status}`,
-    };
-  }
-
-  const base =
-    target === "site"
-      ? "https://torob.com"
-      : relay.enabled && relay.configured && relay.mode === "plain_https_base"
-        ? relay.url
-        : getTorobApiBase();
-  const res = await fetchWithRetry(`${base}${path}`, { headers }, opts);
-  return {
-    ok: res.ok,
-    status: res.status,
-    contentType: res.headers.get("content-type") ?? "",
-    bodyText: await res.text(),
-    error: res.ok ? undefined : `HTTP ${res.status}`,
-  };
-}
-
-/** استخراج prk از URL ترب: https://torob.com/p/<prk>/<slug>/ */
 export function extractPrk(url?: string | null, prk?: string | null): string | null {
-  if (prk && prk.trim()) {
-    const clean = prk.trim();
-    const m = clean.match(/\/p\/([a-zA-Z0-9_-]+)/);
-    return m ? m[1] : clean;
-  }
-  if (!url) return null;
-  const m = url.match(/\/p\/([a-zA-Z0-9_-]+)/);
-  return m ? m[1] : null;
+  return cleanPrk(prk) ?? prkFromTorobUrl(prk) ?? prkFromTorobUrl(url);
 }
 
-type AnyRec = Record<string, unknown>;
-
-const num = (v: unknown): number => {
-  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
-  if (typeof v === "string") {
-    return parsePriceToToman(v, "toman");
-  }
-  return 0;
-};
-const str = (v: unknown): string => (v == null ? "" : String(v));
-
-/** تشخیص کپچا / چالش ربات ترب (HTTP 490 یا صفحه arCAPTCHA طبق منطق torob-mcp) */
 export function looksLikeTorobChallenge(status: number, contentType: string, body: string): boolean {
-  if (status === 490) return true;
-  if (contentType.toLowerCase().includes("json")) return false;
-  return /arcaptcha|ربات هستید|captcha/i.test(body.slice(0, 4000));
+  return status === 490 || (!contentType.toLowerCase().includes("json") && /arcaptcha|ربات هستید|captcha/i.test(body.slice(0, 4000)));
 }
 
-export function normalizeTorobSeller(s: AnyRec, now: Date = new Date()): RawOffer | null {
-  const price = num(s.price ?? s.price_value ?? s.min_price ?? s.price_text ?? s.price_string);
-  const shopName = str(s.shop_name ?? s.seller_name ?? s.name1 ?? "نامشخص").trim();
-  if (!price || price <= 0) return null;
-
-  const shopCity = str(s.shop_city ?? s.city ?? s.shop_name2 ?? "").trim() || null;
-
-  const rawChanged = str(
-    s.last_price_change_date ?? s.last_price_change ?? s.updated_at ?? s.price_updated_at ?? "",
-  ).trim();
-  const lastChangedAt = rawChanged ? parsePersianRelativeDate(rawChanged, now) : null;
-
-  const availabilityVal = s.availability ?? s.stock_status;
-  let inStock = true;
-  if (typeof availabilityVal === "boolean") {
-    inStock = availabilityVal;
-  } else if (typeof availabilityVal === "string" && availabilityVal.trim()) {
-    inStock = !["out_of_stock", "unavailable", "false", "0", "ناموجود"].includes(
-      availabilityVal.trim().toLowerCase(),
-    );
+async function torobTransportGet(target: "api" | "site", path: string, timeoutMs: number): Promise<TorobRead<string>> {
+  const host = target === "api" ? "api.torob.com" : "torob.com";
+  const headers = { Accept: target === "api" ? "application/json" : "text/html", "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.8" };
+  const deadline = Date.now() + timeoutMs;
+  try {
+    const relay = await getTorobRelayConfig();
+    await politeDelay(host, 150, 400);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { unavailable: true, issue: "transport_timeout" };
+    let status: number;
+    let contentType: string;
+    let body: string;
+    if (relay.enabled && relay.configured && relay.mode === "encrypted_relay") {
+      const response = await fetchViaEncryptedRelay({
+        relayUrl: relay.url, relayKey: relay.relayKey, target, path, headers, timeoutMs: remaining,
+      });
+      status = response.status ?? 502;
+      contentType = response.contentType ?? "";
+      body = response.body ?? "";
+      if (!response.ok && status >= 200 && status < 300) return { unavailable: true, issue: "relay_unavailable" };
+    } else {
+      const base = target === "site" ? "https://torob.com"
+        : relay.enabled && relay.configured && relay.mode === "plain_https_base" ? relay.url : getTorobApiBase();
+      const response = await fetch(`${base}${path}`, { headers, cache: "no-store", signal: AbortSignal.timeout(remaining) });
+      status = response.status;
+      contentType = response.headers.get("content-type") ?? "";
+      if (status === 401 || status === 403 || status === 429 || status === 490) {
+        return { unavailable: true, blocked: true, challenged: status === 490, issue: status === 490 ? "access_challenge" : "access_restricted" };
+      }
+      body = await response.text();
+    }
+    if (looksLikeTorobChallenge(status, contentType, body)) return { unavailable: true, blocked: true, challenged: true, issue: "access_challenge" };
+    if (status === 429 || status === 403 || status === 401) return { unavailable: true, blocked: true, issue: "access_restricted" };
+    if (status < 200 || status >= 300) return { unavailable: true, issue: `torob_http_${status}` };
+    return { data: body };
+  } catch (error) {
+    const timeout = error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name);
+    return { unavailable: true, issue: timeout ? "transport_timeout" : "transport_connection" };
   }
-
-  const moreInfo = (s.more_info as AnyRec | undefined) ?? {};
-  const postageText = str(s.postage_fee ?? s.postage_text ?? "").trim();
-  const postageFee = postageText ? parsePriceToToman(postageText, "toman") : null;
-  const guaranteeInfo = (s.guarantee_info as AnyRec | undefined) ?? {};
-  const shopScoreRaw = Number(s.shop_score);
-  const shopVotesRaw = Number(s.shop_votes_count ?? s.shop_votes ?? 0);
-  const shopPercentileRaw = Number(s.shop_score_percentile);
-
-  return {
-    shopName: shopName || "نامشخص",
-    shopId: str(s.shop_id ?? s.shop_slug ?? "") || undefined,
-    shopCity,
-    sellerType: "online",
-    shopScore: Number.isFinite(shopScoreRaw) && shopScoreRaw > 0 ? Math.round(shopScoreRaw * 10) / 10 : null,
-    shopVotes: Number.isFinite(shopVotesRaw) && shopVotesRaw > 0 ? Math.round(shopVotesRaw) : 0,
-    shopScorePercentile: Number.isFinite(shopPercentileRaw) ? Math.round(shopPercentileRaw) : null,
-    price,
-    postageFee: postageFee && postageFee > 0 ? postageFee : null,
-    deliveredPrice: price + (postageFee && postageFee > 0 ? postageFee : 0),
-    freeShipping: typeof moreInfo.free_shipping === "boolean" ? moreInfo.free_shipping : null,
-    sameDayDelivery: str(moreInfo.same_day_delivery ?? "") || null,
-    paymentOnDelivery: typeof moreInfo.payment_on_delivery === "boolean" ? moreInfo.payment_on_delivery : null,
-    guarantee: str(guaranteeInfo.status ?? s.guarantee ?? "") || null,
-    priceUnreliable: Boolean(s.is_price_unreliable ?? s.price_unreliable ?? false),
-    lastChangedAt,
-    lastChangedText: rawChanged || null,
-    isAd: Boolean(s.is_adv ?? s.is_ad ?? s.sponsored ?? false),
-    inStock,
-    url: str(s.page_url ?? s.url ?? s.shop_url ?? "") || undefined,
-  };
 }
 
-export function normalizeTorobInPersonSeller(s: AnyRec, now: Date = new Date()): RawOffer | null {
-  const price = num(s.price ?? s.price_string ?? s.price_text);
-  const shopName = str(s.shop_name ?? "فروشگاه حضوری").trim();
-  if (!price || price <= 0) return null;
+function jsonValue(body: string | undefined): unknown {
+  if (!body) return undefined;
+  try {
+    return JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+}
 
-  const shopCity = str(s.city ?? s.shop_name2 ?? "").trim() || null;
-  const rawChanged = str(s.last_price_change_date ?? "").trim();
-  const lastChangedAt = rawChanged ? parsePersianRelativeDate(rawChanged, now) : null;
-  const scoreInfo = (s.score_info as AnyRec | undefined) ?? {};
-  const scoreRaw = Number(scoreInfo.score ?? s.score);
-
+function normalizeSeller(s: TorobRecord, now: Date, sellerType: "online" | "in_person"): RawOffer | null {
+  const shopName = firstText(s.shop_name, s.seller_name, record(s.shop)?.name);
+  const priceNode = record(s.price);
+  const unit = priceNode?.currency ?? s.currency ?? s.price_unit;
+  const price = torobPrice(s.price_toman) ||
+    torobPrice(priceNode?.amount ?? s.price ?? s.price_value ?? s.min_price, unit) ||
+    torobPrice(s.price_text ?? s.price_string, unit);
+  if (!shopName || price <= 0) return null;
+  const shopId = typeof s.shop_id === "number" && Number.isSafeInteger(s.shop_id) ? String(s.shop_id) : firstText(s.shop_id, s.shop_slug);
+  const shopUrl = shopId ? `https://torob.com/shop/${encodeURIComponent(shopId)}/` : undefined;
+  const shopScore = Number(s.shop_score ?? record(s.score_info)?.score ?? s.score);
+  const lastChangedText = firstText(s.last_price_change_date, s.last_price_change, s.updated_at, s.price_updated_at);
+  const more = record(s.more_info);
+  const postageFee = sellerType === "online" ? torobPrice(s.postage_fee_toman ?? s.postage_fee ?? s.postage_text) : 0;
   return {
     shopName,
-    shopId: str(s.shop_id ?? "") || undefined,
-    shopCity,
-    sellerType: "in_person",
-    shopScore: Number.isFinite(scoreRaw) && scoreRaw > 0 ? Math.round(scoreRaw * 10) / 10 : null,
+    shopId: shopId ?? undefined,
+    shopCity: firstText(s.shop_city, s.city, s.shop_name2),
+    listingTitle: firstText(s.product_title, s.listing_title, s.product_name, sellerType === "online" ? s.name1 : undefined),
+    currency: "toman",
+    observedAt: now,
+    sellerType,
+    shopScore: Number.isFinite(shopScore) && shopScore > 0 ? Math.round(shopScore * 10) / 10 : null,
+    shopVotes: countOf(s.shop_votes_count ?? s.shop_votes) ?? 0,
+    shopScorePercentile: countOf(s.shop_score_percentile),
     price,
-    deliveredPrice: price,
-    priceUnreliable: Boolean(s.is_price_unreliable ?? s.price_unreliable ?? false),
-    lastChangedAt,
-    lastChangedText: rawChanged || null,
-    isAd: false,
-    inStock: true,
-    url: s.shop_id ? `https://torob.com/shop/${str(s.shop_id)}/` : undefined,
+    postageFee: postageFee || null,
+    deliveredPrice: price + postageFee,
+    freeShipping: typeof more?.free_shipping === "boolean" ? more.free_shipping : null,
+    sameDayDelivery: firstText(more?.same_day_delivery),
+    paymentOnDelivery: typeof more?.payment_on_delivery === "boolean" ? more.payment_on_delivery : null,
+    guarantee: firstText(record(s.guarantee_info)?.status, s.guarantee),
+    priceUnreliable: (s.is_price_unreliable ?? s.price_unreliable) === true,
+    lastChangedAt: parsePersianRelativeDate(lastChangedText, now),
+    lastChangedText,
+    isAd: (s.is_adv ?? s.is_ad ?? s.sponsored) === true,
+    inStock: torobStock(s.availability ?? s.available ?? s.stock_status),
+    url: offerSourceUrl(s.page_url, s.url, s.shop_url, shopUrl),
   };
 }
 
-export function parseTorobJson(
-  json: AnyRec,
-  now: Date = new Date(),
-): {
-  offers: RawOffer[];
-  title?: string;
-  prk?: string;
-  total: number;
-  inPersonCount: number;
-} {
-  const pi = (json.products_info as AnyRec | undefined) ?? {};
-  const onlineCandidates =
-    (pi.result as AnyRec[] | undefined) ??
-    (json.sellers as AnyRec[] | undefined) ??
-    (json.products as AnyRec[] | undefined) ??
-    (json.result as AnyRec[] | undefined) ??
-    [];
-
-  const inStoreBlock = (json.products_in_store_info as AnyRec | undefined) ?? {};
-  const inPersonCandidates = Array.isArray(inStoreBlock.result)
-    ? (inStoreBlock.result as AnyRec[])
-    : [];
-
-  const onlineOffers = onlineCandidates
-    .map((s) => normalizeTorobSeller(s, now))
-    .filter((o): o is RawOffer => !!o);
-
-  const inPersonOffers = inPersonCandidates
-    .map((s) => normalizeTorobInPersonSeller(s, now))
-    .filter((o): o is RawOffer => !!o);
-
-  const offers = [...onlineOffers, ...inPersonOffers];
-  const totalOnline =
-    num(json.shop_count ?? json.sellers_count ?? pi.count ?? json.count) || onlineOffers.length;
-  const inPersonCount = num(inStoreBlock.count) || inPersonOffers.length;
-  const title = str(json.name1 ?? json.name ?? json.title ?? "") || undefined;
-  const prk = str(json.random_key ?? json.prk ?? "") || undefined;
-
-  return {
-    offers,
-    title,
-    prk,
-    total: Math.max(totalOnline + inPersonCount, offers.length),
-    inPersonCount,
-  };
+export function normalizeTorobSeller(s: TorobRecord, now = new Date()): RawOffer | null {
+  return normalizeSeller(s, now, "online");
 }
 
-/**
- * جستجوی هوشمند محصول در API v4 ترب با نام و کد مدل + پالایش ۲۴ نتیجه اول با موتور ۷ لایه تطبیق هویت
- */
-export async function searchTorobProductV4(
-  query: string,
-  targetPrk?: string | null,
-  opts?: {
-    sku?: string | null;
-    category?: string | null;
-    anchorPriceToman?: number | null;
-    matchConfig?: SourceMatchConfig;
-  },
-): Promise<{
-  prk: string | null;
-  detailsUrl: string | null;
-  title: string | null;
-  extraMatchedPrks?: string[];
-  aiIdentityCheck?: AIIdentityCheckMeta | null;
-  matchScore?: number;
-  matchExplanation?: string;
-  challenged?: boolean;
-  rejectedAll?: boolean;
-  transportError?: string;
-} | null> {
-  const cleanQuery = query.replace(/[\u200c\u200d]/g, " ").replace(/\s+/g, " ").trim();
-  if (!cleanQuery) return null;
+export function normalizeTorobInPersonSeller(s: TorobRecord, now = new Date()): RawOffer | null {
+  return normalizeSeller(s, now, "in_person");
+}
 
-  try {
-    await politeDelay("api.torob.com", 150, 400);
-    const params = new URLSearchParams({
-      q: cleanQuery,
-      page: "0",
-      size: "24",
-      source: "next_desktop",
+function decodeTorobDetails(value: unknown, now: Date): TorobRead<TorobDetailsData> {
+  const outer = record(value);
+  const row = record(outer?.data) ?? outer;
+  if (!row) return { issue: "details_schema" };
+  const online = record(row.products_info);
+  const stores = record(row.products_in_store_info);
+  const rawOnline = online?.result ?? row.sellers ?? row.products ?? row.result;
+  const rawStores = stores?.result;
+  const onlineRows = Array.isArray(rawOnline) ? rawOnline : [];
+  const storeRows = Array.isArray(rawStores) ? rawStores : [];
+  const sellerRows = Array.isArray(rawOnline) || Array.isArray(rawStores) ? onlineRows.length + storeRows.length : null;
+  const onlineOfferCount = Math.max(countOf(row.shop_count ?? row.sellers_count ?? online?.count ?? row.count) ?? 0, onlineRows.length);
+  const inPersonSellerCount = Math.max(countOf(stores?.count) ?? 0, storeRows.length);
+  const offers = [...onlineRows.map((item) => ({ item, type: "online" as const })), ...storeRows.map((item) => ({ item, type: "in_person" as const }))]
+    .flatMap(({ item, type }) => {
+      const seller = record(item);
+      const offer = seller ? normalizeSeller(seller, now, type) : null;
+      return offer ? [offer] : [];
     });
-    const res = await torobTransportGet(
-      "api",
-      `/v4/base-product/search/?${params.toString()}`,
-      browserHeaders("https://torob.com/"),
-    );
-    if (looksLikeTorobChallenge(res.status, res.contentType, res.bodyText)) {
-      return { prk: null, detailsUrl: null, title: null, challenged: true };
-    }
-    if (!res.ok) {
-      return {
-        prk: null,
-        detailsUrl: null,
-        title: null,
-        transportError: res.error || `HTTP ${res.status}`,
-      };
-    }
-    const raw = JSON.parse(res.bodyText) as { results?: AnyRec[] };
-    const rows = Array.isArray(raw.results) ? raw.results : [];
-    if (!rows.length) return null;
+  const faultyRows = Boolean(sellerRows) && [...onlineRows, ...storeRows].every((item) => {
+    const seller = record(item);
+    return !firstText(seller?.shop_name, seller?.seller_name, record(seller?.shop)?.name);
+  });
+  const badShape = sellerRows == null || (rawOnline != null && !Array.isArray(rawOnline)) ||
+    (rawStores != null && !Array.isArray(rawStores)) || faultyRows ||
+    (onlineOfferCount > 0 && onlineRows.length === 0) || (inPersonSellerCount > 0 && storeRows.length === 0);
+  return {
+    ...(badShape ? { issue: "details_schema" } : {}),
+    data: {
+      ...readTorobTitles(row),
+      prk: cleanPrk(row.random_key ?? row.prk) ?? prkFromTorobUrl(row.web_client_absolute_url ?? row.url),
+      specs: readTorobSpecs(row),
+      offers,
+      sellerRows,
+      totalSellerCount: sellerRows != null || onlineOfferCount + inPersonSellerCount > 0 ? onlineOfferCount + inPersonSellerCount : null,
+      inPersonSellerCount,
+      onlineOfferCount,
+      offersTruncated: onlineOfferCount > onlineRows.length || inPersonSellerCount > storeRows.length,
+    },
+  };
+}
 
-    if (targetPrk) {
-      const exact = rows.find((r) => str(r.random_key).trim() === targetPrk.trim());
-      if (exact) {
-        return {
-          prk: str(exact.random_key).trim(),
-          detailsUrl: str(exact.more_info_url).trim() || null,
-          title: str(exact.name1).trim() || null,
-          matchScore: 100,
-          matchExplanation: "تطابق مستقیم با شناسه یکتای قفل‌شده ترب (PRK)",
-        };
+export function parseTorobJson(value: unknown, now = new Date()) {
+  const details = decodeTorobDetails(value, now).data;
+  return {
+    offers: details?.offers ?? [],
+    title: details?.titleFa ?? undefined,
+    prk: details?.prk ?? undefined,
+    total: details?.totalSellerCount ?? 0,
+    inPersonCount: details?.inPersonSellerCount ?? 0,
+  };
+}
+
+async function searchTorobProductV4(query: string, limit: number, timeoutMs: number): Promise<TorobRead<unknown>> {
+  const params = new URLSearchParams({ q: query, page: "0", size: String(limit), source: "next_desktop" });
+  const response = await torobTransportGet("api", `/v4/base-product/search/?${params}`, timeoutMs);
+  if (response.data === undefined) return response;
+  const data = jsonValue(response.data);
+  return data === undefined ? { issue: "search_schema" } : { data };
+}
+
+function findDetailsInNextData(html: string, prk: string): TorobRecord | null {
+  const script = html.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  const stack = [jsonValue(script?.[1])];
+  let onlyUnlabelled: TorobRecord | null = null;
+  let unlabelledCount = 0;
+  for (let examined = 0; stack.length && examined < 5000; examined++) {
+    const value = stack.pop();
+    if (Array.isArray(value)) {
+      for (const item of value) stack.push(item);
+      continue;
+    }
+    const node = record(value);
+    if (!node) continue;
+    if (record(node.products_info) || record(node.products_in_store_info)) {
+      const id = cleanPrk(node.random_key ?? node.prk) ?? prkFromTorobUrl(node.web_client_absolute_url ?? node.url);
+      if (id === prk) return node;
+      if (id == null) {
+        onlyUnlabelled = node;
+        unlabelledCount++;
       }
     }
-
-    const candidates = rows
-      .map((r) => {
-        const prk = str(r.random_key).trim();
-        if (!prk) return null;
-        const shopText = str(r.shop_text ?? "")
-          .replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1728))
-          .replace(/[٠-٩]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1584));
-        const sellerCountMatch = shopText.match(/(\d+)\s*(?:فروشگاه|فروشنده)/);
-        const sellerCount =
-          num(r.shop_count ?? r.sellers_count) ||
-          (sellerCountMatch ? Number(sellerCountMatch[1]) : 1);
-        return {
-          prk,
-          titleFa: str(r.name1).trim(),
-          titleEn: str(r.name2).trim() || null,
-          priceToman: num(r.price ?? r.price_text_striked) || null,
-          sellerCount,
-          available: !str(r.stock_status ?? "").includes("ناموجود"),
-          detailsUrl: str(r.more_info_url).trim() || null,
-          shopName: shopText || null,
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => !!x);
-
-    const outcome = selectBestTorobSearchMatch(
-      {
-        productName: cleanQuery,
-        sku: opts?.sku,
-        anchorPriceToman: opts?.anchorPriceToman,
-        rejectBelowPct: opts?.matchConfig?.rejectBelowPct,
-        approveAbovePct: opts?.matchConfig?.approveAbovePct,
-      },
-      candidates,
-      opts?.matchConfig?.minSellerCount ?? 1,
-    );
-
-    let aiIdentityCheck: AIIdentityCheckMeta | null = null;
-    const eligibleCards = outcome.allRanked.filter((x) => !x.rejected).slice(0, 10);
-    const eligiblePrks = new Set(eligibleCards.map((x) => x.candidate.prk));
-    if (
-      opts?.matchConfig?.aiIdentityEnabled === true &&
-      eligibleCards.length > 0 &&
-      (!outcome.confident || eligibleCards.length > 1) &&
-      (await aiEnabled())
-    ) {
-      const aiRes = await verifyTorobMatchesWithAI({
-        productName: cleanQuery,
-        sku: opts?.sku,
-        category: opts?.category,
-        anchorPriceToman: opts?.anchorPriceToman,
-        candidates: eligibleCards.map((r) => ({
-          prk: r.candidate.prk,
-          titleFa: r.candidate.titleFa,
-          titleEn: r.candidate.titleEn,
-          sellerCount: r.candidate.sellerCount,
-          priceToman: r.candidate.priceToman,
-          available: r.candidate.available,
-        })),
-      });
-      if (aiRes) {
-        aiIdentityCheck = aiRes;
-        if (aiRes.verdict === "no_match") {
-          return {
-            prk: null,
-            detailsUrl: null,
-            title: null,
-            aiIdentityCheck,
-            rejectedAll: true,
-            matchExplanation: `هوش مصنوعی هیچ پنل ادغام مرتبطی در ترب پیدا نکرد: ${aiRes.reasoning}`,
-          };
-        }
-        if (aiRes.verdict === "match" && aiRes.primaryPrk) {
-          const picked = candidates.find((c) => c.prk === aiRes.primaryPrk);
-          if (picked && eligiblePrks.has(picked.prk)) {
-            const extraMatchedPrks = aiRes.matchedPrks
-              .filter((id) => id !== picked.prk && eligiblePrks.has(id))
-              .slice(0, 2);
-            return {
-              prk: picked.prk,
-              detailsUrl: picked.detailsUrl ?? null,
-              title: picked.titleFa || null,
-              extraMatchedPrks,
-              aiIdentityCheck,
-              matchScore: outcome.allRanked.find((x) => x.candidate.prk === picked.prk)?.score ?? outcome.best?.score ?? 85,
-              matchExplanation: `تطبیق پنل ادغام با هوش مصنوعی (${1 + extraMatchedPrks.length} پنل): ${aiRes.reasoning}`,
-            };
-          }
-        }
-      }
-    }
-
-    if (!outcome.best) {
-      return {
-        prk: null,
-        detailsUrl: null,
-        title: null,
-        aiIdentityCheck,
-        rejectedAll: true,
-        matchExplanation: outcome.explanation,
-      };
-    }
-
-    return {
-      prk: outcome.best.candidate.prk,
-      detailsUrl: outcome.best.candidate.detailsUrl ?? null,
-      title: outcome.best.candidate.titleFa || null,
-      aiIdentityCheck,
-      matchScore: outcome.best.score,
-      matchExplanation: outcome.explanation,
-    };
-  } catch (e) {
-    return {
-      prk: null,
-      detailsUrl: null,
-      title: null,
-      transportError: e instanceof Error ? e.message : String(e),
-    };
+    for (const item of Object.values(node)) if (item !== null && typeof item === "object") stack.push(item);
   }
+  return unlabelledCount === 1 ? onlyUnlabelled : null;
+}
+
+async function fetchTorobDetails(card: TorobCandidateCard, now: Date, timeoutMs: number): Promise<TorobRead<TorobDetailsData>> {
+  const deadline = Date.now() + timeoutMs;
+  const detailsUrl = safeTorobDetailsUrl(card.detailsUrl ?? "/v4/base-product/details/", card.prk)
+    ?? safeTorobDetailsUrl("/v4/base-product/details/", card.prk)!;
+  const requestUrl = safeTorobDetailsUrl(card.detailsUrl, card.prk, true) ?? detailsUrl;
+  const api = await torobTransportGet("api", requestUrl.slice(DEFAULT_TOROB_API_BASE.length), Math.min(5000, timeoutMs));
+  if (api.blocked) return { ...api, data: undefined };
+  const parsed = api.data === undefined ? { ...api, data: undefined } : decodeTorobDetails(jsonValue(api.data), now);
+  if (parsed.data) parsed.data.detailsUrl = detailsUrl;
+  if (parsed.data?.prk && parsed.data.prk !== card.prk) return { issue: "details_prk_mismatch" };
+  const title = normalizeText(parsed.data?.titleFa) || normalizeText(parsed.data?.titleEn) ||
+    normalizeText(card.titleFa) || normalizeText(card.titleEn);
+  const remaining = deadline - Date.now();
+  if ((parsed.data && !parsed.issue && title) || remaining < 250) {
+    return { ...parsed, issue: parsed.issue === "transport_timeout" ? "details_timeout" : parsed.issue };
+  }
+  const page = await torobTransportGet("site", `/p/${encodeURIComponent(card.prk)}/`, remaining);
+  if (page.blocked) return { ...page, data: parsed.data };
+  const embedded = page.data && findDetailsInNextData(page.data, card.prk);
+  if (embedded) {
+    const fromPage = decodeTorobDetails(embedded, now);
+    if (fromPage.data) fromPage.data.detailsUrl = detailsUrl;
+    if (!fromPage.issue || !parsed.data) return fromPage;
+  }
+  return parsed.data ? parsed : {
+    unavailable: parsed.unavailable && page.unavailable,
+    issue: [parsed.issue, page.issue].includes("transport_timeout") ? "details_timeout" : parsed.issue ?? page.issue ?? "details_schema",
+  };
 }
 
 export async function fetchTorobPriceTrendV4(prk: string): Promise<MarketPriceTrend | null> {
-  try {
-    const res = await torobTransportGet(
-      "api",
-      `/v4/base-product/price-chart/?prk=${encodeURIComponent(prk)}`,
-      browserHeaders(`https://torob.com/p/${prk}/`),
-      { retries: 0, timeoutMs: 4000 },
-    );
-    if (!res.ok) return null;
-    const raw = JSON.parse(res.bodyText) as {
-      labels?: unknown[];
-      dataSets?: { label?: string; entries?: { i?: number; val?: number }[] }[];
-    };
-    const labels = Array.isArray(raw.labels) ? raw.labels.map((l) => str(l)) : [];
-    const series = (raw.dataSets ?? []).map((ds) => ({
-      label: str(ds.label),
-      points: (ds.entries ?? [])
-        .filter((e) => typeof e.i === "number" && typeof e.val === "number")
-        .map((e) => ({ date: labels[e.i!] ?? "", value: Math.round(e.val!) })),
-    }));
-    return analyzeMcpPriceHistory({ series });
-  } catch {
-    return null;
-  }
-}
-
-function extractNextData(html: string): AnyRec | null {
-  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!m) return null;
-  try {
-    return JSON.parse(m[1]) as AnyRec;
-  } catch {
-    return null;
-  }
-}
-
-function findDetailsInNextData(nd: AnyRec): AnyRec | null {
-  const stack: unknown[] = [nd];
-  let guard = 0;
-  while (stack.length && guard++ < 5000) {
-    const cur = stack.pop();
-    if (cur && typeof cur === "object") {
-      const rec = cur as AnyRec;
-      if (rec.products_info && typeof rec.products_info === "object") return rec;
-      for (const v of Object.values(rec)) if (v && typeof v === "object") stack.push(v);
-    }
-  }
-  return null;
+  const res = await torobTransportGet("api", `/v4/base-product/price-chart/?prk=${encodeURIComponent(prk)}`, 4000);
+  const raw = record(jsonValue(res.data));
+  if (!Array.isArray(raw?.dataSets)) return null;
+  const labels = Array.isArray(raw.labels) ? raw.labels : [];
+  const series = raw.dataSets.flatMap((set) => {
+    const row = record(set);
+    if (!Array.isArray(row?.entries)) return [];
+    const points = row.entries.flatMap((item) => {
+      const entry = record(item);
+      if (typeof entry?.i !== "number" || typeof entry?.val !== "number") return [];
+      return [{ date: firstText(labels[entry.i]) ?? "", value: Math.round(entry.val) }];
+    });
+    return [{ label: firstText(row.label) ?? "", points }];
+  });
+  return analyzeMcpPriceHistory({ series });
 }
 
 export const torobAdapter: PriceSourceAdapter = {
   id: "torob",
   label: "ترب (مجهز به Torob MCP)",
-  async fetchOffers(product: SourceProduct): Promise<SourceResult> {
-    const fetchedAt = new Date();
-    let prk = extractPrk(product.torobUrl, product.torobPrk);
-    let detailsUrl = product.torobDetailsUrl ?? null;
-    const anchorPriceToman =
-      product.currentFinalPrice && product.currentFinalPrice > 0
-        ? product.currentFinalPrice
-        : product.costPrice > 0
-          ? product.costPrice
-          : null;
-
-    const diagnostics: string[] = [];
-
-    // --- لایه ۰: اتصال به سرور Torob MCP در صورت تنظیم متغیر محیطی TOROB_MCP_URL
+  async fetchOffers(product: SourceProduct) {
+    const now = new Date();
+    const prk = extractPrk(product.torobUrl, product.torobPrk);
+    const options = {
+      productName: product.name,
+      sku: product.sku,
+      category: product.category,
+      prk,
+      detailsUrl: prk ? safeTorobDetailsUrl(product.torobDetailsUrl, prk, true) : null,
+      confirmation: product.torobLinkConfirmation,
+      anchorPriceToman: product.currentFinalPrice && product.currentFinalPrice > 0 ? product.currentFinalPrice
+        : product.costPrice > 0 ? product.costPrice : null,
+      matchConfig: product.matchConfig,
+      now,
+    };
+    const details = (card: TorobCandidateCard, timeoutMs: number) => fetchTorobDetails(card, now, timeoutMs);
     const mcpUrl = process.env.TOROB_MCP_URL?.trim();
     if (mcpUrl) {
       await syncTorobRelayToMcp().catch(() => undefined);
-      const mcpResult = await fetchViaTorobMcpServer({
-        mcpUrl,
-        prk,
-        detailsUrl,
-        productName: product.name,
-        sku: product.sku,
-        category: product.category,
-        anchorPriceToman,
-        matchConfig: product.matchConfig,
-        now: fetchedAt,
-      });
-      if (mcpResult) {
-        if (mcpResult.ok || mcpResult.meta?.challenged || mcpResult.meta?.rejectedInSearch) {
-          return mcpResult;
-        }
-        if (mcpResult.error) diagnostics.push(`MCP: ${mcpResult.error}`);
-      }
+      return fetchViaTorobMcpServer({ ...options, mcpUrl, fallbackSearch: searchTorobProductV4, fallbackDetails: details });
     }
-
-    // --- لایه ۱: موتور مستقیم Torob API v4 با تطبیق هویت ۷ لایه
-    // نکته مهم: وقتی prk از روی torobUrl یا torobPrk از قبل مشخص است، حتی بدون detailsUrl نباید دوباره جستجوی عنوانی زد
-    let matchMeta: Record<string, unknown> = {};
-    let extraMatchedPrks: string[] = [];
-    if (!prk && product.name) {
-      const discovered = await searchTorobProductV4(product.name, prk, {
-        sku: product.sku,
-        category: product.category,
-        anchorPriceToman,
-        matchConfig: product.matchConfig,
-      });
-      if (discovered?.challenged) {
-        return {
-          source: "torob",
-          prk,
-          offers: [],
-          totalSellerCount: 0,
-          fetchedAt,
-          ok: false,
-          error:
-            "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای استعلام از سرور خارج از کشور، آدرس Relay/Worker ایرانی را در TOROB_API_BASE تنظیم کنید.",
-          meta: { challenged: true, ...(diagnostics.length ? { diagnostics } : {}) },
-        };
-      }
-      if (discovered?.transportError) {
-        diagnostics.push(`جستجوی مستقیم ترب: ${discovered.transportError}`);
-      }
-      if (discovered?.rejectedAll) {
-        const diagSuffix = diagnostics.length ? ` (${diagnostics.join(" | ")})` : "";
-        return {
-          source: "torob",
-          prk,
-          offers: [],
-          totalSellerCount: 0,
-          fetchedAt,
-          ok: false,
-          error:
-            (discovered.matchExplanation ?? "هیچ کارتی در ترب با مشخصات و کد مدل محصول مطابقت نداشت") + diagSuffix,
-          meta: {
-            ...(discovered.aiIdentityCheck ? { aiIdentityCheck: discovered.aiIdentityCheck } : {}),
-            ...(diagnostics.length ? { diagnostics } : {}),
-          },
-        };
-      }
-      if (discovered && discovered.prk) {
-        prk = prk ?? discovered.prk;
-        detailsUrl = detailsUrl ?? discovered.detailsUrl;
-        extraMatchedPrks = discovered.extraMatchedPrks ?? [];
-        matchMeta = {
-          matchScore: discovered.matchScore,
-          matchExplanation: discovered.matchExplanation,
-          ...(discovered.aiIdentityCheck ? { aiIdentityCheck: discovered.aiIdentityCheck } : {}),
-        };
-      }
-    }
-
-    if (!prk) {
-      const diagSuffix = diagnostics.length ? ` | جزئیات فنی: ${diagnostics.join(" | ")}` : "";
-      return {
-        source: "torob",
-        offers: [],
-        totalSellerCount: 0,
-        fetchedAt,
-        ok: false,
-        error: `شناسه/لینک ترب (prk) تعریف نشده و جستجوی خودکار نتیجه‌ای نداد${diagSuffix}`,
-        meta: diagnostics.length ? { diagnostics } : undefined,
-      };
-    }
-
-    const pageUrl = product.torobUrl ?? `https://torob.com/p/${prk}/`;
-    const apiPath = (() => {
-      if (detailsUrl && detailsUrl.startsWith("http")) {
-        const m = detailsUrl.match(/^https?:\/\/api\.torob\.com(\/.*)$/);
-        if (m) return m[1];
-      }
-      return `/v4/base-product/details/?prk=${encodeURIComponent(prk)}&source=next_desktop`;
-    })();
-
-    try {
-      await politeDelay("api.torob.com", 150, 400);
-      const res = await torobTransportGet("api", apiPath, browserHeaders(pageUrl));
-
-      if (looksLikeTorobChallenge(res.status, res.contentType, res.bodyText)) {
-        return {
-          source: "torob",
-          prk,
-          offers: [],
-          totalSellerCount: 0,
-          fetchedAt,
-          ok: false,
-          error:
-            "ترب درخواست را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای رفع آن رله ایران را در تنظیمات پنل پیکربندی کنید.",
-          meta: { challenged: true, ...(diagnostics.length ? { diagnostics } : {}) },
-        };
-      }
-
-      if (res.ok) {
-        const json = JSON.parse(res.bodyText) as AnyRec;
-        const parsed = parseTorobJson(json, fetchedAt);
-        if (parsed.offers.length) {
-          const panelList = [
-            {
-              prk: parsed.prk ?? prk,
-              offers: parsed.offers,
-              totalSellerCount: parsed.total,
-              inPersonSellerCount: parsed.inPersonCount,
-              offersTruncated: false,
-              onlineOfferCount: parsed.offers.filter((o) => o.sellerType !== "in_person").length,
-            },
-          ];
-          const mergedPanelPrks = [parsed.prk ?? prk];
-          for (const extraPrk of extraMatchedPrks) {
-            try {
-              await politeDelay("api.torob.com", 120, 300);
-              const extraRes = await torobTransportGet(
-                "api",
-                `/v4/base-product/details/?prk=${encodeURIComponent(extraPrk)}&source=next_desktop`,
-                browserHeaders(`https://torob.com/p/${extraPrk}/`),
-              );
-              if (extraRes.ok) {
-                const extraJson = JSON.parse(extraRes.bodyText) as AnyRec;
-                const extraParsed = parseTorobJson(extraJson, fetchedAt);
-                if (extraParsed.offers.length) {
-                  panelList.push({
-                    prk: extraParsed.prk ?? extraPrk,
-                    offers: extraParsed.offers,
-                    totalSellerCount: extraParsed.total,
-                    inPersonSellerCount: extraParsed.inPersonCount,
-                    offersTruncated: false,
-                    onlineOfferCount: extraParsed.offers.filter((o) => o.sellerType !== "in_person").length,
-                  });
-                  mergedPanelPrks.push(extraParsed.prk ?? extraPrk);
-                }
-              }
-            } catch {
-              // ادامه با پنل اصلی
-            }
-          }
-          const merged = mergeTorobPanelOffers(panelList);
-          const priceTrend = await fetchTorobPriceTrendV4(prk);
-          return {
-            source: "torob",
-            productTitle: parsed.title ?? undefined,
-            prk: parsed.prk ?? prk,
-            detailsUrl: detailsUrl ?? `https://api.torob.com${apiPath}`,
-            offers: merged.offers,
-            totalSellerCount: merged.totalSellerCount,
-            inPersonSellerCount: merged.inPersonSellerCount,
-            priceTrend,
-            fetchedAt,
-            ok: true,
-            meta: {
-              via: detailsUrl ? "torob_v4_details_url" : "torob_v4_api",
-              ...matchMeta,
-              panels: panelList.map((p) => listingPanel(p.prk, p.offers, p.totalSellerCount)),
-              ...(mergedPanelPrks.length > 1 ? { mergedPanelPrks } : {}),
-            },
-          };
-        }
-        diagnostics.push("API v4 ترب: لیست فروشندگان در پاسخ ترب خالی است");
-      } else {
-        diagnostics.push(`API v4 ترب: ${res.error || `HTTP ${res.status}`}`);
-      }
-    } catch (e) {
-      diagnostics.push(`API v4 ترب: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // --- لایه ۲: HTML صفحه + __NEXT_DATA__
-    let html = "";
-    try {
-      await politeDelay("torob.com", 150, 400);
-      const sitePath = `/p/${encodeURIComponent(prk)}/`;
-      const res = await torobTransportGet(
-        "site",
-        sitePath,
-        {
-          ...browserHeaders(),
-          Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
-          "Sec-Fetch-Dest": "document",
-          "Sec-Fetch-Mode": "navigate",
-        },
-        { retries: 0, timeoutMs: 5000 },
-      );
-      html = res.bodyText;
-      if (looksLikeTorobChallenge(res.status, res.contentType, html)) {
-        return {
-          source: "torob",
-          prk,
-          offers: [],
-          totalSellerCount: 0,
-          fetchedAt,
-          ok: false,
-          error:
-            "ترب درخواست صفحه محصول را با چالش امنیتی (HTTP 490 / arCAPTCHA) متوقف کرد. برای رفع آن رله ایران را در تنظیمات پنل پیکربندی کنید.",
-          meta: { challenged: true, ...(diagnostics.length ? { diagnostics } : {}) },
-        };
-      }
-      if (res.ok) {
-        const nd = extractNextData(html);
-        const details = nd ? findDetailsInNextData(nd) : null;
-        if (details) {
-          const parsed = parseTorobJson(details, fetchedAt);
-          if (parsed.offers.length) {
-            return {
-              source: "torob",
-              productTitle: parsed.title ?? undefined,
-              prk,
-              offers: parsed.offers,
-              totalSellerCount: parsed.total,
-              inPersonSellerCount: parsed.inPersonCount,
-              fetchedAt,
-              ok: true,
-              meta: { via: "html_next_data", ...matchMeta },
-            };
-          }
-          diagnostics.push("HTML ترب: هیچ فروشنده‌ای در __NEXT_DATA__ یافت نشد");
-        } else {
-          diagnostics.push("HTML ترب: ساختار __NEXT_DATA__ یافت نشد");
-        }
-      } else {
-        diagnostics.push(`HTML ترب: ${res.error || `HTTP ${res.status}`}`);
-      }
-    } catch (e) {
-      diagnostics.push(`HTML ترب: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // --- لایه ۳: استخراج با هوش مصنوعی از HTML
-    if (html && !looksLikeTorobChallenge(200, "text/html", html)) {
-      const ai = await extractOffersWithAI(html, product.name);
-      if (ai && ai.offers.length) {
-        return {
-          source: "torob",
-          productTitle: ai.title ?? undefined,
-          prk,
-          offers: ai.offers,
-          totalSellerCount: ai.totalSellerCount || ai.offers.length,
-          fetchedAt,
-          ok: true,
-          meta: { via: "ai_html_extractor", ...matchMeta },
-        };
-      }
-    }
-
-    const diagSuffix = diagnostics.length ? ` (${diagnostics.join(" | ")})` : "";
-    return {
-      source: "torob",
-      prk,
-      offers: [],
-      totalSellerCount: 0,
-      fetchedAt,
-      ok: false,
-      error: `دسترسی به ترب ممکن نشد${diagSuffix}. می‌توانید رله ایران یا TOROB_API_BASE را در تنظیمات بررسی کنید.`,
-      meta: diagnostics.length ? { diagnostics } : undefined,
-    };
+    return resolveTorobSource({
+      ...options, via: "torob_v4", search: searchTorobProductV4, details,
+      priceTrend: (card) => fetchTorobPriceTrendV4(card.prk),
+    });
   },
 };

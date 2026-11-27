@@ -41,9 +41,11 @@ test('M3. لوازم جانبی، پک چندتایی، برند/کد دیگر �
   }
 })
 
-test('M4. عنوان خالی رد می‌شود و استثنا نمی‌دهد', () => {
+test('M4. عنوان خالی به معنی استخراج ناقص است و به بازبینی می‌رود', () => {
   const r = evaluateTorobCandidate(target, card('x', '', 1))
-  assert.equal(r.verdict, 'reject')
+  assert.equal(r.verdict, 'review')
+  assert.equal(r.status, 'EXTRACTION_INCOMPLETE')
+  assert.equal(r.titleState, 'source_missing')
   assert.equal(r.score, 0)
 })
 

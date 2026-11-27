@@ -49,7 +49,9 @@ async function fetchFromSource(product, manualOffers) {
     try {
         return await adapter.fetchOffers(product);
     }
-    catch (e) {
-        return { source: adapter.id, offers: [], totalSellerCount: 0, fetchedAt: new Date(), ok: false, error: e instanceof Error ? e.message : String(e) };
+    catch {
+        const reason = "اجرای استعلام ترب کامل نشد";
+        return { source: adapter.id, offers: [], totalSellerCount: 0, fetchedAt: new Date(), ok: false, error: reason,
+            torob: { status: "SOURCE_UNAVAILABLE", reason, sellerRows: null, reportedSellers: null } };
     }
 }

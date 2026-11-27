@@ -29,6 +29,16 @@ test.afterEach(async () => {
 
 const run = (name, args) => TOOLS.find((t) => t.name === name).run(args);
 
+test("an upstream rate limit is surfaced without retries", async () => {
+  let calls = 0;
+  stub(() => {
+    calls++;
+    return new Response(null, { status: 429 });
+  });
+  await assert.rejects(run("search_products", { query: "fixture-rate-limit" }), /HTTP 429/);
+  assert.equal(calls, 1);
+});
+
 const searchPayload = {
   results: [
     {

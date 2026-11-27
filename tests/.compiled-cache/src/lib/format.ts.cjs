@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.strategyLabel = exports.badgeThemeLabel = exports.campaignColor = exports.campaignShortLabel = exports.campaignLabel = exports.statusColor = exports.statusLabel = exports.faDate = exports.pct = exports.faNum = exports.toman = void 0;
+exports.strategyLabel = exports.badgeThemeLabel = exports.campaignColor = exports.campaignShortLabel = exports.campaignLabel = exports.statusColor = exports.torobStatusLabel = exports.statusLabel = exports.faDate = exports.pct = exports.faNum = exports.toman = void 0;
 const toman = (n) => (n == null ? "—" : `${Math.round(n).toLocaleString("fa-IR")} تومان`);
 exports.toman = toman;
 const faNum = (n, digits = 0) => (n == null ? "—" : Number(n).toLocaleString("fa-IR", { maximumFractionDigits: digits }));
@@ -23,6 +23,14 @@ exports.statusLabel = {
     needs_review: "نیاز به بازبینی",
     running: "در حال اجرا",
     done: "پایان یافته",
+};
+exports.torobStatusLabel = {
+    MATCH_CONFIRMED: "هویت تأیید شد",
+    REVIEW_REQUIRED: "نیاز به بررسی هویت",
+    IDENTITY_MISMATCH: "عدم تطابق هویت",
+    EXTRACTION_INCOMPLETE: "استخراج ناقص",
+    SOURCE_UNAVAILABLE: "منبع در دسترس نیست",
+    NO_VALID_OFFERS: "پیشنهاد معتبر موجود نیست",
 };
 exports.statusColor = {
     applied: "bg-emerald-100 text-emerald-800",

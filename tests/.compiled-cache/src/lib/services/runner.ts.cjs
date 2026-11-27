@@ -13,7 +13,6 @@ exports.rejectDecision = rejectDecision;
 exports.cleanupWrongTimedSaleCards = cleanupWrongTimedSaleCards;
 const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
-const client_1 = require("../ai/client");
 const config_1 = require("../ai/config");
 const approval_1 = require("../pricing/approval");
 const campaigns_1 = require("../pricing/campaigns");
@@ -23,6 +22,7 @@ const own_price_history_1 = require("../pricing/own-price-history");
 const sourcing_1 = require("../pricing/sourcing");
 const systemone_supervisor_1 = require("../pricing/systemone-supervisor");
 const registry_1 = require("../sources/registry");
+const torob_1 = require("../sources/torob");
 const connectors_1 = require("../store/connectors");
 const drizzle_orm_1 = require("drizzle-orm");
 const bootstrap_1 = require("./bootstrap");
@@ -532,7 +532,9 @@ function syncSupervisorAfterEnrichment(result, sourceOk, allowCostlessAutoApply 
             ? `خطای اتصال API ناظر: ${sup.apiError ?? "نامشخص"}`
             : sup.apiStatus === "not_configured"
                 ? "توکن SubQ ثبت نشده — موتور آنی محلی فعال است"
-                : "موتور آنی محلی (بدون فراخوانی API)";
+                : sup.apiStatus === "skipped"
+                    ? "استعلام SubQ با توجه به وضعیت داده انجام نشد"
+                    : "موتور آنی محلی (بدون فراخوانی API)";
     const stepLog = {
         step: "supervisor",
         title: "ناظر و تصمیم‌گیرنده بالاسر (SubQ SystemOne — ۴ مقیاس)",
@@ -562,8 +564,10 @@ function syncSupervisorAfterEnrichment(result, sourceOk, allowCostlessAutoApply 
  * و تمام تصمیم‌های دارای قیمت معتبر (غیرردشده) به `pending_review` هدایت می‌شوند.
  */
 function resolveInitialDecisionStatus(input) {
-    if (input.rejectedBySupervisor)
+    if (input.torobStatus === "IDENTITY_MISMATCH" || input.rejectedBySupervisor)
         return "rejected";
+    if (input.torobStatus === "REVIEW_REQUIRED" || input.torobStatus === "EXTRACTION_INCOMPLETE")
+        return "pending_review";
     if (!input.hasFinalPrice)
         return "failed";
     return "pending_review";
@@ -594,6 +598,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         torobUrl: product.torobUrl,
         torobPrk: product.torobPrk,
         torobDetailsUrl: product.torobDetailsUrl,
+        torobLinkConfirmation: product.torobLinkConfirmation,
         costPrice: product.costPrice,
         supplierQuotes,
         currentFinalPrice: product.currentFinalPrice,
@@ -605,7 +610,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         },
     }, manualOffers);
     const ownRecentPrices = await loadOwnRecentPrices(product.id, product.currentFinalPrice);
-    const result = (0, engine_1.runPricingPipeline)(source, {
+    const pricingContext = {
         productId: product.id,
         productName: product.name,
         sku: product.sku,
@@ -619,83 +624,31 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         torobUrlManual: Boolean(product.torobUrl && product.torobUrl.trim()),
         config,
         discountContext,
-    });
+    };
+    let result = (0, engine_1.runPricingPipeline)(source, pricingContext);
     const allowCostless = (0, sourcing_1.isMarketMakerWithoutCostEnabled)(config);
-    // اگر PRK از قبل قفل بوده و گیت هویت در بازه مبهم (review) افتاده، فقط در صورت فعال‌بودن صریح در پروفایل از AI استفاده کن
-    if (source.ok &&
-        source.prk &&
-        source.productTitle &&
-        !source.meta?.aiIdentityCheck &&
-        result.supervisor.gates.identity_match?.verdict === "review" &&
-        config.ai.enabled &&
-        config.ai.torobMatchEnabled === true &&
-        (await (0, client_1.aiEnabled)())) {
-        const prices = source.offers.map((o) => o.price).filter((p) => Number.isFinite(p) && p > 0).sort((a, b) => a - b);
-        const repPrice = prices.length ? prices[Math.floor((prices.length - 1) / 2)] : null;
-        const aiCheck = await (0, client_1.verifyTorobMatchesWithAI)({
-            productName: product.name,
-            sku: product.sku,
-            category: product.category,
-            anchorPriceToman: result.supply.effectiveCostPrice > 0 ? result.supply.effectiveCostPrice : product.currentFinalPrice,
-            candidates: [
-                {
-                    prk: source.prk,
-                    titleFa: source.productTitle,
-                    titleEn: source.productTitleEn ?? null,
-                    sellerCount: source.totalSellerCount,
-                    priceToman: repPrice,
-                    available: true,
-                },
-            ],
-        });
-        if (aiCheck) {
-            result.steps.push({
-                step: "ai_identity",
-                title: "تطبیق پنل ادغام ترب با هوش مصنوعی",
-                message: aiCheck.verdict === "match"
-                    ? `تایید پنل ادغام ترب توسط AI: ${aiCheck.reasoning}`
-                    : aiCheck.verdict === "no_match"
-                        ? `عدم تطابق پنل قفل‌شده ترب: ${aiCheck.reasoning}`
-                        : `نظر مبهم AI در مورد پنل ترب: ${aiCheck.reasoning}`,
-                level: aiCheck.verdict === "no_match" ? "error" : aiCheck.verdict === "uncertain" ? "warn" : "info",
-                data: { ...aiCheck },
-            });
-            const idGate = result.supervisor.gates.identity_match;
-            if (aiCheck.verdict === "no_match") {
-                idGate.scorePct = Math.min(idGate.scorePct, 25);
-                idGate.noul = Math.round((idGate.scorePct / 100) * 100) / 100;
-                idGate.verdict = "reject";
-                idGate.reason = `رد پنل ترب توسط هوش مصنوعی: ${aiCheck.reasoning}`;
-                result.supervisor.verdict = "reject";
-                result.rejectedBySupervisor = true;
-                result.needsReview = true;
-                result.reviewReasons.push(`رد پنل قفل‌شده ترب توسط هوش مصنوعی: ${aiCheck.reasoning}`);
-            }
-            else if (aiCheck.verdict === "match") {
-                idGate.scorePct = Math.max(idGate.scorePct, 88);
-                idGate.noul = Math.round((idGate.scorePct / 100) * 100) / 100;
-                idGate.verdict = (0, systemone_supervisor_1.classifyThreeZoneScore)(idGate.scorePct, idGate.rejectBelowPct, idGate.approveAbovePct);
-                idGate.reason = `تایید پنل ادغام ترب با هوش مصنوعی (${idGate.scorePct}%)`;
-                result.reviewReasons = result.reviewReasons.filter((r) => !r.startsWith("امتیاز تطابق هویت کالا در بازه ریویو"));
-                const allGates = Object.values(result.supervisor.gates);
-                const totalW = allGates.reduce((s, g) => s + (g.weight || 0.25), 0) || 1;
-                const wPct = Math.round(allGates.reduce((s, g) => s + g.scorePct * (g.weight || 0.25), 0) / totalW);
-                result.supervisor.overallScorePct = wPct;
-                result.supervisor.overallNoul = Math.round((wPct / 100) * 100) / 100;
-                result.supervisor.verdict = allGates.some((g) => g.verdict === "review")
-                    ? "review"
-                    : (0, systemone_supervisor_1.classifyThreeZoneScore)(wPct, result.supervisor.rejectBelowPct, result.supervisor.approveAbovePct);
-            }
-        }
-    }
     if (config.supervisor.enabled) {
         const subqRuntime = await (0, config_1.resolveSubqRuntime)(config.supervisor);
-        result.supervisor = await (0, systemone_supervisor_1.enrichSupervisorWithSubqApi)(result.supervisor, {
+        let enriched = await (0, systemone_supervisor_1.enrichSupervisorWithSubqApi)(result.supervisor, {
             ...config.supervisor,
             apiKey: subqRuntime.apiKey,
             baseUrl: subqRuntime.baseUrl,
             model: subqRuntime.model,
         });
+        if (source.torob && result.torobInquiry?.status === "MATCH_CONFIRMED" && enriched.torobInquiryStatus === "REVIEW_REQUIRED") {
+            result = (0, engine_1.runPricingPipeline)({
+                ...source,
+                torob: { ...source.torob, status: "REVIEW_REQUIRED", identityStatus: "REVIEW_REQUIRED",
+                    reason: enriched.gates.identity_match.reason },
+            }, pricingContext);
+            const gates = { ...result.supervisor.gates, identity_match: enriched.gates.identity_match };
+            const overallScorePct = (0, systemone_supervisor_1.weightedSystemOneScore)(Object.values(gates));
+            enriched = {
+                ...enriched, gates, overallScorePct, overallNoul: overallScorePct / 100,
+                summary: `تطابق هویت به بازبینی رفت. امتیاز ناظر با توقف محاسبهٔ قیمت ${overallScorePct}% است`,
+            };
+        }
+        result.supervisor = enriched;
         syncSupervisorAfterEnrichment(result, source.ok, allowCostless);
     }
     const sourceExt = source;
@@ -716,8 +669,8 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     // گارد امنیتی مضاعف برای جلوگیری از تشخیص اشتباه کارت و اعمال خودکار کالاهای بدون قیمت خرید:
     // اگر محصول فاقد قیمت خرید همکار است (effectiveCost = 0) و هنوز لینک/PRK ترب برای آن توسط مدیر تایید نشده است (!product.torobPrk)،
     // بار اول حتماً به صف بازبینی (pending_review) می‌رود تا کارت پیدا شده در ترب توسط مدیر تایید شود و سرخود وارد کمپین‌های سایت نگردد!
-    const unverifiedFirstSearchWithoutCost = !product.torobPrk && !product.torobUrl && result.supply.effectiveCostPrice <= 0;
-    if (unverifiedFirstSearchWithoutCost && !result.rejectedBySupervisor) {
+    const unverifiedFirstSearchWithoutCost = (source.torob ? !source.torob.adminConfirmed : !product.torobPrk && !product.torobUrl) && result.supply.effectiveCostPrice <= 0;
+    if (unverifiedFirstSearchWithoutCost && result.finalPrice != null && !result.rejectedBySupervisor) {
         result.needsReview = true;
         result.reviewReasons.push("اولین استعلام خودکار بدون لینک ترب و بدون قیمت خرید همکار — نیازمند یک‌بار تایید کارت ترب در صف بازبینی");
     }
@@ -753,6 +706,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     const status = resolveInitialDecisionStatus({
         rejectedBySupervisor: Boolean(result.rejectedBySupervisor),
         hasFinalPrice: Boolean(result.finalPrice),
+        torobStatus: result.torobInquiry?.status,
     });
     if (status === "pending_review" && runMode === "live" && !isSimulated) {
         result.steps.push({
@@ -926,6 +880,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             const safeOfferPrice = (0, exports.safeInt)(o.price);
             if (!safeOfferPrice || safeOfferPrice <= 0)
                 return null;
+            const observedAt = safeDate(o.observedAt);
             return {
                 decisionId: decision.id,
                 productId: product.id,
@@ -938,6 +893,10 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
                 priceUnreliable: !!o.priceUnreliable,
                 price: safeOfferPrice,
                 lastChangedAt: safeDate(o.lastChangedAt),
+                ...(observedAt ? { torobEvidence: {
+                        listingTitle: o.listingTitle ?? null, currency: o.currency ?? "toman",
+                        observedAt: observedAt.toISOString(), inStock: o.inStock ?? null,
+                    } } : {}),
                 isAd: !!o.isAd,
                 inStock: o.inStock !== false,
                 url: o.url ?? null,
@@ -955,7 +914,14 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     // A cached primary PRK skips discovery on the next run and loses the secondary panels.
     const combinedPanels = Array.isArray(source.meta?.panels) && source.meta.panels.length > 1;
     const identityApproved = source.ok && !isSimulated && !combinedPanels &&
+        (!result.torobInquiry || result.torobInquiry.status === "MATCH_CONFIRMED") &&
         result.supervisor.gates.identity_match?.verdict === "approve";
+    const sameProductBinding = (0, drizzle_orm_1.sql) `${schema_1.products.name} = ${product.name}
+    AND ${schema_1.products.sku} = ${product.sku}
+    AND ${schema_1.products.torobPrk} IS NOT DISTINCT FROM ${product.torobPrk}
+    AND ${schema_1.products.torobUrl} IS NOT DISTINCT FROM ${product.torobUrl}
+    AND ${schema_1.products.torobDetailsUrl} IS NOT DISTINCT FROM ${product.torobDetailsUrl}
+    AND ${schema_1.products.torobLinkConfirmation} IS NULL`;
     // P0-1 (M2): write-back قیمت خرید ممنوع. قیمت همکار فقط در replacementCost ثبت می‌شود؛
     // costPrice (هزینه موجودی) هرگز از لیست همکار بازنویسی نمی‌شود (INV-2).
     const lowestQuoteCost = (0, exports.safeInt)(result.supply.lowestQuoteCost);
@@ -976,9 +942,10 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             : {}),
         selectedSupplierName: result.supply.selectedQuote?.supplierName ?? product.selectedSupplierName ?? null,
         ...(safeHardFloor && safeHardFloor > 0 ? { currentHardFloorPrice: safeHardFloor } : {}),
-        ...(source.prk && !product.torobPrk && identityApproved ? { torobPrk: source.prk } : {}),
+        ...(source.prk && !product.torobPrk && identityApproved
+            ? { torobPrk: (0, drizzle_orm_1.sql) `CASE WHEN ${sameProductBinding} THEN ${source.prk} ELSE ${schema_1.products.torobPrk} END` } : {}),
         ...(source.detailsUrl && !product.torobDetailsUrl && identityApproved
-            ? { torobDetailsUrl: source.detailsUrl }
+            ? { torobDetailsUrl: (0, drizzle_orm_1.sql) `CASE WHEN ${sameProductBinding} THEN ${source.detailsUrl} ELSE ${schema_1.products.torobDetailsUrl} END` }
             : {}),
         ...(status === "pending_review" ? { status: "needs_review" } : {}),
     })
@@ -1038,6 +1005,25 @@ function resolveApplyOptions(campaignEndsAtOrOpts, opts) {
         campaignEndsAt: campaignEndsAtOrOpts ?? opts?.campaignEndsAt ?? null,
         opts: opts ?? {},
     };
+}
+function torobDecisionBlockReason(decision, product) {
+    if (decision.status === "superseded")
+        return "این تصمیم جایگزین شده است. تازه‌ترین استعلام را بررسی کنید";
+    const data = decision.steps?.find((step) => step.step === "torob_inquiry")?.data;
+    if (!data?.status)
+        return null;
+    if (data.status !== "MATCH_CONFIRMED")
+        return "استعلام ترب مجوز قیمت‌گذاری ندارد. هویت کارت یا وضعیت پیشنهادها را بررسی و دوباره استعلام کنید";
+    if (product) {
+        const boundPrk = (0, torob_1.extractPrk)(product.torobUrl, product.torobPrk);
+        const candidate = data.candidate;
+        if (boundPrk && boundPrk !== candidate?.prk)
+            return "ارتباط ترب این محصول پس از استعلام تغییر کرده است. دوباره استعلام کنید";
+        const target = data.target;
+        if (target && (target.name !== product.name || target.sku !== product.sku))
+            return "عنوان یا شناسهٔ کالای داخلی پس از استعلام تغییر کرده است";
+    }
+    return null;
 }
 /** Resolve active supplier quotes again just before sending a price. */
 async function currentSupply(p) {
@@ -1099,6 +1085,9 @@ async function applyHumanOverrideToDecision(decisionId, override) {
     const [p] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId)).limit(1);
     if (!p)
         return { ok: false, finalPrice: 0, message: "محصول یافت نشد" };
+    const torobBlock = torobDecisionBlockReason(d, p);
+    if (torobBlock)
+        return { ok: false, finalPrice: 0, message: torobBlock };
     const nextFinal = override.finalPrice != null && Number.isFinite(Number(override.finalPrice)) && Number(override.finalPrice) > 0
         ? Math.round(Number(override.finalPrice))
         : Math.round(d.finalPrice ?? 0);
@@ -1197,13 +1186,21 @@ async function applyHumanOverrideToDecision(decisionId, override) {
 async function applyDecision(decisionId, campaignEndsAtOrOpts, opts) {
     const { campaignEndsAt: requestedEnd, opts: resolvedOpts } = resolveApplyOptions(campaignEndsAtOrOpts, opts);
     const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
-    if (!d || !d.finalPrice || !d.basePrice) {
+    if (!d) {
         return { ok: false, code: "INVALID_DECISION", message: "تصمیم نامعتبر" };
     }
+    const earlyTorobBlock = torobDecisionBlockReason(d);
+    if (earlyTorobBlock)
+        return { ok: false, code: "TOROB_REVIEW_REQUIRED", message: earlyTorobBlock };
+    if (!d.finalPrice || !d.basePrice)
+        return { ok: false, code: "INVALID_DECISION", message: "تصمیم نامعتبر" };
     const [p] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId)).limit(1);
     if (!p) {
         return { ok: false, code: "PRODUCT_NOT_FOUND", message: "محصول یافت نشد" };
     }
+    const torobBlock = torobDecisionBlockReason(d, p);
+    if (torobBlock)
+        return { ok: false, code: "TOROB_REVIEW_REQUIRED", message: torobBlock };
     if (d.isSimulated || d.validationSource === "simulated" || d.source === "simulate") {
         return {
             ok: false,
@@ -1496,7 +1493,7 @@ async function cleanupWrongTimedSaleCards(opts) {
             currentCampaignEndsAt: null,
             currentBasePrice: safePrice > 0 ? safePrice : p.currentBasePrice,
             // اگر محصول قیمت خرید نداشت و به اشتباه به یک PRK ترب قفل شده بود، قفل PRK را آزاد کن تا دوباره تمیز استعلام شود
-            ...(p.costPrice <= 0 ? { torobPrk: null, torobDetailsUrl: null, autoApply: false } : {}),
+            ...(p.costPrice <= 0 ? { torobPrk: p.torobLinkConfirmation?.prk ?? null, torobDetailsUrl: null, autoApply: false } : {}),
             status: "active",
             updatedAt: new Date(),
         })

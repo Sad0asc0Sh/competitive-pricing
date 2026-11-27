@@ -10,6 +10,8 @@ const auth_1 = require("../../../../lib/auth");
 const sourcing_1 = require("../../../../lib/pricing/sourcing");
 const bootstrap_1 = require("../../../../lib/services/bootstrap");
 const registry_1 = require("../../../../lib/sources/registry");
+const torob_1 = require("../../../../lib/sources/torob");
+const torob_payload_1 = require("../../../../lib/sources/torob-payload");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
@@ -57,6 +59,29 @@ async function PATCH(req, { params }) {
     for (const k of allowed)
         if (k in body)
             patch[k] = body[k];
+    const editedUrl = typeof patch.torobUrl === "string" ? patch.torobUrl.trim() || null : patch.torobUrl;
+    const editedPrk = typeof patch.torobPrk === "string" ? patch.torobPrk.trim() || null : patch.torobPrk;
+    const linkChanged = ("torobUrl" in patch && editedUrl !== existing.torobUrl) ||
+        ("torobPrk" in patch && editedPrk !== existing.torobPrk);
+    if (linkChanged) {
+        const urlId = typeof editedUrl === "string" ? (0, torob_1.extractPrk)(editedUrl) : null;
+        const directId = typeof editedPrk === "string" ? (0, torob_1.extractPrk)(null, editedPrk) : null;
+        if ((editedUrl != null && !urlId) || (editedPrk != null && !directId) || (urlId && directId && urlId !== directId)) {
+            return server_1.NextResponse.json({ error: "لینک یا شناسهٔ کارت ترب نامعتبر است" }, { status: 400 });
+        }
+        const prk = urlId ?? directId;
+        patch.torobUrl = prk ? (0, torob_payload_1.torobProductUrl)(prk) : null;
+        patch.torobPrk = prk;
+        patch.torobDetailsUrl = null;
+        patch.torobLinkConfirmation = null;
+    }
+    else {
+        delete patch.torobUrl;
+        delete patch.torobPrk;
+    }
+    if (("name" in patch && patch.name !== existing.name) || ("sku" in patch && patch.sku !== existing.sku)) {
+        patch.torobLinkConfirmation = null;
+    }
     if (typeof body.colleagueListText === "string") {
         patch.supplierQuotes = (0, sourcing_1.parseColleaguePriceListText)(body.colleagueListText, "auto");
     }

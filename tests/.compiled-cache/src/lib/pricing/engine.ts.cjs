@@ -115,7 +115,9 @@ function runPricingPipeline(source, ctx) {
         data: {
             totalSellerCount: source.totalSellerCount,
             productTitle: source.productTitle,
+            productTitleEn: source.productTitleEn,
             prk: source.prk,
+            via: source.meta?.via,
             panels: source.ok && source.source === "torob" && source.prk
                 ? source.meta?.panels ?? [(0, listing_1.listingPanel)(source.prk, source.offers, source.totalSellerCount)]
                 : [],
@@ -129,7 +131,24 @@ function runPricingPipeline(source, ctx) {
     let identityMatchScorePct = 92;
     // آیا حضور فروشگاه خودمان به‌عنوان «تأیید متقاطع هویت» پذیرفته می‌شود؟ (پیش‌فرض بله؛ تضاد هویتی آن را باطل می‌کند)
     let selfConfirmsIdentity = selfShopInListing;
-    if (source.productTitle && ctx.productName) {
+    if (source.torob) {
+        identityMatchScorePct = source.torob.identityScore ?? 0;
+        selfConfirmsIdentity = false;
+        log({
+            step: "identity",
+            title: "گیت تطابق هویت کارت ترب",
+            message: source.torob.reason,
+            level: source.torob.status === "MATCH_CONFIRMED" ? "info" : source.torob.status === "IDENTITY_MISMATCH" ? "error" : "warn",
+            data: {
+                status: source.torob.identityStatus ?? source.torob.status,
+                score: source.torob.identityScore ?? null,
+                titleState: source.torob.selected?.titleState,
+                titleOrigin: source.torob.titleOrigin,
+                adminConfirmed: source.torob.adminConfirmed,
+            },
+        });
+    }
+    else if ((source.productTitle || source.productTitleEn) && ctx.productName) {
         const idRej = cfg.supervisor?.gates?.identity_match?.rejectBelowPct ?? cfg.supervisor?.rejectBelowPct ?? 45;
         const idApp = cfg.supervisor?.gates?.identity_match?.approveAbovePct ?? cfg.supervisor?.approveAbovePct ?? 80;
         // قیمت نمایندهٔ کارت (میانهٔ قیمت‌های مثبت) برای قید نسبت قیمتی «لوازم جانبی/پک/مدل بالاتر» در تطبیق‌دهنده
@@ -143,7 +162,7 @@ function runPricingPipeline(source, ctx) {
             approveAbovePct: idApp,
         }, {
             prk: source.prk ?? "manual",
-            titleFa: source.productTitle,
+            titleFa: source.productTitle ?? "",
             titleEn: source.productTitleEn ?? null,
             priceToman: cardRepresentativePrice,
             sellerCount: source.totalSellerCount,
@@ -237,7 +256,7 @@ function runPricingPipeline(source, ctx) {
         }
     }
     // P0-7: اگر عنوان کارت ترب غایب بود (fail-closed) تطابق هویت هرگز بالای ۷۰٪ نمی‌رود
-    if (!source.productTitle) {
+    if (!source.torob && !source.productTitle && !source.productTitleEn) {
         identityMatchScorePct = Math.min(identityMatchScorePct, 70);
         if (!selfShopInListing) {
             reviewReasons.push("عنوان کارت ترب دریافت نشد — تطابق هویت نیاز به بازبینی در صف (قفل PRK تنها با تایید هویت باز می‌شود)");
@@ -251,7 +270,8 @@ function runPricingPipeline(source, ctx) {
             data: { score: identityMatchScorePct, titleMissing: true, selfShopInListing },
         });
     }
-    const sellerCount = (0, listing_1.listingPanel)(source.prk ?? "", source.offers, source.totalSellerCount).sellerCount;
+    const sellerCount = source.torob ? source.torob.reportedSellers
+        : (0, listing_1.listingPanel)(source.prk ?? "", source.offers, source.totalSellerCount).sellerCount;
     const ownOnly = source.ok && !isSourceChallenged && !isSourceDegraded &&
         source.sourceStatus !== "truncated" && sellerCount === 1 && selfShopInListing &&
         source.offers.every(ownShopMatcher) &&
@@ -263,10 +283,11 @@ function runPricingPipeline(source, ctx) {
         message: ownOnly ? "تنها فروشندهٔ مشاهده‌شده فروشگاه خودمان است"
             : sellerCount === 1 ? "پنل تک‌فروشنده؛ قیمت بازار به یک فروشگاه وابسته است"
                 : sellerCount ? `در پنل‌های بررسی‌شده ${fa(sellerCount)} فروشنده گزارش شده است` : "تعداد فروشندگان مشخص نیست",
-        data: { sellerCount, ownOnly },
+        data: { sellerCount, ownOnly, extractedOffers: source.offers.length },
     });
     // ---------- 2) فیلترهای اعتبار داده + تفکیک شهر پیش‌فرض (مشهد)
-    const offers = (0, filters_1.applyValidityFilters)(source.offers, cfg.filters, now, cfg.rank1, softStaleness ? { softStaleness: true, hardMaxAgeDays: est.hardMaxOfferAgeDays } : undefined);
+    const canValidateOffers = !source.torob || source.torob.status === "MATCH_CONFIRMED" || source.torob.status === "NO_VALID_OFFERS";
+    const offers = canValidateOffers ? (0, filters_1.applyValidityFilters)(source.offers, cfg.filters, now, cfg.rank1, softStaleness ? { softStaleness: true, hardMaxAgeDays: est.hardMaxOfferAgeDays } : undefined) : source.offers.map((offer) => ({ ...offer, included: false, weight: 0, excludeReason: source.torob?.reason }));
     const excludedByFilter = offers.filter((o) => !o.included);
     const localValidBeforeOutlier = offers.filter((o) => o.included && o.isLocalCity).length;
     const reasonCounts = {};
@@ -276,11 +297,12 @@ function runPricingPipeline(source, ctx) {
     log({
         step: "filters",
         title: "فیلتر اعتبار داده و تفکیک جغرافیایی",
-        message: `${excludedByFilter.length} پیشنهاد نامعتبر حذف شد (${Object.entries(reasonCounts)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join("، ") || "هیچ"})؛ ` +
-            `${offers.length - excludedByFilter.length} پیشنهاد معتبر باقی ماند (${localValidBeforeOutlier} فروشنده در ${cfg.rank1.defaultCity})`,
-        data: { ...reasonCounts, localValidBeforeOutlier },
+        message: !canValidateOffers ? "پیشنهادهای مشاهده‌شده تا تعیین وضعیت کارت وارد فیلترهای قیمت‌گذاری نشدند" :
+            `${excludedByFilter.length} پیشنهاد نامعتبر حذف شد (${Object.entries(reasonCounts)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join("، ") || "هیچ"})؛ ` +
+                `${offers.length - excludedByFilter.length} پیشنهاد معتبر باقی ماند (${localValidBeforeOutlier} فروشنده در ${cfg.rank1.defaultCity})`,
+        data: { ...reasonCounts, localValidBeforeOutlier: canValidateOffers ? localValidBeforeOutlier : null },
     });
     // ۴.۲.۱ — گارد «پژواک قیمت خودی»: اگر ارزان‌ترین پیشنهاد معتبر دقیقاً برابر قیمت‌های اخیرِ خودمان باشد، احتمالاً
     // پیشنهاد خودمان با نام ناشناخته است؛ undercut زیر آن در هر اجرا یک پله پایین‌تر می‌آید (مسابقهٔ کاهشی با خودمان).
@@ -414,6 +436,74 @@ function runPricingPipeline(source, ctx) {
         ceilingPercentile: cfg.discount.marketUpperPercentile,
     };
     let market = (0, aggregate_1.summarizeMarket)(offers, cfg.aggregation, marketOpts);
+    let torobInquiry;
+    if (source.torob) {
+        const status = source.torob.status === "MATCH_CONFIRMED" && market.count === 0 ? "NO_VALID_OFFERS" : source.torob.status;
+        const reason = status !== source.torob.status
+            ? "هیچ پیشنهاد بازار پس از فیلتر اعتبار و حذف داده‌های پرت باقی نماند" : source.torob.reason;
+        torobInquiry = {
+            status,
+            reason,
+            identityStatus: source.torob.identityStatus,
+            extractedOffers: source.offers.length,
+            validOffers: canValidateOffers ? market.count : null,
+            validOnlineOffers: canValidateOffers ? offers.filter((o) => o.included && o.sellerType === "online").length : null,
+            validLocalInPersonOffers: canValidateOffers ? offers.filter((o) => o.included && o.sellerType === "in_person" && o.isLocalCity).length : null,
+            sellerRows: source.torob.sellerRows,
+            reportedSellers: source.torob.reportedSellers,
+        };
+        log({
+            step: "torob_inquiry",
+            title: "نتیجه استعلام ترب",
+            message: `${reason} · ${fa(source.offers.length)} پیشنهاد استخراج‌شده · ${torobInquiry.validOffers == null ? "اعتبار برای قیمت‌گذاری هنوز قابل سنجش نیست" : `${fa(torobInquiry.validOffers)} پیشنهاد معتبر`}`,
+            level: status === "MATCH_CONFIRMED" ? "info" : status === "IDENTITY_MISMATCH" ? "error" : "warn",
+            data: { ...torobInquiry, search: source.torob.search, candidate: source.torob.selected, titleOrigin: source.torob.titleOrigin,
+                sellerTitle: source.meta?.sellerTitle, aiIdentityCheck: source.meta?.aiIdentityCheck, adminConfirmed: source.torob.adminConfirmed,
+                target: { name: ctx.productName, sku: ctx.sku } },
+        });
+    }
+    const stopWithoutPrice = () => {
+        const emptyPosition = (0, strategy_1.evaluateCompetitivePosition)(0, market, supply, "no_data");
+        const emptyFloorCeiling = {
+            monitoredSellersCount: 0,
+            excludedOutliersCount: offers.length,
+            monitoredMarketFloor: null,
+            monitoredMarketMedian: null,
+            monitoredMarketCeiling: null,
+            targetFloorPrice: 0,
+            ceilingBasePrice: 0,
+            appliedDiscountPct: 0,
+            exactFloorRestored: 0,
+            discoveryModeUsed: cfg.discount.mode ?? cfg.discount.basePriceMode,
+            explanation: "بدون داده کافی برای کشف کف و سقف بازار",
+        };
+        const supervisor = (0, systemone_supervisor_1.evaluateSystemOneSupervisorSync)({
+            productName: ctx.productName, source, offers, supply, position: emptyPosition, floorCeiling: emptyFloorCeiling,
+            identityMatchScorePct, selfShopInListing: selfConfirmsIdentity, finalPrice: null, basePrice: null,
+            discountPct: null, dispersion: market.dispersion, config: cfg, torobInquiryStatus: torobInquiry?.status,
+        });
+        const rejected = torobInquiry?.status === "IDENTITY_MISMATCH" || (supervisor.enabled && supervisor.verdict === "reject");
+        log({
+            step: "no_data",
+            title: "توقف قیمت‌گذاری",
+            message: torobInquiry?.reason ?? (!source.ok && source.error
+                ? `داده معتبر از منبع دریافت نشد (${source.error}) و قیمت خرید همکار هم صفر است`
+                : `از ${source.offers.length} پیشنهاد دریافتی، هیچ پیشنهاد معتبری باقی نماند و قیمت خرید همکار ثبت نشده است`),
+            level: rejected ? "error" : "warn",
+            data: { rawOffers: source.offers.length, sourceOk: source.ok, rejectedBySupervisor: rejected, status: torobInquiry?.status },
+        });
+        return {
+            torobInquiry, offers, offersTotal: source.offers.length, offersUsed: market.count, lowestRaw,
+            lowestValid: market.lowest, marketMedian: market.median, marketMean: market.mean,
+            modalConsensusPrice: market.modalConsensus, referencePrice: market.reference,
+            supply, position: emptyPosition, floorCeiling: emptyFloorCeiling, supervisor,
+            finalPrice: null, basePrice: null, discountPct: null, strategy: "no_data", confidence: 0,
+            needsReview: true, rejectedBySupervisor: rejected,
+            reviewReasons: [...reviewReasons, torobInquiry?.reason ?? "نه داده بازار موجود است و نه قیمت خرید/تامین"], steps,
+        };
+    };
+    if (torobInquiry && torobInquiry.status !== "MATCH_CONFIRMED")
+        return stopWithoutPrice();
     const offersTruncated = Boolean(source.isTruncated ||
         source.sourceStatus === "truncated" ||
         source.meta?.isTruncated ||
@@ -615,68 +705,7 @@ function runPricingPipeline(source, ctx) {
             });
         }
         else {
-            const emptyPosition = (0, strategy_1.evaluateCompetitivePosition)(0, market, supply, "no_data");
-            const emptyFloorCeiling = {
-                monitoredSellersCount: 0,
-                excludedOutliersCount: offers.length,
-                monitoredMarketFloor: null,
-                monitoredMarketMedian: null,
-                monitoredMarketCeiling: null,
-                targetFloorPrice: 0,
-                ceilingBasePrice: 0,
-                appliedDiscountPct: 0,
-                exactFloorRestored: 0,
-                discoveryModeUsed: cfg.discount.mode ?? cfg.discount.basePriceMode,
-                explanation: "بدون داده کافی برای کشف کف و سقف بازار",
-            };
-            const emptySupervisor = (0, systemone_supervisor_1.evaluateSystemOneSupervisorSync)({
-                productName: ctx.productName,
-                source,
-                offers,
-                supply,
-                position: emptyPosition,
-                floorCeiling: emptyFloorCeiling,
-                identityMatchScorePct,
-                selfShopInListing: selfConfirmsIdentity,
-                finalPrice: null,
-                basePrice: null,
-                discountPct: null,
-                dispersion: market.dispersion,
-                config: cfg,
-            });
-            log({
-                step: "no_data",
-                title: "توقف استعلام (نبود داده معتبر بازار و قیمت خرید)",
-                message: !source.ok && source.error
-                    ? `داده معتبر از منبع دریافت نشد (${source.error}) و قیمت خرید همکار هم صفر است`
-                    : `از ${source.offers.length} پیشنهاد دریافتی، هیچ پیشنهاد معتبری باقی نماند و قیمت خرید همکار ثبت نشده است`,
-                level: "error",
-                data: { rawOffers: source.offers.length, sourceOk: source.ok, rejectedBySupervisor: emptySupervisor.enabled && emptySupervisor.verdict === "reject" },
-            });
-            return {
-                offers,
-                offersTotal: source.offers.length,
-                offersUsed: market.count,
-                lowestRaw,
-                lowestValid: market.lowest,
-                marketMedian: market.median,
-                marketMean: market.mean,
-                modalConsensusPrice: market.modalConsensus,
-                referencePrice: market.reference,
-                supply,
-                position: emptyPosition,
-                floorCeiling: emptyFloorCeiling,
-                supervisor: emptySupervisor,
-                finalPrice: null,
-                basePrice: null,
-                discountPct: null,
-                strategy: "no_data",
-                confidence: 0,
-                needsReview: true,
-                rejectedBySupervisor: emptySupervisor.enabled && emptySupervisor.verdict === "reject",
-                reviewReasons: [...reviewReasons, "نه داده بازار موجود است و نه قیمت خرید/تامین"],
-                steps,
-            };
+            return stopWithoutPrice();
         }
     }
     // ---------- 6) محافظ‌ها (تضمین مطلق خط قرمز قیمت خرید همکاران یا کف امن بازار)
@@ -896,6 +925,7 @@ function runPricingPipeline(source, ctx) {
         dispersion: market.dispersion,
         config: cfg,
         marketScoreOverridePct: v2 && est.supervisorMarketCalibrated && scenarioAnalysis ? Math.round(confidenceScore * 100) : null,
+        torobInquiryStatus: torobInquiry?.status,
     });
     let rejectedBySupervisor = false;
     if (supervisor.enabled) {
@@ -960,6 +990,7 @@ function runPricingPipeline(source, ctx) {
         },
     });
     return {
+        torobInquiry,
         offers,
         offersTotal: source.offers.length,
         offersUsed: market.count,

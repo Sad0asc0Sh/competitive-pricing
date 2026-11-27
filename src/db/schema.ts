@@ -10,7 +10,7 @@ import {
   varchar,
   index,
 } from "drizzle-orm/pg-core";
-import type { PricingProfileConfig, SupplierQuote } from "@/lib/pricing/types";
+import type { PricingProfileConfig, SupplierQuote, TorobLinkConfirmation, TorobOfferEvidence } from "@/lib/pricing/types";
 
 /** تنظیمات عمومی سیستم (key/value) */
 export const settings = pgTable("settings", {
@@ -44,6 +44,7 @@ export const products = pgTable(
     torobUrl: text("torob_url"),
     torobPrk: text("torob_prk"),
     torobDetailsUrl: text("torob_details_url"),
+    torobLinkConfirmation: jsonb("torob_link_confirmation").$type<TorobLinkConfirmation>(),
     /** قیمت تمام‌شده پایه/دستی (تومان) */
     costPrice: integer("cost_price").default(0).notNull(),
     /**
@@ -210,6 +211,7 @@ export const competitorOffers = pgTable(
     priceUnreliable: boolean("price_unreliable").default(false).notNull(),
     price: integer("price").notNull(),
     lastChangedAt: timestamp("last_changed_at"),
+    torobEvidence: jsonb("torob_evidence").$type<TorobOfferEvidence>(),
     isAd: boolean("is_ad").default(false).notNull(),
     inStock: boolean("in_stock").default(true).notNull(),
     url: text("url"),

@@ -161,6 +161,7 @@ function normalizeText(input) {
         .replace(/\bwarm\s+light\b/g, "warmlight")
         .replace(/های\s+کپی/g, "هایکپی")
         .replace(/\bhigh\s+copy\b/g, "highcopy");
+    s = s.replace(/(^|\s)(?:remotag|ریموت\s+تگ|ریموت\s+گ)(?=\s|$)/g, "$1ریموتگ");
     return s.replace(/\s+/g, " ").trim();
 }
 function tokenize(norm) {

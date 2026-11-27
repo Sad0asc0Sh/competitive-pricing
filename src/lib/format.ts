@@ -1,3 +1,5 @@
+import type { TorobInquiryStatus } from "./pricing/types";
+
 export const toman = (n: number | null | undefined) => (n == null ? "—" : `${Math.round(n).toLocaleString("fa-IR")} تومان`);
 export const faNum = (n: number | null | undefined, digits = 0) => (n == null ? "—" : Number(n).toLocaleString("fa-IR", { maximumFractionDigits: digits }));
 export const pct = (n: number | null | undefined, digits = 1) => (n == null ? "—" : `${Number(n).toLocaleString("fa-IR", { maximumFractionDigits: digits })}٪`);
@@ -18,6 +20,15 @@ export const statusLabel: Record<string, string> = {
   needs_review: "نیاز به بازبینی",
   running: "در حال اجرا",
   done: "پایان یافته",
+};
+
+export const torobStatusLabel: Record<TorobInquiryStatus, string> = {
+  MATCH_CONFIRMED: "هویت تأیید شد",
+  REVIEW_REQUIRED: "نیاز به بررسی هویت",
+  IDENTITY_MISMATCH: "عدم تطابق هویت",
+  EXTRACTION_INCOMPLETE: "استخراج ناقص",
+  SOURCE_UNAVAILABLE: "منبع در دسترس نیست",
+  NO_VALID_OFFERS: "پیشنهاد معتبر موجود نیست",
 };
 
 export const statusColor: Record<string, string> = {

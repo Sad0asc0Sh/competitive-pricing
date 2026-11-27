@@ -443,6 +443,7 @@ const detailsTool = {
     type: "object",
     properties: {
       prk: { type: "string", description: "Product id from a search_products card (or a torob.com /p/<id>/ URL)." },
+      query: { type: "string", description: "Optional product name to locate a fresh details address when the id has no address in memory." },
       details_url: {
         type: "string",
         description:
@@ -462,7 +463,7 @@ const detailsTool = {
     if (!prk) throw usageError("product_details needs a prk - the product id from a search_products card.");
     const maxOffers = clampLimit(args.max_offers, 10, 30);
     const maxInPerson = clampLimit(args.max_in_person, 10, 30);
-    const found = await productDetails(prk, { detailsUrl: args.details_url });
+    const found = await productDetails(prk, { detailsUrl: args.details_url, query: args.query });
     const cheapest = found.cheapest_offer;
     const best = found.best_rated_offer;
 
@@ -471,6 +472,7 @@ const detailsTool = {
       prk: found.prk,
       name_fa: found.name_fa,
       name_en: found.name_en,
+      ...(found.title_source_fields?.length ? { title_source_fields: found.title_source_fields } : {}),
       cheapest_price_toman: found.price_toman,
       available: found.available,
       // Torob's own reason when it says the product cannot be bought - the price
@@ -481,6 +483,8 @@ const detailsTool = {
       url: found.url,
       resolved_by: found.resolved_by,
       offer_count: found.offer_count,
+      seller_rows_seen: found.seller_rows_seen,
+      ...(found.seller_schema_incomplete ? { seller_schema_incomplete: true } : {}),
       // The number that makes this more than a search: how much the same
       // product costs depending on who you buy it from.
       price_spread_toman: found.price_spread_toman,

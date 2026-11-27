@@ -64,3 +64,14 @@ test('4.2.0: ستون‌های همگام‌سازی پایدار و اعتبا�
   assert.match(BUILTIN_V420_MIGRATION_SQL, /ADD COLUMN IF NOT EXISTS "validation_source"/)
   assert.match(BUILTIN_V420_MIGRATION_SQL, /CREATE INDEX IF NOT EXISTS "decisions_idempotency_idx"/)
 })
+
+test('Torob evidence adds nullable fields without replacing migration 0003', () => {
+  const { listMigrations, BUILTIN_V420_MIGRATION_NAME } = require('../scripts/migrate.cjs')
+  const migrations = listMigrations()
+  const older = migrations.findIndex(({ name }) => name === BUILTIN_V420_MIGRATION_NAME)
+  const evidence = migrations.findIndex(({ name }) => name === '0004_torob_evidence.sql')
+  assert.ok(older >= 0 && evidence > older)
+  for (const column of ['torob_link_confirmation', 'torob_evidence']) {
+    assert.match(migrations[evidence].sql, new RegExp(`ADD COLUMN IF NOT EXISTS "${column}" jsonb;`))
+  }
+})

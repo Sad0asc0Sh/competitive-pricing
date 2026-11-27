@@ -59,6 +59,7 @@ async function ReviewPage() {
             cost: schema_1.products.costPrice,
             hardFloor: schema_1.products.currentHardFloorPrice,
             current: schema_1.products.currentFinalPrice,
+            torobUrl: schema_1.products.torobUrl,
         })
             .from(schema_1.priceDecisions)
             .innerJoin(schema_1.products, (0, drizzle_orm_1.eq)(schema_1.products.id, schema_1.priceDecisions.productId))
@@ -105,6 +106,8 @@ async function ReviewPage() {
             shopName: schema_1.competitorOffers.shopName,
             shopCity: schema_1.competitorOffers.shopCity,
             price: schema_1.competitorOffers.price,
+            sellerType: schema_1.competitorOffers.sellerType,
+            torobEvidence: schema_1.competitorOffers.torobEvidence,
             shopScore: schema_1.competitorOffers.shopScore,
             isLocalCity: schema_1.competitorOffers.isLocalCity,
             included: schema_1.competitorOffers.included,
@@ -121,6 +124,8 @@ async function ReviewPage() {
                     shopName: o.shopName,
                     shopCity: o.shopCity,
                     price: o.price,
+                    sellerType: o.sellerType,
+                    listingTitle: o.torobEvidence?.listingTitle ?? null,
                     shopScore: o.shopScore,
                     isLocalCity: o.isLocalCity,
                     included: o.included,
@@ -130,9 +135,10 @@ async function ReviewPage() {
             }
         }
     }
-    const pendingItems = rows.map(({ d, name, sku, cost, hardFloor, current }) => {
+    const pendingItems = rows.map(({ d, name, sku, cost, hardFloor, current, torobUrl }) => {
         const steps = Array.isArray(d.steps) ? d.steps : [];
         const panels = (0, listing_1.decisionPanels)(steps);
+        const inquiry = steps.find((s) => s.step === "torob_inquiry")?.data;
         const reasons = steps.find((s) => s.step === "decision")?.message ?? "";
         const supStep = steps.find((s) => s.step === "supervisor");
         const supMsg = supStep?.message ?? null;
@@ -203,6 +209,8 @@ async function ReviewPage() {
             syncFailed,
             readyForApproval,
             panels,
+            inquiry: inquiry ?? null,
+            candidateUrl: inquiry?.candidate?.url ?? torobUrl,
             effectiveFloor,
             reasons,
             supMsg,
@@ -217,8 +225,9 @@ async function ReviewPage() {
     const rejectedItems = rejectedRows.map(({ d, name, sku, torobUrl }) => {
         const steps = Array.isArray(d.steps) ? d.steps : [];
         const panels = (0, listing_1.decisionPanels)(steps);
+        const inquiry = steps.find((s) => s.step === "torob_inquiry")?.data;
         const supStep = steps.find((s) => s.step === "supervisor");
-        const supMsg = supStep?.message ?? "رد توسط ناظر SystemOne";
+        const supMsg = supStep?.message ?? inquiry?.reason ?? "رد توسط ناظر SystemOne";
         const { overallPct: supOverallPct, gates: supGates } = extractSupervisorGates(supStep);
         return {
             id: d.id,
@@ -234,7 +243,8 @@ async function ReviewPage() {
             supOverallPct,
             supGates,
             panels,
-            torobUrl: panels[0] ? `https://torob.com/p/${panels[0].prk}/` : torobUrl,
+            inquiry: inquiry ?? null,
+            torobUrl: inquiry?.candidate?.url ?? (panels[0] ? `https://torob.com/p/${panels[0].prk}/` : torobUrl),
         };
     });
     return (0, jsx_runtime_1.jsx)(review_client_1.ReviewClient, { pendingItems: pendingItems, rejectedItems: rejectedItems });

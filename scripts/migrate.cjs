@@ -88,7 +88,7 @@ function listMigrations() {
       checksum: crypto.createHash('sha256').update(BUILTIN_V420_MIGRATION_SQL).digest('hex').slice(0, 16),
     })
   }
-  return diskMigrations
+  return diskMigrations.sort((a, b) => a.name.localeCompare(b.name, 'en'))
 }
 
 function selectMigrations(all) {

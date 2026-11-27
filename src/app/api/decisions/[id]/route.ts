@@ -1,9 +1,11 @@
 import { db } from "@/db";
 import { competitorOffers, priceDecisions, products } from "@/db/schema";
 import { requireAdminAuth } from "@/lib/auth";
+import type { TorobLinkConfirmation } from "@/lib/pricing/types";
 import * as runnerService from "@/lib/services/runner";
 import { extractPrk } from "@/lib/sources/torob";
-import { eq } from "drizzle-orm";
+import { torobProductUrl } from "@/lib/sources/torob-payload";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +32,8 @@ export async function GET(req: Request, { params }: Ctx) {
  *   basePrice?: number | null,
  *   discountPct?: number | null,
  *   campaignType?: string | null,
- *   torobUrl?: string
+ *   torobUrl?: string,
+ *   confirmIdentity?: boolean
  * }
  */
 export async function POST(req: Request, { params }: Ctx) {
@@ -52,6 +55,7 @@ export async function POST(req: Request, { params }: Ctx) {
     discountPct?: number | null;
     campaignType?: string | null;
     torobUrl?: string;
+    confirmIdentity?: boolean;
   };
   const action = body.action;
   const force = body.force === true;
@@ -66,34 +70,32 @@ export async function POST(req: Request, { params }: Ctx) {
       return NextResponse.json({ ok: false, error: "تصمیم یافت نشد", message: "تصمیم یافت نشد" }, { status: 404 });
     }
     const rawUrl = typeof body.torobUrl === "string" ? body.torobUrl.trim() : "";
-    const isHttp = /^https?:\/\//i.test(rawUrl);
-    if (!rawUrl || (isHttp && !/^https?:\/\/([^/]+\.)?torob\.com\//i.test(rawUrl))) {
-      const msg = "لینک معتبر صفحه محصول ترب (torob.com/p/...) وارد کنید";
-      return NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
-    }
-    const prk = extractPrk(rawUrl, isHttp ? null : rawUrl);
+    const prk = extractPrk(rawUrl, rawUrl);
     if (!prk || prk.length < 3) {
       const msg = "شناسه محصول ترب (prk) در لینک واردشده یافت نشد";
       return NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
     }
-    const normalizedUrl = isHttp ? rawUrl : `https://torob.com/p/${prk}/`;
-    await db
-      .update(products)
-      .set({
+    const normalizedUrl = torobProductUrl(prk);
+    const now = new Date();
+    const confirmation: TorobLinkConfirmation | null = body.confirmIdentity === true
+      ? { prk, confirmedAt: now.toISOString(), origin: "admin_review", decisionId: d.id } : null;
+    await db.transaction(async (tx) => {
+      await tx.update(products).set({
         torobUrl: normalizedUrl,
         torobPrk: prk,
         torobDetailsUrl: null,
-        lockedUntil: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(products.id, d.productId));
-
-    if (d.status === "rejected" || d.status === "pending_review") {
-      await db
-        .update(priceDecisions)
-        .set({ status: "superseded", pushStatus: "superseded" })
-        .where(eq(priceDecisions.id, d.id));
-    }
+        torobLinkConfirmation: confirmation ?? sql`CASE WHEN ${products.torobPrk} = ${prk} THEN ${products.torobLinkConfirmation} ELSE NULL END`,
+        updatedAt: now,
+      }).where(eq(products.id, d.productId));
+      if (confirmation) {
+        const audit = [{ step: "torob_link_confirmation", title: "تأیید ارتباط ترب توسط مدیر",
+          message: "شناسهٔ کارت در بازبینی محصول ثبت شد", level: "info", data: confirmation }];
+        await tx.update(priceDecisions).set({ steps: sql`${priceDecisions.steps} || ${JSON.stringify(audit)}::jsonb` })
+          .where(eq(priceDecisions.id, d.id));
+      }
+      await tx.update(priceDecisions).set({ status: "superseded", pushStatus: "superseded" })
+        .where(and(eq(priceDecisions.id, d.id), inArray(priceDecisions.status, ["rejected", "pending_review"])));
+    });
 
     const summary = await runnerService.runPricing({
       trigger: "manual",
@@ -102,9 +104,10 @@ export async function POST(req: Request, { params }: Ctx) {
     });
     return NextResponse.json({
       ok: true,
-      message: `لینک ترب به شناسه ${prk} متصل شد و استعلام جدید در صف قرار گرفت`,
+      message: confirmation ? "تأیید ارتباط ترب ثبت شد و استعلام جدید اجرا شد" : "لینک ترب ثبت شد و استعلام جدید اجرا شد",
       prk,
       torobUrl: normalizedUrl,
+      confirmation,
       summary,
     });
   }

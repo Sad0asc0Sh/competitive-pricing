@@ -13,6 +13,7 @@ import type {
   SystemOneSupervisorConfig,
   SystemOneSupervisorReport,
   SystemOneVerdict,
+  TorobInquiryStatus,
 } from "./types";
 
 /**
@@ -45,6 +46,11 @@ export function classifyThreeZoneScore(
   if (cleanScore < rej) return "reject";
   if (cleanScore < app) return "review";
   return "approve";
+}
+
+export function weightedSystemOneScore(gates: SystemOneGateEvaluation[]): number {
+  const weight = gates.reduce((sum, gate) => sum + (gate.weight || 0.25), 0) || 1;
+  return Math.round(gates.reduce((sum, gate) => sum + gate.scorePct * (gate.weight || 0.25), 0) / weight);
 }
 
 export const verdictFaLabel: Record<SystemOneVerdict, string> = {
@@ -117,12 +123,7 @@ export async function callSubqSystemOneApi(opts: {
     });
 
     if (!response.ok) {
-      const error = (await response.json().catch(() => ({}))) as {
-        detail?: { error_type?: string; message?: string };
-      };
-      throw new Error(
-        `${response.status} ${error?.detail?.error_type ?? "SubQError"}: ${error?.detail?.message ?? response.statusText}`,
-      );
+      throw new Error(`SubQ HTTP ${response.status}`);
     }
 
     const result = (await response.json()) as {
@@ -157,6 +158,7 @@ export function evaluateSystemOneSupervisorSync(input: {
   discountPct: number | null;
   dispersion: number;
   config: PricingProfileConfig;
+  torobInquiryStatus?: TorobInquiryStatus;
   /** تخمین‌گر v2: احتمالِ کالیبره‌شدهٔ درستی قیمت (۰..۱۰۰) جایگزین امتیاز ساده‌ی «داده بازار» می‌شود */
   marketScoreOverridePct?: number | null;
 }): SystemOneSupervisorReport {
@@ -166,15 +168,23 @@ export function evaluateSystemOneSupervisorSync(input: {
 
   const idReject = supCfg.gates.identity_match.rejectBelowPct ?? globalReject;
   const idApprove = supCfg.gates.identity_match.approveAbovePct ?? globalApprove;
+  const assessment = input.source.torob;
+  const inquiryStatus = input.torobInquiryStatus ?? assessment?.status;
+  const identityStatus = assessment?.identityStatus;
+  const titleMissing = Boolean(assessment && !input.source.productTitle?.trim() && !input.source.productTitleEn?.trim());
+  const identityCap = titleMissing ? 70 : 100;
+  const localIdentityScore = assessment ? assessment.identityScore ?? null : input.identityMatchScorePct;
   // حضور فروشگاه خودمان فقط ابهام (ناحیهٔ ریویو) را برطرف می‌کند؛ ردِ هویتی (زیر خط قرمز) را نمی‌پوشاند
   const idScorePct = clamp(
-    input.selfShopInListing && input.identityMatchScorePct >= idReject
+    !assessment && input.selfShopInListing && input.identityMatchScorePct >= idReject
       ? Math.max(95, input.identityMatchScorePct)
-      : input.identityMatchScorePct,
+      : localIdentityScore ?? 0,
     0,
-    100,
+    identityCap,
   );
-  const idVerdict = classifyThreeZoneScore(idScorePct, idReject, idApprove);
+  const idVerdict = assessment
+    ? identityStatus === "IDENTITY_MISMATCH" ? "reject" : identityStatus === "MATCH_CONFIRMED" && !titleMissing ? "approve" : "review"
+    : classifyThreeZoneScore(idScorePct, idReject, idApprove);
 
   const validCount = input.offers.filter((o) => o.included).length;
   const totalCount = Math.max(1, input.offers.length);
@@ -282,8 +292,11 @@ export function evaluateSystemOneSupervisorSync(input: {
       approveAbovePct: idApprove,
       verdict: idVerdict,
       weight: supCfg.gates.identity_match.weight ?? 0.3,
+      ...(assessment ? { localScorePct: localIdentityScore, ...(titleMissing ? { maxScorePct: identityCap } : {}) } : {}),
       reason:
-        idVerdict === "approve"
+        assessment
+          ? titleMissing ? `${assessment.reason} · سقف هویت بدون عنوان ${identityCap}%` : assessment.reason
+          : idVerdict === "approve"
           ? `کد مدل و مشخصات فنی تایید شد (${idScorePct}% ≥ ${idApprove}%)`
           : idVerdict === "review"
             ? `نیاز به بازبینی تطابق عنوان (${idScorePct}% در بازه ${idReject}%..${idApprove}%)`
@@ -346,10 +359,7 @@ export function evaluateSystemOneSupervisorSync(input: {
   };
 
   const gateList = Object.values(gates);
-  const totalWeight = gateList.reduce((s, g) => s + (g.weight || 0.25), 0) || 1;
-  const weightedPct = Math.round(
-    gateList.reduce((s, g) => s + g.scorePct * (g.weight || 0.25), 0) / totalWeight,
-  );
+  const weightedPct = weightedSystemOneScore(gateList);
 
   const criticalRejectedGates = gateList.filter((g) => CRITICAL_VETO_GATES.has(g.key) && g.verdict === "reject");
   const anyCriticalRejected = criticalRejectedGates.length > 0;
@@ -361,6 +371,9 @@ export function evaluateSystemOneSupervisorSync(input: {
     overallVerdict = "reject";
   } else if ((anyReview || anyNonCriticalRejected) && overallVerdict === "approve" && supCfg.strictGateVeto !== false) {
     overallVerdict = "review";
+  }
+  if (inquiryStatus && inquiryStatus !== "MATCH_CONFIRMED") {
+    overallVerdict = inquiryStatus === "IDENTITY_MISMATCH" ? "reject" : "review";
   }
 
   // محرمانگی: به‌صورت پیش‌فرض اعداد تمام‌شده/کف به API بیرونی نمی‌رود؛ فقط نتیجهٔ گارد سود که محلی و قطعی حساب شده.
@@ -377,9 +390,14 @@ export function evaluateSystemOneSupervisorSync(input: {
     ? `SupplyCost: ${input.supply.effectiveCostPrice} Toman (HardFloor: ${input.supply.hardFloorPrice} Toman, Source: ${input.supply.costSource})`
     : `ProfitGuard: ${profitGuard} (verified locally against the store's confidential cost and hard floor; the numbers are intentionally not shared)`;
 
+  const oneLine = (value: string) => value.replace(/[\r\n]+/g, " ").slice(0, 320);
+  const cardTitle = [input.source.productTitle, input.source.productTitleEn].filter(Boolean).join(" | ");
+  const selected = assessment?.selected;
+  const evidence = selected && [selected.brands.join("/"), selected.models.join("/"), JSON.stringify(selected.specs ?? {})].join(" ");
   const statePayload = [
-    `Product: ${input.productName}`,
-    `TorobListing: ${input.source.productTitle ?? "N/A"} (Sellers: ${input.source.totalSellerCount}, ValidOffers: ${validCount})`,
+    `Product: ${oneLine(input.productName)}`,
+    `TorobListing: ${oneLine(cardTitle || "N/A")} (Sellers: ${input.source.totalSellerCount}, ValidOffers: ${validCount})`,
+    ...(evidence ? [`TorobEvidence: ${oneLine(evidence)}`] : []),
     costLine,
     `TargetFloorPrice: ${input.finalPrice ?? 0} Toman | CalibratedCeiling: ${input.basePrice ?? 0} Toman | DiscountPct: ${input.discountPct ?? 0}%`,
     `ProjectedRank: Mashhad #${input.position.projectedLocalRank ?? "-"}, National #${input.position.projectedNationalRank ?? "-"}`,
@@ -440,6 +458,7 @@ export function evaluateSystemOneSupervisorSync(input: {
     approveAbovePct: globalApprove,
     verdict: overallVerdict,
     gates,
+    ...(inquiryStatus ? { torobInquiryStatus: inquiryStatus, torobIdentityStatus: identityStatus } : {}),
     requestPreview: buildSubqSystemOneRequestBody(
       statePayload,
       questionsPayload,
@@ -477,6 +496,10 @@ export async function enrichSupervisorWithSubqApi(
 ): Promise<SystemOneSupervisorReport> {
   if (!supCfg.enabled) return { ...report, apiStatus: "disabled" };
   if (supCfg.mode === "local_instant_only") return { ...report, apiStatus: "disabled" };
+  if (report.torobInquiryStatus && (report.gates.identity_match.localScorePct == null ||
+      ["EXTRACTION_INCOMPLETE", "SOURCE_UNAVAILABLE", "NO_VALID_OFFERS"].includes(report.torobInquiryStatus))) {
+    return { ...report, apiStatus: "skipped" };
+  }
   const apiKey = (supCfg.apiKey || process.env.SUBQ_API_KEY || "").trim();
   if (!apiKey) return { ...report, apiStatus: "not_configured" };
 
@@ -484,8 +507,8 @@ export async function enrichSupervisorWithSubqApi(
     // هوش مصنوعی / SubQ فقط دربارهٔ تطابق هویت پنل ادغام ترب نظر می‌دهد و هرگز روی قیمت، سود یا تخفیف قضاوت نمی‌کند
     const identityState = report.requestPreview.state
       .split("\n")
-      .filter((line) => line.startsWith("Product:") || line.startsWith("TorobListing:"))
-      .join("\n") || report.requestPreview.state;
+      .filter((line) => /^(?:Product|TorobListing|TorobEvidence):/.test(line))
+      .join("\n");
 
     const apiAnswers = await callSubqSystemOneApi({
       state: identityState,
@@ -494,33 +517,49 @@ export async function enrichSupervisorWithSubqApi(
       baseUrl: supCfg.baseUrl || DEFAULT_SUBQ_BASE_URL,
       model: supCfg.model || DEFAULT_SUBQ_MODEL,
     });
-    if (!apiAnswers) throw new Error("پاسخ معتبری از API ناظر SubQ دریافت نشد");
+    if (!apiAnswers?.identity_match) throw new Error("پاسخ معتبری از API ناظر SubQ دریافت نشد");
 
     const updatedGates: Record<string, SystemOneGateEvaluation> = { ...report.gates };
     const idGate = updatedGates.identity_match;
     const idAns = apiAnswers.identity_match;
+    let inquiryStatus = report.torobInquiryStatus;
+    let identityStatus = report.torobIdentityStatus;
     if (idGate && idAns && typeof idAns.noul === "number" && Number.isFinite(idAns.noul)) {
       const subqPct = Math.round(clamp(idAns.noul, 0, 1) * 100);
       const blendedPct =
         supCfg.mode === "subq_api_only"
           ? subqPct
           : Math.round(idGate.scorePct * 0.5 + subqPct * 0.5);
-      const gateVerdict = classifyThreeZoneScore(blendedPct, idGate.rejectBelowPct, idGate.approveAbovePct);
+      let scorePct = Math.min(blendedPct, idGate.maxScorePct ?? 100);
+      let gateVerdict = classifyThreeZoneScore(scorePct, idGate.rejectBelowPct, idGate.approveAbovePct);
+      let reason = gateReasonAfterBlend(gateVerdict, scorePct, idGate.rejectBelowPct, idGate.approveAbovePct);
+      if (inquiryStatus) {
+        if (idGate.verdict !== "approve") {
+          gateVerdict = idGate.verdict;
+          scorePct = idGate.scorePct;
+          reason = idGate.reason;
+        } else if (subqPct < idGate.rejectBelowPct || gateVerdict !== "approve") {
+          gateVerdict = "review";
+          inquiryStatus = "REVIEW_REQUIRED";
+          identityStatus = "REVIEW_REQUIRED";
+          reason = "تطبیق محلی و رأی SubQ برای تأیید هویت هم‌سو نیستند";
+        }
+      }
 
       updatedGates.identity_match = {
         ...idGate,
-        noul: Math.round((blendedPct / 100) * 100) / 100,
-        scorePct: blendedPct,
+        noul: Math.round((scorePct / 100) * 100) / 100,
+        scorePct,
+        subqNoul: idAns.noul,
+        subqScorePct: subqPct,
+        blendedScorePct: blendedPct,
         verdict: gateVerdict,
-        reason: gateReasonAfterBlend(gateVerdict, blendedPct, idGate.rejectBelowPct, idGate.approveAbovePct),
+        reason,
       };
     }
 
     const gateList = Object.values(updatedGates);
-    const totalWeight = gateList.reduce((s, g) => s + (g.weight || 0.25), 0) || 1;
-    const weightedPct = Math.round(
-      gateList.reduce((s, g) => s + g.scorePct * (g.weight || 0.25), 0) / totalWeight,
-    );
+    const weightedPct = weightedSystemOneScore(gateList);
 
     const criticalRejectedGates = gateList.filter((g) => CRITICAL_VETO_GATES.has(g.key) && g.verdict === "reject");
     const anyCriticalRejected = criticalRejectedGates.length > 0;
@@ -537,6 +576,9 @@ export async function enrichSupervisorWithSubqApi(
     } else if ((anyReview || anyNonCriticalRejected) && overallVerdict === "approve" && supCfg.strictGateVeto !== false) {
       overallVerdict = "review";
     }
+    if (inquiryStatus && inquiryStatus !== "MATCH_CONFIRMED") {
+      overallVerdict = inquiryStatus === "IDENTITY_MISMATCH" ? "reject" : "review";
+    }
 
     return {
       ...report,
@@ -547,6 +589,7 @@ export async function enrichSupervisorWithSubqApi(
       overallScorePct: weightedPct,
       verdict: overallVerdict,
       gates: updatedGates,
+      ...(inquiryStatus ? { torobInquiryStatus: inquiryStatus, torobIdentityStatus: identityStatus } : {}),
       summary:
         `ناظر بالاسر (هویت با SubQ + محاسبه ریاضی): امتیاز کل ${weightedPct}% (noul=${(weightedPct / 100).toFixed(2)}) ` +
         `[زیر ${report.rejectBelowPct}% = رد | ${report.rejectBelowPct}% تا ${report.approveAbovePct}% = ریویو | بالای ${report.approveAbovePct}% = تایید خودکار] → ` +
@@ -556,8 +599,8 @@ export async function enrichSupervisorWithSubqApi(
           : ""),
     };
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    if (supCfg.mode === "subq_api_only") {
+    const message = e instanceof Error && /^SubQ HTTP \d{3}$/.test(e.message) ? e.message : "پاسخی از سرویس ناظر SubQ قابل استفاده نبود";
+    if (supCfg.mode === "subq_api_only" && report.torobInquiryStatus !== "IDENTITY_MISMATCH") {
       // Fail-safe: در حالت «فقط API رسمی»، قطعی ارتباط هرگز نباید به اعمال خودکار منجر شود.
       return {
         ...report,

@@ -1,0 +1,90 @@
+{
+  "provenance": "Reconstructed fixture. The internal product, Torob PRK, card title and two seller titles are from the incident report. The other cards, offers, prices and technical fields are synthetic.",
+  "observedAt": "2026-11-27T14:00:00.000Z",
+  "product": {
+    "id": 2,
+    "sku": "KY-0008061",
+    "name": "ماژول ریموتگ بتا (مناسب برای ریموتی و کارتی کردن آیفون اماکن)",
+    "costPrice": 0
+  },
+  "prk": "d1517e6f-44e9-4a28-ada5-18efd1bc1ba2",
+  "search": {
+    "results": [
+      { "random_key": "fixture-01", "name1": "ریموت جک پارکینگ مدل RC-433" },
+      { "random_key": "fixture-02", "name1": "کارت ریموتگ بتا" },
+      { "random_key": "fixture-03", "name1": "سوییچ شبکه دی لینک مدل DGS-1008A" },
+      { "random_key": "fixture-04", "name1": "پک ۲ عددی ماژول ریموتگ بتا" },
+      { "random_key": "fixture-05", "name1": "آیفون تصویری سیماران مدل HS-43TK" },
+      { "random_key": "fixture-06", "name1": "قاب ماژول ریموتگ بتا" },
+      {
+        "random_key": "d1517e6f-44e9-4a28-ada5-18efd1bc1ba2",
+        "name1": "اکسس کنترل ریموتگ بتا مدل هوشمند",
+        "shop_count": 3,
+        "price": 1360000,
+        "more_info_url": "https://api.torob.com/v4/base-product/details/?prk=d1517e6f-44e9-4a28-ada5-18efd1bc1ba2&search_id=fixture-context"
+      },
+      { "random_key": "fixture-08", "name1": "ماژول رله هوشمند ۲۴ ولت" },
+      { "random_key": "fixture-09", "name1": "پایه دیواری آیفون تصویری" },
+      { "random_key": "fixture-10", "name1": "مودم تی پی لینک مدل TD-W9960" },
+      { "random_key": "fixture-11", "name1": "کابل آیفون ۴ رشته ۱۰ متر" },
+      { "random_key": "fixture-12", "name1": "کیت کنترل دسترسی با دوربین امنیتی" },
+      { "random_key": "fixture-13", "name1": "تگ جاکلیدی RFID بسته ۱۰ عدد" },
+      { "random_key": "fixture-14", "name1": "ماژول بلوتوث سریال HC-05" },
+      { "random_key": "fixture-15", "name1": "ریموت ریموتگ بتا" },
+      { "random_key": "fixture-16", "name1": "دوربین هایک ویژن مدل DS-2CD1023G0E-I" },
+      { "random_key": "fixture-17", "name1": "کنترل دسترسی زد کی تکو مدل X7-001" },
+      { "random_key": "fixture-18", "name1": "ریموتگ بتا دست دوم" },
+      { "random_key": "fixture-19", "name1": "پک ۳ عددی برد کنترل دسترسی ریموتگ بتا" },
+      { "random_key": "fixture-20", "name1": "ماژول کنترل درب مدل AC-3020" },
+      { "random_key": "fixture-21", "name1": "سنسور اثر انگشت نوری مدل AS608" },
+      { "random_key": "fixture-22", "name1": "ماژول ریموتگ پاناسونیک مدل PX-200" }
+    ]
+  },
+  "details": {
+    "random_key": "d1517e6f-44e9-4a28-ada5-18efd1bc1ba2",
+    "name1": "",
+    "key_specs": [{ "key": "مدل", "value": "هوشمند" }],
+    "products_info": {
+      "count": 3,
+      "result": [
+        {
+          "shop_name": "فروشنده نمونه الف",
+          "shop_id": "fixture-shop-a",
+          "shop_name2": "تهران",
+          "name1": "ماژول ریموتگ بتا مخصوص آیفون تصویری و صوتی",
+          "price": 13600000,
+          "currency": "IRR",
+          "availability": true,
+          "shop_score": 4.8,
+          "shop_votes_count": 85,
+          "last_price_change_date": "۲ ساعت پیش",
+          "page_url": "https://shop-a.example/products/remotag"
+        },
+        {
+          "shop_name": "فروشنده نمونه ب",
+          "shop_id": "fixture-shop-b",
+          "shop_name2": "مشهد",
+          "name1": "برد کنترل دسترسی ریموتگ آیفون برند بتا",
+          "price_text": "۱٬۳۹۰٬۰۰۰ تومان",
+          "availability": true,
+          "shop_score": 4.7,
+          "shop_votes_count": 72,
+          "last_price_change_date": "۳ ساعت پیش",
+          "page_url": "https://shop-b.example/products/remotag"
+        },
+        {
+          "shop_name": "فروشنده نمونه پ",
+          "shop_id": "fixture-shop-c",
+          "shop_name2": "شیراز",
+          "product_title": "اکسس کنترل ریموتگ بتا مدل هوشمند",
+          "price": 1420000,
+          "availability": "ناموجود",
+          "shop_score": 4.5,
+          "last_price_change_date": "۵ روز پیش",
+          "page_url": "https://shop-c.example/products/remotag"
+        }
+      ]
+    },
+    "products_in_store_info": { "count": 0, "result": [] }
+  }
+}

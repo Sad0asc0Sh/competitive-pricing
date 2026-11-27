@@ -36,6 +36,7 @@ import {
 /** One seller offer for a product. */
 export interface Offer {
   shop_name: string;
+  product_title?: string;
   shop_city: string | null;
   shop_id: string | null;
   /** 0-5, or null when too few votes to mean anything. */
@@ -85,6 +86,7 @@ export interface ProductCard {
   prk: string;
   name_fa: string | null;
   name_en: string | null;
+  title_source_fields?: string[];
   /** Cheapest available offer in Toman; null when out of stock. */
   price_toman: number | null;
   price_text: string | null;
@@ -108,6 +110,8 @@ export interface ProductCard {
 export interface ProductDetails extends ProductCard {
   offers: Offer[];
   offer_count: number;
+  seller_rows_seen?: number;
+  seller_schema_incomplete?: true;
   /** Spread between cheapest and dearest available offer, in Toman. */
   price_spread_toman: number | null;
   cheapest_offer: Offer | null;
@@ -142,11 +146,18 @@ export interface ProductDetails extends ProductCard {
 
 interface RawOffer {
   shop_name?: unknown;
+  product_title?: unknown;
+  product_name?: unknown;
+  listing_title?: unknown;
+  name1?: unknown;
   shop_name2?: unknown;
   shop_id?: unknown;
   shop_score?: unknown;
   shop_votes_count?: unknown;
   price?: unknown;
+  price_toman?: unknown;
+  currency?: unknown;
+  price_unit?: unknown;
   price_text?: unknown;
   price_string?: unknown;
   price_text_striked?: unknown;
@@ -169,9 +180,19 @@ interface RawOffer {
 
 interface RawProduct {
   random_key?: unknown;
+  prk?: unknown;
   name1?: unknown;
   name2?: unknown;
+  name_fa?: unknown;
+  name_en?: unknown;
+  title_fa?: unknown;
+  title_en?: unknown;
+  title?: unknown;
+  name?: unknown;
   price?: unknown;
+  price_toman?: unknown;
+  currency?: unknown;
+  price_unit?: unknown;
   price_text?: unknown;
   stock_status?: unknown;
   availability?: unknown;
@@ -269,10 +290,19 @@ function badgesOf(raw: unknown): string[] {
 // The one price that matters on a search card: the cheapest offer upstream.
 // 0 means out of stock, which is not free and must not read as such.
 function priceOf(row: RawProduct): number | null {
-  const n = num(row.price, 0);
-  if (n > 0) return Math.round(n);
-  // Some rows carry the number only in the Persian text.
-  return tomanFromText(row.price_text);
+  return toman(row.price_toman) ?? sourcedPrice(row.price, row.price_text, row.currency ?? row.price_unit);
+}
+
+function sourcedPrice(value: unknown, text: unknown, unit: unknown): number | null {
+  const label = str(unit).trim();
+  const amount = num(value, 0);
+  const caption = str(text).trim();
+  const suffix = caption.match(/(?:ریال|ريال|﷼|irr|rial|تومان|تومن|irt|tmn|toman)$/i)?.[0];
+  const currency = amount > 0 ? label || suffix : suffix || label;
+  const price = amount > 0 ? amount : tomanFromText(caption);
+  if (price == null || price <= 0) return null;
+  if (/^(?:ریال|ريال|﷼|irr|rial)$/i.test(currency ?? "")) return Math.round(price / 10);
+  return !currency || /^(?:تومان|تومن|irt|tmn|toman)$/i.test(currency) ? Math.round(price) : null;
 }
 
 // Torob's details endpoint, and nothing else: the tool layer accepts a URL from
@@ -339,14 +369,26 @@ function upstreamAvailabilityOf(raw: RawProduct): { available: boolean | null; n
   return { available: null, note: null };
 }
 
+function cardTitles(row: RawProduct): Pick<ProductCard, "name_fa" | "name_en" | "title_source_fields"> {
+  const nameFa = [row.name1, row.name_fa, row.title_fa, row.title, row.name]
+    .map((value) => typeof value === "string" ? short(value) : null).find(Boolean) ?? null;
+  const nameEn = [row.name2, row.name_en, row.title_en]
+    .map((value) => typeof value === "string" ? short(value, 160) : null).find(Boolean) ?? null;
+  const fields = Object.entries(row)
+    .filter(([key, value]) => /^(?:name\d*|title\d*|(?:display|product|base_product|card|listing)[_-]?(?:name|title)|(?:name|title)[_-]?(?:fa|en|persian|english))$/i.test(key)
+      && value != null && (typeof value !== "string" || value.trim()))
+    .map(([key]) => key).slice(0, 12);
+  return { name_fa: nameFa, name_en: nameEn, ...(fields.length ? { title_source_fields: fields } : {}) };
+}
+
 export function toCard(row: RawProduct): ProductCard | null {
-  const prk = str(row.random_key).trim();
+  if (row == null || typeof row !== "object") return null;
+  const prk = str(row.random_key ?? row.prk).trim();
   if (!prk) return null;
   const price = priceOf(row);
   return {
     prk,
-    name_fa: short(row.name1),
-    name_en: short(row.name2, 160),
+    ...cardTitles(row),
     price_toman: price,
     price_text: short(row.price_text, 80) ?? (price !== null ? `${formatToman(price)} تومان` : null),
     available: availabilityOf(row, price),
@@ -425,9 +467,10 @@ function rememberResolved(prk: string, url: string, name: string | null): void {
 }
 
 function rememberDetailUrl(row: RawProduct): void {
-  const prk = str(row.random_key).trim();
+  const prk = str(row?.random_key ?? row?.prk).trim();
   if (!prk) return;
-  const name = short(row.name1, 160);
+  const titles = cardTitles(row);
+  const name = titles.name_fa ?? titles.name_en;
   const url = detailsUrlOf(row.more_info_url);
   // The name is remembered even when the URL is not usable, and that case is
   // the whole reason the name search exists: a URL that stops parsing (an
@@ -463,18 +506,21 @@ function installmentProvidersOf(raw: RawOffer): string[] {
 }
 
 function toOffer(raw: RawOffer): Offer | null {
-  const shop = short(raw.shop_name, 80);
+  const shop = short(raw?.shop_name, 80);
   if (!shop) return null;
   // Prefer the numeric price; fall back to the Persian text when only that is
   // present. Never invent a price from a shop name.
-  const price = num(raw.price, 0) > 0 ? Math.round(num(raw.price, 0)) : tomanFromText(raw.price_text ?? raw.price_string);
+  const price = toman(raw.price_toman) ?? sourcedPrice(raw.price, raw.price_text ?? raw.price_string, raw.currency ?? raw.price_unit);
   const more = raw.more_info ?? {};
   const postage = postageOf(raw);
   const guarantee = short((raw.guarantee_info as { status?: unknown } | null | undefined)?.status, 20);
   const percentile = num(raw.shop_score_percentile, NaN);
   const shopId = str(raw.shop_id).trim();
+  const title = [raw.product_title, raw.listing_title, raw.product_name, raw.name1]
+    .map((value) => typeof value === "string" ? short(value, 240) : null).find(Boolean);
   return {
     shop_name: shop,
+    ...(title ? { product_title: title } : {}),
     shop_city: short(raw.shop_name2, 60),
     shop_id: shopId || null,
     shop_score: shopScore(raw.shop_score, raw.shop_votes_count),
@@ -533,6 +579,8 @@ export function offersOf(row: RawProduct): Offer[] {
 /** One shop that sells this product in person, as Torob lists it. */
 export interface InPersonSeller {
   shop_name: string;
+  product_title?: string;
+  available?: boolean;
   shop_id: string | null;
   /** The shop's city, e.g. "مشهد". */
   city: string | null;
@@ -571,10 +619,13 @@ export interface InPersonSeller {
 function toInPersonSeller(raw: any): InPersonSeller | null {
   const shop_name = short(raw?.shop_name, 80);
   if (!shop_name) return null;
-  const price = num(raw?.price, 0) > 0 ? Math.round(num(raw.price, 0)) : tomanFromText(raw?.price_string ?? raw?.price_text);
+  const price = toman(raw?.price_toman) ?? sourcedPrice(raw?.price, raw?.price_string ?? raw?.price_text, raw?.currency ?? raw?.price_unit);
   const shopId = str(raw?.shop_id).trim();
+  const title = short(raw?.product_title ?? raw?.listing_title ?? raw?.product_name, 240);
   return {
     shop_name,
+    ...(title ? { product_title: title } : {}),
+    ...(typeof raw?.availability === "boolean" ? { available: raw.availability } : {}),
     shop_id: shopId || null,
     city: short(raw?.shop_name2, 60),
     address: short(raw?.name1, 160),
@@ -1147,7 +1198,7 @@ async function searchRaw(opts: SearchOptions): Promise<RawSearch> {
     opts.brand ?? "",
     opts.city ?? ""
   );
-  return cached(key, TTL.search, () => {
+  return cached(key, TTL.search, async () => {
     const params = new URLSearchParams({
       q,
       // Torob pages upstream are 0-based; this server takes 1-based pages.
@@ -1162,7 +1213,11 @@ async function searchRaw(opts: SearchOptions): Promise<RawSearch> {
     // Validated slugs, passed through as upstream expects them.
     for (const [k, v] of Object.entries(filters)) params.set(k, v);
     if (opts.shopType) params.set("shop_type", opts.shopType);
-    return torobGet<RawSearch>(`/v4/base-product/search/?${params.toString()}`);
+    const response = await torobGet<RawSearch & { data?: RawSearch; products?: unknown }>(`/v4/base-product/search/?${params.toString()}`);
+    const payload = response?.data ?? response;
+    const rows = payload?.results ?? (payload as { products?: unknown } | undefined)?.products;
+    if (!Array.isArray(rows)) throw new UpstreamError("Torob search response schema has no product rows.", "http");
+    return { ...payload, results: rows };
   });
 }
 
@@ -1242,7 +1297,7 @@ async function detailsRaw(moreInfoUrl: string, prk: string, store = true): Promi
   // never filed here, so it can never be served later as this product.
   return cached(`d:${prk}`, TTL.product, () => torobGet<RawProduct>(moreInfoUrl), {
     accept: (raw) => {
-      const answered = str(raw?.random_key).trim();
+      const answered = str(raw?.random_key ?? raw?.prk).trim();
       return !answered || answered === prk;
     },
   });
@@ -1285,7 +1340,8 @@ function nameMatches(knownName: string | null, row: RawProduct): boolean {
   const target = foldKey(knownName ?? "");
   if (!target) return false;
   const targetTokens = nameTokens(target);
-  for (const candidate of [row.name1, row.name2]) {
+  const titles = cardTitles(row);
+  for (const candidate of [titles.name_fa, titles.name_en]) {
     const folded = foldKey(candidate);
     if (!folded) continue;
     if (folded === target) return true;
@@ -1324,7 +1380,7 @@ async function rowForId(
     if (!spend(budget)) return null;
     const raw = await searchRaw({ q, page: 1, sort: "popularity" });
     const rows = Array.isArray(raw.results) ? (raw.results as RawProduct[]) : [];
-    const exact = rows.find((r) => str(r.random_key) === prk);
+    const exact = rows.find((r) => str(r?.random_key ?? r?.prk) === prk);
     if (exact) return { row: exact, matched_exact: true };
     const first = rows[0];
     if (first?.more_info_url && nameMatches(knownName, first)) return { row: first, matched_exact: false };
@@ -1470,13 +1526,14 @@ async function detailsUrlForId(wanted: string, opts?: ProductDetailsOptions): Pr
       // would be handed out later as this product. It is stored below instead,
       // after the id in it has agreed with the id that was probed.
       const raw = await detailsRaw(prkOnlyDetailsUrl(prk), prk, false);
-      const answeredId = str(raw.random_key).trim();
+      const answeredId = str(raw.random_key ?? raw.prk).trim();
       const card = toCard(raw);
       if (answeredId === prk || (!answeredId && card)) {
         cachePut(`d:${prk}`, raw, TTL.product);
         return { prk, url: prkOnlyDetailsUrl(prk), card, raw, resolvedBy: "id-only" };
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof UpstreamError && (error.kind === "challenged" || [401, 403, 429].includes(error.status ?? 0))) throw error;
       /* fall through to the honest error below */
     }
   }
@@ -1522,8 +1579,13 @@ export async function productDetails(
   }
 
   const raw = resolved.raw ?? (await detailsRaw(resolved.url, resolved.prk));
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new UpstreamError("Torob details response schema is incomplete.", "http");
+  }
+  const answeredId = str(raw?.random_key ?? raw?.prk).trim();
   const offers = offersOf(raw);
-  const base = resolved.card ?? toCard(raw);
+  const base = answeredId && resolved.card?.prk !== answeredId
+    ? toCard(raw) : resolved.card ?? toCard(raw);
   if (!base) {
     throw new UpstreamError("Torob returned a product page with no product in it.", "http");
   }
@@ -1562,6 +1624,13 @@ export async function productDetails(
   // path, the full price window and Torob's own quick purchase filters. None of
   // it costs an extra upstream request, which is why it is not behind a flag.
   const inPerson = inPersonSellersOf(raw);
+  const onlineRows = raw.products_info?.result;
+  const storeRows = raw.products_in_store_info?.result;
+  const sellerRowsSeen = (Array.isArray(onlineRows) ? onlineRows.length : 0) + (Array.isArray(storeRows) ? storeRows.length : 0);
+  const sellerSchemaIncomplete = (!Array.isArray(onlineRows) && !Array.isArray(storeRows)) ||
+    (onlineRows != null && !Array.isArray(onlineRows)) || (storeRows != null && !Array.isArray(storeRows)) ||
+    (sellerRowsSeen > 0 && offers.length + inPerson.sellers.length === 0);
+  const titles = cardTitles(raw);
   const specs = specsOf(raw);
   const priceWindow = priceWindowOf(raw);
   const variants = variantsOf(raw);
@@ -1570,10 +1639,15 @@ export async function productDetails(
 
   return {
     ...base,
+    name_fa: titles.name_fa ?? base.name_fa,
+    name_en: titles.name_en ?? base.name_en,
+    title_source_fields: [...new Set([...(titles.title_source_fields ?? []), ...(base.title_source_fields ?? [])])],
     ...(upstreamAvailability.available === null ? {} : { available: upstreamAvailability.available }),
     ...(upstreamAvailability.note ? { availability_note: upstreamAvailability.note } : {}),
     offers,
     offer_count: offers.length,
+    seller_rows_seen: sellerRowsSeen,
+    ...(sellerSchemaIncomplete ? { seller_schema_incomplete: true as const } : {}),
     price_spread_toman: prices.length > 1 ? Math.max(...prices) - Math.min(...prices) : null,
     cheapest_offer: offers.find((o) => o.available && o.price_toman !== null) ?? null,
     best_rated_offer: bestRated,

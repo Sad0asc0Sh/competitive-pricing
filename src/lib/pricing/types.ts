@@ -66,6 +66,9 @@ export interface SupplyCostResolution {
 
 export interface RawOffer {
   shopName: string;
+  listingTitle?: string | null;
+  currency?: "toman";
+  observedAt?: Date;
   shopId?: string;
   shopCity?: string | null;
   sellerType?: "online" | "in_person";
@@ -104,11 +107,87 @@ export interface MarketPriceTrend {
   summaryText?: string;
 }
 
+export type TorobIdentityStatus = "MATCH_CONFIRMED" | "REVIEW_REQUIRED" | "IDENTITY_MISMATCH" | "EXTRACTION_INCOMPLETE";
+export type TorobInquiryStatus = TorobIdentityStatus | "SOURCE_UNAVAILABLE" | "NO_VALID_OFFERS";
+export type TorobTitleOrigin = "search_card" | "product_details" | "seller_listing";
+export type TorobTitleState = "present" | "source_missing" | "parser_missing" | "mapping_missing";
+
+export interface TorobCandidateTrace {
+  prk: string;
+  url: string;
+  queries: number[];
+  observations?: { query: number; titleFa: string | null; titleEn: string | null }[];
+  titleFa: string | null;
+  titleEn: string | null;
+  titleState: TorobTitleState;
+  titleFields: string[];
+  normalizedTitle: string;
+  brands: string[];
+  family?: string | null;
+  models: string[];
+  specs?: Record<string, (string | number)[]>;
+  components?: Record<string, number>;
+  rawScore?: number;
+  score: number | null;
+  status: TorobIdentityStatus;
+  reasons: string[];
+  extraction: "not_requested" | "extracted" | "empty" | "incomplete" | "unavailable";
+}
+
+export interface TorobSearchTrace {
+  queries: { query: string; rows: number | null; mapped: number; issue?: string }[];
+  candidates: TorobCandidateTrace[];
+  accepted: number;
+  eligible: number;
+}
+
+export interface TorobSourceAssessment {
+  status: TorobInquiryStatus;
+  reason: string;
+  identityStatus?: TorobIdentityStatus;
+  titleOrigin?: TorobTitleOrigin;
+  identityScore?: number | null;
+  search?: TorobSearchTrace;
+  selected?: TorobCandidateTrace;
+  /** null means the seller payload was not available to inspect. */
+  sellerRows: number | null;
+  reportedSellers: number | null;
+  adminConfirmed?: boolean;
+}
+
+export interface TorobInquiryReport {
+  status: TorobInquiryStatus;
+  reason: string;
+  identityStatus?: TorobIdentityStatus;
+  extractedOffers: number;
+  /** null means eligibility for pricing this product could not be assessed. */
+  validOffers: number | null;
+  validOnlineOffers: number | null;
+  validLocalInPersonOffers: number | null;
+  sellerRows: number | null;
+  reportedSellers: number | null;
+}
+
+export interface TorobLinkConfirmation {
+  prk: string;
+  confirmedAt: string;
+  origin: "admin_review";
+  decisionId: number;
+}
+
+export interface TorobOfferEvidence {
+  listingTitle: string | null;
+  currency: "toman";
+  observedAt: string;
+  inStock: boolean | null;
+}
+
 export interface SourceResult {
   source: string;
   productTitle?: string;
   /** عنوان انگلیسی/دوم کارت (name_en ترب) — برای استخراج کد مدل و برند در تطبیق هویت */
   productTitleEn?: string | null;
+  torob?: TorobSourceAssessment;
   prk?: string | null;
   detailsUrl?: string | null;
   offers: RawOffer[];
@@ -256,6 +335,11 @@ export interface SystemOneGateEvaluation {
   verdict: SystemOneVerdict;
   weight: number;
   reason: string;
+  localScorePct?: number | null;
+  subqNoul?: number;
+  subqScorePct?: number;
+  blendedScorePct?: number;
+  maxScorePct?: number;
 }
 
 export interface SystemOneSupervisorReport {
@@ -263,7 +347,7 @@ export interface SystemOneSupervisorReport {
   provider: "subq_systemone_api" | "systemone_local_instant";
   model: string;
   /** وضعیت اتصال واقعی به API ناظر: غیرفعال | بدون توکن | موفق | خطا */
-  apiStatus?: "disabled" | "not_configured" | "ok" | "error";
+  apiStatus?: "disabled" | "not_configured" | "ok" | "error" | "skipped";
   apiError?: string;
   overallNoul: number;
   overallScorePct: number;
@@ -271,6 +355,8 @@ export interface SystemOneSupervisorReport {
   approveAbovePct: number;
   verdict: SystemOneVerdict;
   gates: Record<string, SystemOneGateEvaluation>;
+  torobInquiryStatus?: TorobInquiryStatus;
+  torobIdentityStatus?: TorobIdentityStatus;
   requestPreview: {
     model: string;
     state: string;
@@ -841,6 +927,7 @@ export interface CompetitivePositionReport {
 }
 
 export interface PricingResult {
+  torobInquiry?: TorobInquiryReport;
   offers: OfferEvaluation[];
   offersTotal: number;
   offersUsed: number;

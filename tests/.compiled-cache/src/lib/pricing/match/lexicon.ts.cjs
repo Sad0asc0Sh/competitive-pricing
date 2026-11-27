@@ -91,6 +91,7 @@ const BRAND_DEFS = {
     faraz: { aliases: ["فراز", "faraz"] },
     khazar: { aliases: ["خزر الکتریک", "خزر", "khazar"] },
     kavian: { aliases: ["کاویان", "kavian"] },
+    beta: { aliases: ["بتا", "beta"] },
     // ── دیجیتال و مصرفی
     apple: { aliases: ["اپل", "apple"] },
     honor: { aliases: ["آنر", "هانر", "honor"] },
@@ -155,11 +156,14 @@ function areBrandSetsCompatible(setA, setB) {
 function scanBrands(tokens) {
     const ids = new Set();
     const consumed = new Set();
+    const remoteTag = tokens.includes("ریموتگ");
     for (let i = 0; i < tokens.length; i++) {
         const bucket = BRAND_INDEX.get(tokens[i]);
         if (!bucket)
             continue;
         for (const cand of bucket) {
+            if (cand.id === "beta" && !remoteTag && !["برند", "brand"].includes(tokens[i - 1]))
+                continue;
             if (cand.tokens.every((t, k) => tokens[i + k] === t)) {
                 ids.add(cand.id);
                 for (let k = 0; k < cand.tokens.length; k++)
@@ -411,8 +415,23 @@ const CLASS_DEFS = [
     { cls: "acc:connector", phrase: "jack" },
     { cls: "acc:connector", phrase: "بالون" },
     { cls: "acc:connector", phrase: "balun" },
+    { cls: "access_control", phrase: "ماژول ریموتگ" },
+    { cls: "access_control", phrase: "برد ریموتگ" },
+    { cls: "access_control", phrase: "ریموتگ module" },
+    { cls: "access_control", phrase: "module ریموتگ" },
+    { cls: "access_control", phrase: "اکسس کنترل" },
+    { cls: "access_control", phrase: "کنترل دسترسی" },
+    { cls: "access_control", phrase: "ماژول کنترل دسترسی" },
+    { cls: "access_control", phrase: "برد کنترل دسترسی" },
+    { cls: "access_control", phrase: "access control module" },
+    { cls: "access_control", phrase: "access controller" },
+    { cls: "access_control", phrase: "access control" },
     { cls: "acc:remote", phrase: "ریموت" },
     { cls: "acc:remote", phrase: "remote" },
+    { cls: "acc:tag", phrase: "تگ ریموتگ" },
+    { cls: "acc:tag", phrase: "کارت ریموتگ" },
+    { cls: "acc:tag", phrase: "جاسوئیچی ریموتگ" },
+    { cls: "acc:tag", phrase: "key fob" },
     { cls: "acc:reader", phrase: "ریدر" },
     { cls: "acc:reader", phrase: "reader" },
     { cls: "acc:case", phrase: "کیس هارد" },

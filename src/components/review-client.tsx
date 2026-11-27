@@ -2,6 +2,7 @@
 
 import { ListingLinks } from "./listing-links";
 import type { ListingPanel } from "@/lib/pricing/listing";
+import type { TorobCandidateTrace, TorobInquiryReport } from "@/lib/pricing/types";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -13,6 +14,7 @@ import {
   statusColor,
   statusLabel,
   strategyLabel,
+  torobStatusLabel,
   toman,
 } from "@/lib/format";
 import { DecisionActions, RelinkTorobAction, RunButton, safeJsonFetch } from "./actions";
@@ -31,6 +33,8 @@ export interface ReviewCompetitorItem {
   shopName: string;
   shopCity: string | null;
   price: number;
+  sellerType: string;
+  listingTitle: string | null;
   shopScore: number | null;
   isLocalCity: boolean;
   included: boolean;
@@ -82,6 +86,8 @@ export interface ReviewPendingItem {
   syncFailed: boolean;
   readyForApproval: boolean;
   panels: ListingPanel[];
+  inquiry: (TorobInquiryReport & { candidate?: TorobCandidateTrace }) | null;
+  candidateUrl: string | null;
   effectiveFloor: number;
   reasons: string;
   supMsg: string | null;
@@ -108,6 +114,7 @@ export interface ReviewRejectedItem {
   supGates: ReviewSupervisorGate[];
   torobUrl: string | null;
   panels: ListingPanel[];
+  inquiry: TorobInquiryReport | null;
 }
 
 type ReviewTab = "all_pending" | "ready" | "pending_review" | "sync_issues" | "warnings" | "rejected";
@@ -294,6 +301,7 @@ export function ReviewClient({
       {tab !== "rejected" ? (
         <div className="space-y-4">
           {filteredPending.map((item) => {
+            const blocked = item.inquiry && item.inquiry.status !== "MATCH_CONFIRMED";
             const canBulkSelect = item.readyForApproval;
             const confPct = Math.round((item.confidence ?? 0) * 100);
             const quickPrices = buildQuickPrices(item);
@@ -338,15 +346,15 @@ export function ReviewClient({
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                       <span>
-                        {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)} · {faNum(item.offersUsed)}/
-                        {faNum(item.offersTotal)} پیشنهاد معتبر
+                        {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)} ·{" "}
+                        <OfferCounts inquiry={item.inquiry} used={item.offersUsed} total={item.offersTotal} />
                       </span>
                       <ListingLinks panels={item.panels} />
                       {item.strategy === "hold_own_price" && <span>تنها فروشندهٔ مشاهده‌شده خودمان هستیم</span>}
                     </div>
                   </div>
 
-                  <DecisionActions
+                  {!blocked && <DecisionActions
                     decisionId={item.id}
                     force
                     hardFloor={item.effectiveFloor}
@@ -358,18 +366,28 @@ export function ReviewClient({
                     initialCampaignType={item.campaignType}
                     effectiveCost={item.effectiveCost}
                     quickPrices={quickPrices}
-                  />
+                  />}
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {blocked && item.inquiry && (
+                  <>
+                    <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs leading-6 text-amber-900">
+                      <strong>{torobStatusLabel[item.inquiry.status]}</strong> · {item.inquiry.reason}
+                      {item.inquiry.candidate?.titleFa && <span> · {item.inquiry.candidate.titleFa}</span>}
+                    </p>
+                    <RelinkTorobAction decisionId={item.id} initialTorobUrl={item.candidateUrl}
+                      canConfirmCurrent={item.inquiry.status === "REVIEW_REQUIRED" && Boolean(item.inquiry.candidate)} />
+                  </>
+                )}
+                {!blocked && <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Item k="قیمت پیشنهادی" v={toman(item.finalPrice)} strong />
                   <Item k="کف مجاز فروش" v={toman(item.effectiveFloor || null)} />
                   <Item k="میانهٔ رقبا" v={toman(item.marketMedian)} />
                   <Item k="تخفیف و کمپین" v={item.discountPct ? `${pct(item.discountPct)} · ${campaignLabel[item.campaignType ?? "none"]}` : "بدون تخفیف"} />
-                </div>
+                </div>}
                 <details className="space-y-3">
-                  <summary className="cursor-pointer py-1 text-xs font-semibold text-slate-700">فروشندگان و دلایل پیشنهاد قیمت</summary>
-                <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
+                  <summary className="cursor-pointer py-1 text-xs font-semibold text-slate-700">فروشندگان و جزئیات استعلام</summary>
+                {!blocked && <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-bold text-indigo-950">📊 تحلیل آماری و ضریب خطا:</span>
@@ -444,21 +462,21 @@ export function ReviewClient({
                       {item.alternative.shopName}» با {toman(item.alternative.lowestPrice)} باشد)
                     </div>
                   )}
-                </div>
+                </div>}
 
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {!blocked && <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Item k="بهای خرید" v={toman(item.effectiveCost || item.cost)} />
                   <Item k="قیمت فعلی سایت" v={toman(item.current)} />
                   {(item.discountPct ?? 0) > 0 && <Item k="قیمت پیش از تخفیف" v={toman(item.basePrice)} />}
                   <Item k="رتبهٔ کشوری" v={item.projectedNationalRank ? faNum(item.projectedNationalRank) : "—"} />
-                </div>
+                </div>}
 
                 <SupervisorGateChips gates={item.supGates} />
 
                 {item.competitors.length > 0 && (
                   <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2.5">
                     <div className="mb-1.5 text-[11px] font-semibold text-slate-600">
-                      ارزان‌ترین فروشندگان کشف‌شده در ترب (مقایسه با پیشنهاد یوزر):
+                      پیشنهادهای مشاهده‌شده در ترب
                     </div>
                     <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
                       {item.competitors.map((c) => (
@@ -472,6 +490,8 @@ export function ReviewClient({
                         >
                           <div className="min-w-0 truncate">
                             <span className="font-medium">{c.shopName}</span>
+                            <span className="mr-1 text-[10px] text-slate-500">{c.sellerType === "in_person" ? "حضوری" : "اینترنتی"}</span>
+                            {c.listingTitle && <div className="truncate" title={c.listingTitle}>{c.listingTitle}</div>}
                             {c.shopCity && (
                               <span className={`mr-1 text-[10px] ${c.isLocalCity ? "font-bold text-indigo-700" : "text-slate-400"}`}>
                                 ({c.shopCity})
@@ -612,8 +632,8 @@ function RejectedCard({ item }: { item: ReviewRejectedItem }) {
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-400">
             <span>
-              {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)} · {faNum(item.offersUsed)}/
-              {faNum(item.offersTotal)} پیشنهاد معتبر
+              {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)} ·{" "}
+              <OfferCounts inquiry={item.inquiry} used={item.offersUsed} total={item.offersTotal} />
             </span>
             <ListingLinks panels={item.panels} />
           </div>
@@ -627,10 +647,16 @@ function RejectedCard({ item }: { item: ReviewRejectedItem }) {
       <RelinkTorobAction
         decisionId={item.id}
         initialTorobUrl={item.torobUrl}
-        canConfirmCurrent={item.panels.length > 0}
+        canConfirmCurrent={!item.inquiry && item.panels.length > 0}
       />
     </div>
   );
+}
+
+function OfferCounts({ inquiry, used, total }: { inquiry: TorobInquiryReport | null; used: number; total: number }) {
+  if (!inquiry) return <>{faNum(used)}/{faNum(total)} پیشنهاد معتبر</>;
+  return <>{faNum(inquiry.extractedOffers)} استخراج‌شده · {inquiry.validOffers == null
+    ? "اعتبار برای قیمت‌گذاری نامشخص" : `${faNum(inquiry.validOffers)} معتبر`}</>;
 }
 
 function Item({ k, v, strong }: { k: string; v: string; strong?: boolean }) {

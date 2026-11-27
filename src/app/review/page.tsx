@@ -1,6 +1,7 @@
 import { decisionPanels } from "@/lib/pricing/listing";
 import { db } from "@/db";
 import { competitorOffers, priceDecisions, products } from "@/db/schema";
+import type { TorobCandidateTrace, TorobInquiryReport } from "@/lib/pricing/types";
 import {
   ReviewClient,
   type ReviewAlternativeScenario,
@@ -66,6 +67,7 @@ export default async function ReviewPage() {
         cost: products.costPrice,
         hardFloor: products.currentHardFloorPrice,
         current: products.currentFinalPrice,
+        torobUrl: products.torobUrl,
       })
       .from(priceDecisions)
       .innerJoin(products, eq(products.id, priceDecisions.productId))
@@ -112,6 +114,8 @@ export default async function ReviewPage() {
         shopName: competitorOffers.shopName,
         shopCity: competitorOffers.shopCity,
         price: competitorOffers.price,
+        sellerType: competitorOffers.sellerType,
+        torobEvidence: competitorOffers.torobEvidence,
         shopScore: competitorOffers.shopScore,
         isLocalCity: competitorOffers.isLocalCity,
         included: competitorOffers.included,
@@ -129,6 +133,8 @@ export default async function ReviewPage() {
           shopName: o.shopName,
           shopCity: o.shopCity,
           price: o.price,
+          sellerType: o.sellerType,
+          listingTitle: o.torobEvidence?.listingTitle ?? null,
           shopScore: o.shopScore,
           isLocalCity: o.isLocalCity,
           included: o.included,
@@ -140,9 +146,11 @@ export default async function ReviewPage() {
   }
 
   const pendingItems: ReviewPendingItem[] = rows.map(
-    ({ d, name, sku, cost, hardFloor, current }) => {
+    ({ d, name, sku, cost, hardFloor, current, torobUrl }) => {
       const steps = Array.isArray(d.steps) ? d.steps : [];
       const panels = decisionPanels(steps);
+      const inquiry = steps.find((s) => s.step === "torob_inquiry")?.data as
+        (TorobInquiryReport & { candidate?: TorobCandidateTrace }) | undefined;
       const reasons = steps.find((s) => s.step === "decision")?.message ?? "";
       const supStep = steps.find((s) => s.step === "supervisor");
       const supMsg = supStep?.message ?? null;
@@ -225,6 +233,8 @@ export default async function ReviewPage() {
         syncFailed,
         readyForApproval,
         panels,
+        inquiry: inquiry ?? null,
+        candidateUrl: inquiry?.candidate?.url ?? torobUrl,
         effectiveFloor,
         reasons,
         supMsg,
@@ -241,8 +251,10 @@ export default async function ReviewPage() {
   const rejectedItems: ReviewRejectedItem[] = rejectedRows.map(({ d, name, sku, torobUrl }) => {
     const steps = Array.isArray(d.steps) ? d.steps : [];
     const panels = decisionPanels(steps);
+    const inquiry = steps.find((s) => s.step === "torob_inquiry")?.data as
+      (TorobInquiryReport & { candidate?: TorobCandidateTrace }) | undefined;
     const supStep = steps.find((s) => s.step === "supervisor");
-    const supMsg = supStep?.message ?? "رد توسط ناظر SystemOne";
+    const supMsg = supStep?.message ?? inquiry?.reason ?? "رد توسط ناظر SystemOne";
     const { overallPct: supOverallPct, gates: supGates } = extractSupervisorGates(supStep);
     return {
       id: d.id,
@@ -258,7 +270,8 @@ export default async function ReviewPage() {
       supOverallPct,
       supGates,
       panels,
-      torobUrl: panels[0] ? `https://torob.com/p/${panels[0].prk}/` : torobUrl,
+      inquiry: inquiry ?? null,
+      torobUrl: inquiry?.candidate?.url ?? (panels[0] ? `https://torob.com/p/${panels[0].prk}/` : torobUrl),
     };
   });
 

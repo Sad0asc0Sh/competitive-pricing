@@ -5,6 +5,8 @@ import { parseColleaguePriceListText, resolveSupplyCost } from "@/lib/pricing/so
 import type { SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig } from "@/lib/services/bootstrap";
 import { isAllowedSourceType } from "@/lib/sources/registry";
+import { extractPrk } from "@/lib/sources/torob";
+import { torobProductUrl } from "@/lib/sources/torob-payload";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -56,6 +58,29 @@ export async function PATCH(req: Request, { params }: Ctx) {
 
   const patch: Record<string, unknown> = {};
   for (const k of allowed) if (k in body) patch[k] = body[k];
+
+  const editedUrl = typeof patch.torobUrl === "string" ? patch.torobUrl.trim() || null : patch.torobUrl;
+  const editedPrk = typeof patch.torobPrk === "string" ? patch.torobPrk.trim() || null : patch.torobPrk;
+  const linkChanged = ("torobUrl" in patch && editedUrl !== existing.torobUrl) ||
+    ("torobPrk" in patch && editedPrk !== existing.torobPrk);
+  if (linkChanged) {
+    const urlId = typeof editedUrl === "string" ? extractPrk(editedUrl) : null;
+    const directId = typeof editedPrk === "string" ? extractPrk(null, editedPrk) : null;
+    if ((editedUrl != null && !urlId) || (editedPrk != null && !directId) || (urlId && directId && urlId !== directId)) {
+      return NextResponse.json({ error: "لینک یا شناسهٔ کارت ترب نامعتبر است" }, { status: 400 });
+    }
+    const prk = urlId ?? directId;
+    patch.torobUrl = prk ? torobProductUrl(prk) : null;
+    patch.torobPrk = prk;
+    patch.torobDetailsUrl = null;
+    patch.torobLinkConfirmation = null;
+  } else {
+    delete patch.torobUrl;
+    delete patch.torobPrk;
+  }
+  if (("name" in patch && patch.name !== existing.name) || ("sku" in patch && patch.sku !== existing.sku)) {
+    patch.torobLinkConfirmation = null;
+  }
 
   if (typeof body.colleagueListText === "string") {
     patch.supplierQuotes = parseColleaguePriceListText(body.colleagueListText, "auto");

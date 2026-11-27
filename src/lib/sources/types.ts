@@ -1,4 +1,4 @@
-import type { SourceResult, SupplierQuote } from "@/lib/pricing/types";
+import type { SourceResult, SupplierQuote, TorobLinkConfirmation } from "@/lib/pricing/types";
 
 export interface SourceMatchConfig {
   rejectBelowPct?: number;
@@ -16,6 +16,7 @@ export interface SourceProduct {
   torobUrl?: string | null;
   torobPrk?: string | null;
   torobDetailsUrl?: string | null;
+  torobLinkConfirmation?: TorobLinkConfirmation | null;
   costPrice: number;
   supplierQuotes?: SupplierQuote[];
   currentFinalPrice?: number | null;

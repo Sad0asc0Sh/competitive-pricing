@@ -1,0 +1,1360 @@
+{
+    "provenance":  "Reconstructed fixture. The internal product, Torob PRK, card title and two seller titles are from the incident report. The other cards, offers, prices and technical fields are synthetic.",
+    "search":  {
+                   "queries":  [
+                                   {
+                                       "query":  "ماژول ریموتگ بتا",
+                                       "rows":  22,
+                                       "mapped":  22
+                                   },
+                                   {
+                                       "query":  "ریموتگ بتا",
+                                       "rows":  1,
+                                       "mapped":  1
+                                   },
+                                   {
+                                       "query":  "اکسس کنترل ریموتگ بتا",
+                                       "rows":  1,
+                                       "mapped":  1
+                                   },
+                                   {
+                                       "query":  "برد کنترل دسترسی ریموتگ آیفون بتا",
+                                       "rows":  1,
+                                       "mapped":  1
+                                   },
+                                   {
+                                       "query":  "ماژول کارتی ریموتی آیفون بتا",
+                                       "rows":  1,
+                                       "mapped":  1
+                                   }
+                               ],
+                   "candidates":  [
+                                      {
+                                          "prk":  "d1517e6f-44e9-4a28-ada5-18efd1bc1ba2",
+                                          "url":  "https://torob.com/p/d1517e6f-44e9-4a28-ada5-18efd1bc1ba2/",
+                                          "queries":  [
+                                                          1,
+                                                          2,
+                                                          3,
+                                                          4,
+                                                          5
+                                                      ],
+                                          "titleFa":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                                          "brands":  [
+                                                         "beta"
+                                                     ],
+                                          "family":  "remotag",
+                                          "models":  [
+                                                         "هوشمند"
+                                                     ],
+                                          "specs":  {
+                                                        "access_model":  [
+                                                                             "هوشمند"
+                                                                         ]
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  1,
+                                                             "model":  0,
+                                                             "brand":  2,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  82,
+                                          "score":  74,
+                                          "status":  "REVIEW_REQUIRED",
+                                          "reasons":  [
+                                                          "⚠ کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "لیستینگ ادغام‌شده معتبر (3 فروشنده)",
+                                                          "کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "extracted",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                                                                   "titleEn":  null
+                                                               },
+                                                               {
+                                                                   "query":  2,
+                                                                   "titleFa":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                                                                   "titleEn":  null
+                                                               },
+                                                               {
+                                                                   "query":  3,
+                                                                   "titleFa":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                                                                   "titleEn":  null
+                                                               },
+                                                               {
+                                                                   "query":  4,
+                                                                   "titleFa":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                                                                   "titleEn":  null
+                                                               },
+                                                               {
+                                                                   "query":  5,
+                                                                   "titleFa":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-12",
+                                          "url":  "https://torob.com/p/fixture-12/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "کیت کنترل دسترسی با دوربین امنیتی",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "کیت کنترل دسترسی با دوربین امنیتی",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  1,
+                                                             "model":  0,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  38,
+                                          "score":  38,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "امتیاز تطابق (38%) زیر خط قرمز رد ناظر (45%) است",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "برند کارت ترب در عنوان نیامده است",
+                                                          "نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "برند مشترک برای کالای بدون کد مدل تایید نشد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "کیت کنترل دسترسی با دوربین امنیتی",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-17",
+                                          "url":  "https://torob.com/p/fixture-17/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "کنترل دسترسی زد کی تکو مدل X7-001",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "کنترل دسترسی زد کی تکو مدل x7-001",
+                                          "brands":  [
+                                                         "zkteco"
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "x7-001"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  1,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  27,
+                                          "score":  22,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "برند متفاوت است (سایت: beta ، ترب: zkteco)",
+                                                          "کارت ترب کد مدل «X7-001» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "کنترل دسترسی زد کی تکو مدل X7-001",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-22",
+                                          "url":  "https://torob.com/p/fixture-22/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "ماژول ریموتگ پاناسونیک مدل PX-200",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "ماژول ریموتگ پاناسونیک مدل px-200",
+                                          "brands":  [
+                                                         "panasonic"
+                                                     ],
+                                          "family":  "remotag",
+                                          "models":  [
+                                                         "px-200"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  1,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  27,
+                                          "score":  22,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "برند متفاوت است (سایت: beta ، ترب: panasonic)",
+                                                          "کارت ترب کد مدل «PX-200» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "ماژول ریموتگ پاناسونیک مدل PX-200",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-04",
+                                          "url":  "https://torob.com/p/fixture-04/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "پک ۲ عددی ماژول ریموتگ بتا",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "پک 2 عددی ماژول ریموتگ بتا",
+                                          "brands":  [
+                                                         "beta"
+                                                     ],
+                                          "family":  "remotag",
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  1,
+                                                             "model":  0,
+                                                             "brand":  2,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  82,
+                                          "score":  10,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "پک/باندل چندعددی تشخیص داده شد («پک» ×2) ولی محصول سایت تکی است",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "پک ۲ عددی ماژول ریموتگ بتا",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-13",
+                                          "url":  "https://torob.com/p/fixture-13/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "تگ جاکلیدی RFID بسته ۱۰ عدد",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "تگ جاکلیدی rfid بسته 10 عدد",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  -0.6,
+                                                             "model":  0,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  11,
+                                          "score":  10,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "پک/باندل چندعددی تشخیص داده شد («بسته» ×10) ولی محصول سایت تکی است",
+                                                          "نوع کالا در عنوان ترب مشخص نیست",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ کارت ترب نام سری/نسخهٔ لاتین دارد که در محصول سایت نیست («rfid»)",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "برند کارت ترب در عنوان نیامده است"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "تگ جاکلیدی RFID بسته ۱۰ عدد",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-19",
+                                          "url":  "https://torob.com/p/fixture-19/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "پک ۳ عددی برد کنترل دسترسی ریموتگ بتا",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "پک 3 عددی برد کنترل دسترسی ریموتگ بتا",
+                                          "brands":  [
+                                                         "beta"
+                                                     ],
+                                          "family":  "remotag",
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  1,
+                                                             "model":  0,
+                                                             "brand":  2,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  82,
+                                          "score":  10,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "پک/باندل چندعددی تشخیص داده شد («پک» ×3) ولی محصول سایت تکی است",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "پک ۳ عددی برد کنترل دسترسی ریموتگ بتا",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-03",
+                                          "url":  "https://torob.com/p/fixture-03/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "سوییچ شبکه دی لینک مدل DGS-1008A",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "سوییچ شبکه دی لینک مدل dgs-1008a",
+                                          "brands":  [
+                                                         "dlink"
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "dgs-1008a"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  12,
+                                          "score":  8,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "نوع کالا متفاوت است (محصول سایت «access_control» ، کارت ترب «switch») ؛ برند متفاوت است (سایت: beta ، ترب: dlink)",
+                                                          "کارت ترب کد مدل «DGS-1008A» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "سوییچ شبکه دی لینک مدل DGS-1008A",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-05",
+                                          "url":  "https://torob.com/p/fixture-05/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "آیفون تصویری سیماران مدل HS-43TK",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "ایفون تصویری سیماران مدل hs-43tk",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "hs-43tk"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  12,
+                                          "score":  8,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "نوع کالا متفاوت است (محصول سایت «access_control» ، کارت ترب «phone»)",
+                                                          "کارت ترب کد مدل «HS-43TK» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "آیفون تصویری سیماران مدل HS-43TK",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-10",
+                                          "url":  "https://torob.com/p/fixture-10/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "مودم تی پی لینک مدل TD-W9960",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "مودم تی پی لینک مدل td-w9960",
+                                          "brands":  [
+                                                         "tplink"
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "td-w9960"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  12,
+                                          "score":  8,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "نوع کالا متفاوت است (محصول سایت «access_control» ، کارت ترب «router») ؛ برند متفاوت است (سایت: beta ، ترب: tplink)",
+                                                          "کارت ترب کد مدل «TD-W9960» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "مودم تی پی لینک مدل TD-W9960",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-11",
+                                          "url":  "https://torob.com/p/fixture-11/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "کابل آیفون ۴ رشته ۱۰ متر",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "کابل ایفون 4 رشته 10 متر",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+                                                        "len":  [
+                                                                    10
+                                                                ]
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  0,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  18,
+                                          "score":  8,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "نوع کالا متفاوت است (محصول سایت «access_control» ، کارت ترب «cable»)",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "برند کارت ترب در عنوان نیامده است",
+                                                          "کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "کابل آیفون ۴ رشته ۱۰ متر",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-16",
+                                          "url":  "https://torob.com/p/fixture-16/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "دوربین هایک ویژن مدل DS-2CD1023G0E-I",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "دوربین هایک ویژن مدل ds-2cd1023g0e-i",
+                                          "brands":  [
+                                                         "hikvision"
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "ds-2cd1023g0e-i"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  12,
+                                          "score":  8,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "نوع کالا متفاوت است (محصول سایت «access_control» ، کارت ترب «camera») ؛ برند متفاوت است (سایت: beta ، ترب: hikvision)",
+                                                          "کارت ترب کد مدل «DS-2CD1023G0E-I» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "دوربین هایک ویژن مدل DS-2CD1023G0E-I",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-18",
+                                          "url":  "https://torob.com/p/fixture-18/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "ریموتگ بتا دست دوم",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "ریموتگ بتا دست دوم",
+                                          "brands":  [
+                                                         "beta"
+                                                     ],
+                                          "family":  "remotag",
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  -0.6,
+                                                             "model":  0,
+                                                             "brand":  2,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  48,
+                                          "score":  8,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "کارت ترب کالای دست‌دوم/استوک است («دست دوم») ولی محصول سایت نو است",
+                                                          "نوع کالا در عنوان ترب مشخص نیست",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "ریموتگ بتا دست دوم",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-21",
+                                          "url":  "https://torob.com/p/fixture-21/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "سنسور اثر انگشت نوری مدل AS608",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "سنسور اثر انگشت نوری مدل as608",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "as608"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  -0.6,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  7,
+                                          "score":  7,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "امتیاز تطابق (7%) زیر خط قرمز رد ناظر (45%) است",
+                                                          "نوع کالا در عنوان ترب مشخص نیست",
+                                                          "کارت ترب کد مدل «AS608» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "سنسور اثر انگشت نوری مدل AS608",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-01",
+                                          "url":  "https://torob.com/p/fixture-01/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "ریموت جک پارکینگ مدل RC-433",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "ریموت جک پارکینگ مدل rc-433",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "rc-433"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  12,
+                                          "score":  5,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "لوازم جانبی/قطعه فرعی تشخیص داده شد (کارت ترب از رده «remote» است ولی محصول سایت کالای اصلی است)",
+                                                          "کارت ترب کد مدل «RC-433» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "ریموت جک پارکینگ مدل RC-433",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-02",
+                                          "url":  "https://torob.com/p/fixture-02/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "کارت ریموتگ بتا",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "کارت ریموتگ بتا",
+                                          "brands":  [
+                                                         "beta"
+                                                     ],
+                                          "family":  "remotag",
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  0,
+                                                             "brand":  2,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  62,
+                                          "score":  5,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "لوازم جانبی/قطعه فرعی تشخیص داده شد (کارت ترب از رده «tag» است ولی محصول سایت کالای اصلی است)",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "کارت ریموتگ بتا",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-06",
+                                          "url":  "https://torob.com/p/fixture-06/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "قاب ماژول ریموتگ بتا",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "قاب ماژول ریموتگ بتا",
+                                          "brands":  [
+                                                         "beta"
+                                                     ],
+                                          "family":  "remotag",
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  0,
+                                                             "brand":  2,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  62,
+                                          "score":  5,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "لوازم جانبی/قطعه فرعی تشخیص داده شد (کارت ترب از رده «cover» است ولی محصول سایت کالای اصلی است)",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "قاب ماژول ریموتگ بتا",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-08",
+                                          "url":  "https://torob.com/p/fixture-08/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "ماژول رله هوشمند ۲۴ ولت",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "ماژول رله هوشمند 24 ولت",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+                                                        "volt":  [
+                                                                     24
+                                                                 ]
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  0,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  18,
+                                          "score":  5,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "لوازم جانبی/قطعه فرعی تشخیص داده شد (کارت ترب از رده «module» است ولی محصول سایت کالای اصلی است)",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "برند کارت ترب در عنوان نیامده است",
+                                                          "کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "ماژول رله هوشمند ۲۴ ولت",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-09",
+                                          "url":  "https://torob.com/p/fixture-09/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "پایه دیواری آیفون تصویری",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "پایه دیواری ایفون تصویری",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  0,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  18,
+                                          "score":  5,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "لوازم جانبی/قطعه فرعی تشخیص داده شد (کارت ترب از رده «mount» است ولی محصول سایت کالای اصلی است)",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "برند کارت ترب در عنوان نیامده است",
+                                                          "کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "پایه دیواری آیفون تصویری",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-14",
+                                          "url":  "https://torob.com/p/fixture-14/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "ماژول بلوتوث سریال HC-05",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "ماژول بلوتوث سریال hc-05",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "hc-05"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  12,
+                                          "score":  5,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "لوازم جانبی/قطعه فرعی تشخیص داده شد (کارت ترب از رده «module» است ولی محصول سایت کالای اصلی است)",
+                                                          "کارت ترب کد مدل «HC-05» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "ماژول بلوتوث سریال HC-05",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-15",
+                                          "url":  "https://torob.com/p/fixture-15/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "ریموت ریموتگ بتا",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "ریموت ریموتگ بتا",
+                                          "brands":  [
+                                                         "beta"
+                                                     ],
+                                          "family":  "remotag",
+                                          "models":  [
+
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  0,
+                                                             "brand":  2,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  62,
+                                          "score":  5,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "لوازم جانبی/قطعه فرعی تشخیص داده شد (کارت ترب از رده «remote» است ولی محصول سایت کالای اصلی است)",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                                          "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "ریموت ریموتگ بتا",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      },
+                                      {
+                                          "prk":  "fixture-20",
+                                          "url":  "https://torob.com/p/fixture-20/",
+                                          "queries":  [
+                                                          1
+                                                      ],
+                                          "titleFa":  "ماژول کنترل درب مدل AC-3020",
+                                          "titleEn":  null,
+                                          "titleState":  "present",
+                                          "titleFields":  [
+                                                              "name1"
+                                                          ],
+                                          "normalizedTitle":  "ماژول کنترل درب مدل ac-3020",
+                                          "brands":  [
+
+                                                     ],
+                                          "family":  null,
+                                          "models":  [
+                                                         "ac-3020"
+                                                     ],
+                                          "specs":  {
+
+                                                    },
+                                          "components":  {
+                                                             "prior":  -1.5,
+                                                             "type":  0,
+                                                             "model":  -0.5,
+                                                             "brand":  0,
+                                                             "specifications":  0,
+                                                             "title":  0,
+                                                             "price":  0,
+                                                             "positiveIdentification":  0
+                                                         },
+                                          "rawScore":  12,
+                                          "score":  5,
+                                          "status":  "IDENTITY_MISMATCH",
+                                          "reasons":  [
+                                                          "لوازم جانبی/قطعه فرعی تشخیص داده شد (کارت ترب از رده «module» است ولی محصول سایت کالای اصلی است)",
+                                                          "کارت ترب کد مدل «AC-3020» دارد",
+                                                          "⚠ محصول سایت کد مدل ندارد ولی کارت ترب مدل مشخصی دارد؛ تطابق مدل قابل‌احراز نیست",
+                                                          "⚠ برند کارت ترب در عنوان نیامده است",
+                                                          "⚠ کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)",
+                                                          "⚠ نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد",
+                                                          "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                                          "⚠ نوع کالا برای راستی‌آزمایی بدون کد مدل کافی نیست",
+                                                          "⚠ برند مشترک برای کالای بدون کد مدل تایید نشد",
+                                                          "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                                      ],
+                                          "extraction":  "not_requested",
+                                          "observations":  [
+                                                               {
+                                                                   "query":  1,
+                                                                   "titleFa":  "ماژول کنترل درب مدل AC-3020",
+                                                                   "titleEn":  null
+                                                               }
+                                                           ]
+                                      }
+                                  ],
+                   "accepted":  0,
+                   "eligible":  1
+               },
+    "selected":  {
+                     "prk":  "d1517e6f-44e9-4a28-ada5-18efd1bc1ba2",
+                     "url":  "https://torob.com/p/d1517e6f-44e9-4a28-ada5-18efd1bc1ba2/",
+                     "queries":  [
+                                     1,
+                                     2,
+                                     3,
+                                     4,
+                                     5
+                                 ],
+                     "titleFa":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                     "titleEn":  null,
+                     "titleState":  "present",
+                     "titleFields":  [
+                                         "name1"
+                                     ],
+                     "normalizedTitle":  "اکسس کنترل ریموتگ بتا مدل هوشمند",
+                     "brands":  [
+                                    "beta"
+                                ],
+                     "family":  "remotag",
+                     "models":  [
+                                    "هوشمند"
+                                ],
+                     "specs":  {
+                                   "access_model":  [
+                                                        "هوشمند"
+                                                    ]
+                               },
+                     "components":  {
+                                        "prior":  -1.5,
+                                        "type":  1,
+                                        "model":  0,
+                                        "brand":  2,
+                                        "specifications":  0,
+                                        "title":  0,
+                                        "price":  0,
+                                        "positiveIdentification":  0
+                                    },
+                     "rawScore":  82,
+                     "score":  74,
+                     "status":  "REVIEW_REQUIRED",
+                     "reasons":  [
+                                     "⚠ کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)",
+                                     "⚠ خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                     "⚠ مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد",
+                                     "لیستینگ ادغام‌شده معتبر (3 فروشنده)",
+                                     "کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)",
+                                     "خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست",
+                                     "مشخصه‌ای برای راستی‌آزمایی کالای بدون کد مدل وجود ندارد"
+                                 ],
+                     "extraction":  "extracted"
+                 },
+    "inquiry":  {
+                    "status":  "REVIEW_REQUIRED",
+                    "reason":  "کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)",
+                    "identityStatus":  "REVIEW_REQUIRED",
+                    "extractedOffers":  3,
+                    "validOffers":  null,
+                    "validOnlineOffers":  null,
+                    "validLocalInPersonOffers":  null,
+                    "sellerRows":  3,
+                    "reportedSellers":  3
+                }
+}

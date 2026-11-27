@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.isSpecToken = isSpecToken;
 exports.isAliasPrefix = isAliasPrefix;
 exports.parseTitle = parseTitle;
+exports.parseIdentityTitle = parseIdentityTitle;
 /**
  * تجزیهٔ ساختاریافتهٔ عنوان محصول: برند، کدهای مدل، رده (head noun)، مشخصات تایپ‌شده، پک/استوک/کپی و واژه‌های توصیفی.
  */
@@ -604,6 +605,27 @@ function detectPack(tokens) {
 }
 // ───────────────────────────── تجزیهٔ اصلی ─────────────────────────────
 const PRIMARY_NON_ACCESSORY = (cls) => !(0, lexicon_1.isAccessoryClass)(cls);
+function accessModelName(value) {
+    const name = (0, text_1.normalizeText)(value);
+    if (name === "smart")
+        return "هوشمند";
+    if (["standard", "basic", "ساده", "استاندارد"].includes(name))
+        return "معمولی";
+    return name;
+}
+function addAccessControlAttrs(tokens, attrs, consumed) {
+    const modelIndex = tokens.findIndex((token) => token === "مدل" || token === "model");
+    const label = tokens[modelIndex + 1];
+    if (modelIndex >= 0 && label && !isSpecToken(label) && !looksLikeCode(label)) {
+        addAttr(attrs, "access_model", accessModelName(label));
+        consumed.add(modelIndex + 1);
+    }
+    for (const match of tokens.join(" ").matchAll(/(?:^| )(\d+(?:\.\d+)?)\s*(mhz|مگاهرتز|khz|کیلوهرتز|hz|هرتز)(?= |$)/g)) {
+        const unit = match[2];
+        const multiplier = ["mhz", "مگاهرتز"].includes(unit) ? 1_000_000 : ["khz", "کیلوهرتز"].includes(unit) ? 1_000 : 1;
+        addAttr(attrs, "frequency", Number(match[1]) * multiplier);
+    }
+}
 const CACHE = new Map();
 const CACHE_MAX = 600;
 function parseTitle(text, opts = {}) {
@@ -619,10 +641,6 @@ function parseTitle(text, opts = {}) {
     const norm = (0, text_1.normalizeText)(source);
     const tokens = (0, text_1.tokenize)(norm);
     const consumed = new Set();
-    // برند صریح
-    const brandScan = (0, lexicon_1.scanBrands)(tokens);
-    for (const k of brandScan.consumed)
-        consumed.add(k);
     // رده/head
     const hits = (0, lexicon_1.scanClasses)(tokens);
     // عنوان لاتین «سر-راست» است: در «Ceiling Mount Access Point» هستهٔ عبارت آخرین واژهٔ زنجیرهٔ چسبیده است (Access Point)
@@ -638,7 +656,7 @@ function parseTitle(text, opts = {}) {
         for (let k = 0; k < h.len; k++)
             consumed.add(h.at + k);
     const accessoryHead = head ? (0, lexicon_1.isAccessoryClass)(head.cls) : false;
-    const canHaveHostCompat = accessoryHead || !head || head.cls === "psu" || head.cls === "cable" || head.cls === "battery";
+    const canHaveHostCompat = accessoryHead || !head || ["psu", "cable", "battery", "access_control"].includes(head.cls);
     const compatStart = canHaveHostCompat ? firstMarker(tokens, lexicon_1.COMPAT_MARKERS, head ? head.at + head.len : 0) : -1;
     const companionStart = head ? firstMarker(tokens, lexicon_1.COMPANION_MARKERS, head.at + head.len) : -1;
     // مشخصات: برای لوازم جانبی فقط قبل از بند سازگاری؛ برای کالای اصلی تا قبل از بند «همراه با»
@@ -647,7 +665,14 @@ function parseTitle(text, opts = {}) {
         attrEnd = compatStart;
     else if (companionStart >= 0)
         attrEnd = companionStart;
+    const family = tokens.slice(0, attrEnd).includes("ریموتگ") ? "remotag" : null;
+    const brandScan = (0, lexicon_1.scanBrands)(family ? tokens.slice(0, attrEnd) : tokens);
+    for (const k of brandScan.consumed)
+        consumed.add(k);
     const attrs = extractAttrs(tokens, attrEnd, consumed);
+    if (family || head?.cls === "access_control") {
+        addAccessControlAttrs(tokens.slice(0, attrEnd), attrs, consumed);
+    }
     // نوع کابل (فقط برای رده کابل): شبکه/کواکسیال/HDMI/SATA/برق/…
     if (head?.cls === "cable") {
         const body = tokens.slice(0, attrEnd);
@@ -799,9 +824,16 @@ function parseTitle(text, opts = {}) {
             }
         }
     }
+    if (head?.cls === "access_control" && companionStart >= 0) {
+        const accessories = tokens.slice(companionStart + 1);
+        if (accessories.some((token) => ["کارت", "تگ", "card", "tag", "fob"].includes(token)))
+            withAccessories.push("acc:tag");
+        if (accessories.some((token) => ["ریموت", "remote"].includes(token)))
+            withAccessories.push("acc:remote");
+    }
     // واژه‌های توصیفی (هر آنچه مصرف نشده و بی‌اثر نیست)
     const words = [];
-    for (let i = 0; i < tokens.length; i++) {
+    for (let i = 0; i < (family ? attrEnd : tokens.length); i++) {
         if (consumed.has(i))
             continue;
         const tok = tokens[i];
@@ -819,6 +851,7 @@ function parseTitle(text, opts = {}) {
         tokens,
         brands: brandScan.ids,
         impliedBrands: [...impliedBrands],
+        family,
         codes,
         head,
         hits,
@@ -837,4 +870,66 @@ function parseTitle(text, opts = {}) {
         CACHE.clear();
     CACHE.set(source, parsed);
     return parsed;
+}
+/** Only named identity fields can add evidence to a card title. */
+function parseIdentityTitle(text, specs) {
+    const title = parseTitle(text);
+    if (!specs?.length)
+        return title;
+    const attrs = Object.fromEntries(Object.entries(title.attrs).map(([key, values]) => [key, [...values]]));
+    const codes = [...title.codes];
+    const brands = [...title.brands];
+    const evidenceConflicts = [];
+    const titleCodes = title.codes.filter((code) => !code.inCompat);
+    const mergeAttr = (key, values) => {
+        if (attrs[key]?.length && values.some((v) => !attrs[key].includes(v))) {
+            evidenceConflicts.push(`مقادیر متناقض برای ${key} در عنوان و مشخصات ترب`);
+        }
+        for (const value of values)
+            addAttr(attrs, key, value);
+    };
+    for (const spec of specs) {
+        const key = (0, text_1.normalizeText)(spec.key);
+        const value = (0, text_1.normalizeText)(spec.value);
+        if (!value || value.length > 100)
+            continue;
+        if (/^(?:برند|نام برند|سازنده|نام سازنده|brand|manufacturer)$/.test(key)) {
+            const specBrands = parseTitle(`برند ${value}`).brands;
+            if (brands.length && specBrands.some((brand) => !brands.includes(brand))) {
+                evidenceConflicts.push("برند در عنوان و مشخصات ترب متفاوت است");
+            }
+            for (const brand of specBrands)
+                if (!brands.includes(brand))
+                    brands.push(brand);
+        }
+        else if (/^(?:مدل|کد مدل|شماره مدل|مدل دستگاه|model|model number|model code|mpn)$/.test(key)) {
+            const specCodes = parseTitle(value).codes.filter((code) => !code.inCompat);
+            if (titleCodes.length && specCodes.some((code) => !titleCodes.some((other) => other.canon === code.canon))) {
+                evidenceConflicts.push("کد مدل در عنوان و مشخصات ترب متفاوت است");
+            }
+            if (codes.some((code) => !code.inCompat) && specCodes.length &&
+                !specCodes.some((code) => codes.some((other) => !other.inCompat && other.canon === code.canon))) {
+                evidenceConflicts.push("کدهای مدل اعلام‌شده برای کارت ترب متفاوت‌اند");
+            }
+            for (const code of specCodes)
+                if (!codes.some((other) => !other.inCompat && other.canon === code.canon))
+                    codes.push(code);
+            if (!specCodes.length && (title.family || title.head?.cls === "access_control")) {
+                mergeAttr("access_model", [accessModelName(value)]);
+            }
+        }
+        else if (/^(?:ولتاژ|ولتاژ ورودی|ولتاژ تغذیه|input voltage|supply voltage|voltage)$/.test(key)) {
+            const volts = parseTitle(/^\d+(?:\.\d+)?$/.test(value) ? `${value} v` : value).attrs.volt;
+            if (volts?.length)
+                mergeAttr("volt", volts);
+        }
+        else if (/^(?:فرکانس|فرکانس کاری|فرکانس عملکرد|frequency|operating frequency)$/.test(key)
+            && (title.family || title.head?.cls === "access_control")) {
+            const frequency = {};
+            addAccessControlAttrs((0, text_1.tokenize)(value), frequency, new Set());
+            if (frequency.frequency?.length)
+                mergeAttr("frequency", frequency.frequency);
+        }
+    }
+    return { ...title, attrs, codes, brands, evidenceConflicts: [...new Set(evidenceConflicts)] };
 }

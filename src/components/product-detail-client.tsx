@@ -5,7 +5,7 @@ import { decisionPanels } from "@/lib/pricing/listing";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { DecisionStep } from "@/db/schema";
-import type { SupplierQuote } from "@/lib/pricing/types";
+import type { SupplierQuote, TorobCandidateTrace, TorobInquiryReport, TorobLinkConfirmation, TorobOfferEvidence } from "@/lib/pricing/types";
 import {
   badgeThemeLabel,
   campaignLabel,
@@ -15,6 +15,7 @@ import {
   statusColor,
   statusLabel,
   strategyLabel,
+  torobStatusLabel,
   toman,
 } from "@/lib/format";
 import { DecisionActions, DeleteProductButton, ProductStatusToggle, RunButton } from "./actions";
@@ -30,6 +31,7 @@ export interface SerializedProductDetail {
   storeExternalId: string | null;
   sourceType: string;
   torobUrl: string | null;
+  torobLinkConfirmation: TorobLinkConfirmation | null;
   costPrice: number;
   minMarginPct: number | null;
   minProfitAmount: number | null;
@@ -86,6 +88,8 @@ export interface SerializedOffer {
   isLocalCity: boolean;
   shopScore: number | null;
   price: number;
+  torobEvidence: TorobOfferEvidence | null;
+  url: string | null;
   lastChangedDaysAgo: number | null;
   weight: number;
   included: boolean;
@@ -94,6 +98,11 @@ export interface SerializedOffer {
 
 type DetailTab = "overview" | "offers" | "history" | "edit";
 type OfferFilter = "all" | "included" | "excluded" | "local";
+
+function inquiryFor(decision?: SerializedDecision) {
+  return decision?.steps.find((step) => step.step === "torob_inquiry")?.data as
+    (TorobInquiryReport & { candidate?: TorobCandidateTrace }) | undefined;
+}
 
 export function ProductDetailClient({
   product,
@@ -110,6 +119,7 @@ export function ProductDetailClient({
   const [showAllSteps, setShowAllSteps] = useState(false);
 
   const latest = decisions[0];
+  const latestInquiry = inquiryFor(latest);
 
   function actionProps(d: SerializedDecision) {
     const effectiveCost = Math.max(d.effectiveCostPrice ?? 0, product.costPrice);
@@ -126,8 +136,11 @@ export function ProductDetailClient({
   const isDecisionSyncFailed = (d: SerializedDecision) =>
     d.status === "sync_failed" || d.status === "pending_sync" || d.pushStatus === "failed";
 
-  const isActionable = (d: SerializedDecision) =>
-    d.status === "pending_review" || d.status === "sync_failed" || d.status === "pending_sync";
+  const isActionable = (d: SerializedDecision) => {
+    const inquiry = inquiryFor(d);
+    return (!inquiry || inquiry.status === "MATCH_CONFIRMED") &&
+      (d.status === "pending_review" || d.status === "sync_failed" || d.status === "pending_sync");
+  };
 
   const filteredOffers = useMemo(() => {
     const q = offerQuery.trim().toLowerCase();
@@ -181,6 +194,11 @@ export function ProductDetailClient({
                 <span className="badge bg-indigo-100 text-indigo-800">★ منتخب صفحه اصلی</span>
               )}
               <ListingLinks panels={latestPanels} />
+              {product.torobLinkConfirmation && (
+                <span className="text-emerald-800">
+                  تأیید مدیر · {faDate(product.torobLinkConfirmation.confirmedAt)} · تصمیم #{faNum(product.torobLinkConfirmation.decisionId)}
+                </span>
+              )}
               {product.torobUrl && !latestPanels.length && (
                 <a
                   href={product.torobUrl}
@@ -283,8 +301,16 @@ export function ProductDetailClient({
                 )}
               </div>
 
+              {latestInquiry && (
+                <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  <strong>{torobStatusLabel[latestInquiry.status]}</strong> · {latestInquiry.reason}
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-                <Mini k="پیشنهاد معتبر/کل" v={`${faNum(latest.offersUsed)}/${faNum(latest.offersTotal)}`} />
+                <Mini k="پیشنهادهای استخراج‌شده" v={faNum(latestInquiry?.extractedOffers ?? latest.offersTotal)} />
+                <Mini k="پیشنهاد معتبر برای قیمت‌گذاری" v={latestInquiry?.validOffers === null ? "نامشخص" : faNum(latestInquiry?.validOffers ?? latest.offersUsed)} />
+                {latestInquiry?.validOnlineOffers != null && <Mini k="پیشنهاد معتبر اینترنتی" v={faNum(latestInquiry.validOnlineOffers)} />}
+                {latestInquiry?.validLocalInPersonOffers != null && <Mini k="پیشنهاد معتبر حضوری در شهر هدف" v={faNum(latestInquiry.validLocalInPersonOffers)} />}
                 <Mini k="تمام‌شده همکار" v={toman(latest.effectiveCostPrice)} />
                 <Mini k="خط قرمز فروش" v={toman(latest.hardFloorPrice)} />
                 <Mini k="کف معتبر مشهد" v={toman(latest.localLowestValid)} />
@@ -412,15 +438,16 @@ export function ProductDetailClient({
                       <div className="min-w-0 flex-1">
                         <div className="font-bold text-slate-900 break-words">
                           <span className="num ml-1.5 text-xs text-slate-400">#{faNum(i + 1)}</span>
-                          {o.shopName}
+                          {o.url ? <a href={o.url} target="_blank" rel="noreferrer" className="hover:underline">{o.shopName}</a> : o.shopName}
                         </div>
+                        {o.torobEvidence?.listingTitle && <div className="text-xs text-slate-600">{o.torobEvidence.listingTitle}</div>}
                         <div className="mt-1 flex flex-wrap gap-1">
                           {o.shopCity && (
                             <span className={`badge text-[11px] ${o.isLocalCity ? "bg-indigo-100 text-indigo-800" : "bg-slate-100 text-slate-600"}`}>
                               {o.shopCity}
                             </span>
                           )}
-                          {o.sellerType === "in_person" && <span className="badge bg-sky-100 text-sky-700 text-[11px]">حضوری</span>}
+                          <span className="badge bg-sky-100 text-sky-700 text-[11px]">{o.sellerType === "in_person" ? "حضوری" : "اینترنتی"}</span>
                           {o.isAd && <span className="badge bg-purple-100 text-purple-700 text-[11px]">آگهی</span>}
                           {!o.inStock && <span className="badge bg-slate-200 text-slate-600 text-[11px]">ناموجود</span>}
                           {o.priceUnreliable && (
@@ -432,6 +459,7 @@ export function ProductDetailClient({
                         {toman(o.price)}
                       </div>
                     </div>
+                    {o.torobEvidence && <div className="text-xs text-slate-500">مشاهده‌شده در {faDate(o.torobEvidence.observedAt)}</div>}
 
                     <div className="m-row-kv">
                       <span>امتیاز / تازگی / وزن</span>
@@ -473,12 +501,13 @@ export function ProductDetailClient({
                         <td className="num">{faNum(i + 1)}</td>
                         <td>
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <span>{o.shopName}</span>
-                            {o.sellerType === "in_person" && <span className="badge bg-sky-100 text-sky-700">حضوری</span>}
+                            {o.url ? <a href={o.url} target="_blank" rel="noreferrer" className="hover:underline">{o.shopName}</a> : <span>{o.shopName}</span>}
+                            <span className="badge bg-sky-100 text-sky-700">{o.sellerType === "in_person" ? "حضوری" : "اینترنتی"}</span>
                             {o.isAd && <span className="badge bg-purple-100 text-purple-700">آگهی</span>}
                             {!o.inStock && <span className="badge bg-slate-200 text-slate-600">ناموجود</span>}
                             {o.priceUnreliable && <span className="badge bg-rose-100 text-rose-700">غیرقابل اعتماد ترب</span>}
                           </div>
+                          {o.torobEvidence?.listingTitle && <div className="text-xs text-slate-600">{o.torobEvidence.listingTitle}</div>}
                         </td>
                         <td>
                           {o.shopCity ? (
@@ -493,6 +522,7 @@ export function ProductDetailClient({
                         <td className={`num ${o.included ? "font-medium" : "line-through"}`}>{toman(o.price)}</td>
                         <td className="text-xs">
                           {o.lastChangedDaysAgo != null ? `${faNum(o.lastChangedDaysAgo)} روز پیش` : "—"}
+                          {o.torobEvidence && <div className="text-slate-500">مشاهده‌شده در {faDate(o.torobEvidence.observedAt)}</div>}
                         </td>
                         <td className="num text-xs">{o.included ? faNum(o.weight, 2) : "—"}</td>
                         <td>

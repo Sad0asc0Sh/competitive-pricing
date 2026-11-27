@@ -30,6 +30,7 @@ exports.products = (0, pg_core_1.pgTable)("products", {
     torobUrl: (0, pg_core_1.text)("torob_url"),
     torobPrk: (0, pg_core_1.text)("torob_prk"),
     torobDetailsUrl: (0, pg_core_1.text)("torob_details_url"),
+    torobLinkConfirmation: (0, pg_core_1.jsonb)("torob_link_confirmation").$type(),
     /** قیمت تمام‌شده پایه/دستی (تومان) */
     costPrice: (0, pg_core_1.integer)("cost_price").default(0).notNull(),
     /**
@@ -185,6 +186,7 @@ exports.competitorOffers = (0, pg_core_1.pgTable)("competitor_offers", {
     priceUnreliable: (0, pg_core_1.boolean)("price_unreliable").default(false).notNull(),
     price: (0, pg_core_1.integer)("price").notNull(),
     lastChangedAt: (0, pg_core_1.timestamp)("last_changed_at"),
+    torobEvidence: (0, pg_core_1.jsonb)("torob_evidence").$type(),
     isAd: (0, pg_core_1.boolean)("is_ad").default(false).notNull(),
     inStock: (0, pg_core_1.boolean)("in_stock").default(true).notNull(),
     url: (0, pg_core_1.text)("url"),

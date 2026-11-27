@@ -41,6 +41,7 @@ const schema_1 = require("../../../../db/schema");
 const auth_1 = require("../../../../lib/auth");
 const runnerService = __importStar(require("../../../../lib/services/runner"));
 const torob_1 = require("../../../../lib/sources/torob");
+const torob_payload_1 = require("../../../../lib/sources/torob-payload");
 const drizzle_orm_1 = require("drizzle-orm");
 const server_1 = require("next/server");
 exports.dynamic = "force-dynamic";
@@ -65,7 +66,8 @@ async function GET(req, { params }) {
  *   basePrice?: number | null,
  *   discountPct?: number | null,
  *   campaignType?: string | null,
- *   torobUrl?: string
+ *   torobUrl?: string,
+ *   confirmIdentity?: boolean
  * }
  */
 async function POST(req, { params }) {
@@ -90,33 +92,32 @@ async function POST(req, { params }) {
             return server_1.NextResponse.json({ ok: false, error: "تصمیم یافت نشد", message: "تصمیم یافت نشد" }, { status: 404 });
         }
         const rawUrl = typeof body.torobUrl === "string" ? body.torobUrl.trim() : "";
-        const isHttp = /^https?:\/\//i.test(rawUrl);
-        if (!rawUrl || (isHttp && !/^https?:\/\/([^/]+\.)?torob\.com\//i.test(rawUrl))) {
-            const msg = "لینک معتبر صفحه محصول ترب (torob.com/p/...) وارد کنید";
-            return server_1.NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
-        }
-        const prk = (0, torob_1.extractPrk)(rawUrl, isHttp ? null : rawUrl);
+        const prk = (0, torob_1.extractPrk)(rawUrl, rawUrl);
         if (!prk || prk.length < 3) {
             const msg = "شناسه محصول ترب (prk) در لینک واردشده یافت نشد";
             return server_1.NextResponse.json({ ok: false, error: msg, message: msg }, { status: 400 });
         }
-        const normalizedUrl = isHttp ? rawUrl : `https://torob.com/p/${prk}/`;
-        await index_ts_1.db
-            .update(schema_1.products)
-            .set({
-            torobUrl: normalizedUrl,
-            torobPrk: prk,
-            torobDetailsUrl: null,
-            lockedUntil: null,
-            updatedAt: new Date(),
-        })
-            .where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId));
-        if (d.status === "rejected" || d.status === "pending_review") {
-            await index_ts_1.db
-                .update(schema_1.priceDecisions)
-                .set({ status: "superseded", pushStatus: "superseded" })
-                .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
-        }
+        const normalizedUrl = (0, torob_payload_1.torobProductUrl)(prk);
+        const now = new Date();
+        const confirmation = body.confirmIdentity === true
+            ? { prk, confirmedAt: now.toISOString(), origin: "admin_review", decisionId: d.id } : null;
+        await index_ts_1.db.transaction(async (tx) => {
+            await tx.update(schema_1.products).set({
+                torobUrl: normalizedUrl,
+                torobPrk: prk,
+                torobDetailsUrl: null,
+                torobLinkConfirmation: confirmation ?? (0, drizzle_orm_1.sql) `CASE WHEN ${schema_1.products.torobPrk} = ${prk} THEN ${schema_1.products.torobLinkConfirmation} ELSE NULL END`,
+                updatedAt: now,
+            }).where((0, drizzle_orm_1.eq)(schema_1.products.id, d.productId));
+            if (confirmation) {
+                const audit = [{ step: "torob_link_confirmation", title: "تأیید ارتباط ترب توسط مدیر",
+                        message: "شناسهٔ کارت در بازبینی محصول ثبت شد", level: "info", data: confirmation }];
+                await tx.update(schema_1.priceDecisions).set({ steps: (0, drizzle_orm_1.sql) `${schema_1.priceDecisions.steps} || ${JSON.stringify(audit)}::jsonb` })
+                    .where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id));
+            }
+            await tx.update(schema_1.priceDecisions).set({ status: "superseded", pushStatus: "superseded" })
+                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, d.id), (0, drizzle_orm_1.inArray)(schema_1.priceDecisions.status, ["rejected", "pending_review"])));
+        });
         const summary = await runnerService.runPricing({
             trigger: "manual",
             productIds: [d.productId],
@@ -124,9 +125,10 @@ async function POST(req, { params }) {
         });
         return server_1.NextResponse.json({
             ok: true,
-            message: `لینک ترب به شناسه ${prk} متصل شد و استعلام جدید در صف قرار گرفت`,
+            message: confirmation ? "تأیید ارتباط ترب ثبت شد و استعلام جدید اجرا شد" : "لینک ترب ثبت شد و استعلام جدید اجرا شد",
             prk,
             torobUrl: normalizedUrl,
+            confirmation,
             summary,
         });
     }

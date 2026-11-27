@@ -607,7 +607,7 @@ export function RelinkTorobAction({
   const [torobUrl, setTorobUrl] = useState(initialTorobUrl ?? "");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const submitRelink = (overrideUrl?: string) => {
+  const submitRelink = (overrideUrl?: string, confirmIdentity = false) => {
     const clean = (overrideUrl ?? torobUrl).trim();
     if (!clean) return;
     start(async () => {
@@ -618,6 +618,7 @@ export function RelinkTorobAction({
         body: JSON.stringify({
           action: "relink_torob",
           torobUrl: clean,
+          confirmIdentity,
         }),
       });
       const text = String(data.message ?? (ok ? "لینک ترب اصلاح و استعلام مجدد انجام شد" : data.error ?? "خطا در اصلاح لینک ترب"));
@@ -632,17 +633,17 @@ export function RelinkTorobAction({
     <div className="mt-2.5 space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-[11px] font-semibold text-slate-700">
-          🔗 اصلاح لینک صفحه محصول در ترب و استعلام مجدد (اگر پنل اشتباه انتخاب شده است):
+          لینک کارت ترب برای استعلام مجدد
         </span>
         {canConfirmCurrent && initialTorobUrl && (
           <button
             type="button"
             className="btn-success btn-sm text-[11px]"
             disabled={pending}
-            onClick={() => submitRelink(initialTorobUrl)}
+            onClick={() => submitRelink(initialTorobUrl, true)}
           >
             {pending && <IconSpinner className="h-3 w-3" />}
-            <span>✅ تأیید این پنل ترب و انتقال به پنل قیمت‌گذاری</span>
+            <span>تأیید هویت این کارت و استعلام مجدد</span>
           </button>
         )}
       </div>

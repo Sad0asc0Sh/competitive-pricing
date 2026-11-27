@@ -49,6 +49,7 @@ const REL_RANK: Record<CodeRel, number> = { equal: 8, alias: 7, tail: 6, ext_seg
 const PRIMARY_ATTRS = new Set([
   "mp", "ch", "cap", "ram", "ports", "volt", "amp", "watt", "va", "ah", "uf", "kvar", "ka",
   "poles", "curve", "phase", "ingress", "len", "cm", "mm2", "dim", "cat", "ctype", "rg", "speed", "poe", "inch", "cabletype", "lens", "gen",
+  "access_model", "frequency",
 ]);
 const SOFT_ATTRS = new Set(["wifi", "res"]);
 const ATTR_LABEL: Record<string, string> = {
@@ -58,6 +59,8 @@ const ATTR_LABEL: Record<string, string> = {
   ram: "حافظه رم",
   ports: "تعداد پورت",
   volt: "ولتاژ",
+  frequency: "فرکانس",
+  access_model: "مدل کنترل دسترسی",
   amp: "جریان (آمپر)",
   watt: "توان (وات)",
   va: "توان ظاهری (VA)",
@@ -108,6 +111,9 @@ export interface CompareResult {
   positiveId: boolean;
   blockers: string[];
   vetoes: string[];
+  hasConflict: boolean;
+  scoreComponents: Record<string, number>;
+  rawScore: number;
 }
 
 // ───────────────────────────── ابزارها ─────────────────────────────
@@ -224,6 +230,12 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
   const vetoes: Veto[] = [];
   const blockers: string[] = [];
   let logit = -1.5;
+  const scoreComponents: Record<string, number> = { prior: logit };
+  let previousLogit = logit;
+  const recordContribution = (name: string) => {
+    scoreComponents[name] = Number((logit - previousLogit).toFixed(4));
+    previousLogit = logit;
+  };
   /** تضادهای ساختاری (فرم/فناوری/نوع دستگاه/مشخصات اصلی): اگر کد یکسان باشد قفل ریویو، وگرنه وتو */
   const structuralConflicts: string[] = [];
 
@@ -238,6 +250,8 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
   const cCodes = c.codes.filter((x) => !x.inCompat);
   const cCompatCodes = c.codes.filter((x) => x.inCompat);
   const targetCoded = tCodes.length > 0;
+  const familyMatch = t.family != null && t.family === c.family;
+  let familyContentConflict = false;
 
   // ── ۱) نشانگرهای ریسک (فقط کارت ترب نسبت به محصول سایت)
   if (F.riskMarkers) {
@@ -259,6 +273,10 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
       block("محصول سایت مجموعهٔ ترکیبی است ولی کارت ترب تکی است");
     }
     if (c.withAccessories.length > t.withAccessories.length) notes.push("کارت ترب لوازم همراه ذکر کرده است");
+    if (familyMatch && [...new Set(c.withAccessories)].sort().join("|") !== [...new Set(t.withAccessories)].sort().join("|")) {
+      familyContentConflict = true;
+      block("اقلام همراه خانوادهٔ ریموتگ در عنوان‌های دو کالا یکسان نیست");
+    }
   }
 
   // ── ۲) رده/نوع کالا (head noun)
@@ -311,6 +329,7 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
       if (F.attrConflicts) structuralConflicts.push(...featConflicts);
     }
   }
+  recordContribution("type");
 
   // ── ۳) برند
   const tExplicit = new Set(t.brands);
@@ -421,6 +440,7 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     }
     if (shorter <= 6 && brand !== "match") block("کد مدل کوتاه است و برند مشترکی برای راستی‌آزمایی نیست");
   }
+  recordContribution("model");
 
   // ── ۵) برند: امتیاز/تضاد
   if (brand === "match") logit += targetCoded ? 1.0 : 2.0;
@@ -435,6 +455,7 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     if (cAll.size && !tAll.size) block("برند محصول سایت مشخص نیست ولی کارت ترب برند دارد");
     else if (tAll.size && !cAll.size) block("برند کارت ترب در عنوان نیامده است");
   }
+  recordContribution("brand");
 
   // بررسی نسخه/رده (Pro / Plus / Ultra / Lite / Mini / Max / FE)
   const tTiers = t.features.tier ?? [];
@@ -513,6 +534,8 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     if (primaryUnverified) block("بخشی از مشخصات محصول سایت در کارت ترب ذکر نشده و راستی‌آزمایی نشد");
     if (primaryExtra) block("کارت ترب مشخصاتی دارد که در محصول سایت ذکر نشده (ممکن است مدل متفاوتی باشد)");
   }
+  for (const conflict of c.evidenceConflicts ?? []) block(conflict);
+  recordContribution("specifications");
 
   // ── ۷) واژه‌های توصیفی (مهم‌تر برای کالای بی‌کد)
   const cWords = new Set(c.words.map(stem));
@@ -548,6 +571,7 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
       if (c.features[key]?.length && !t.features[key]?.length) block(`کارت ترب ویژگی «${c.features[key].join("/")}» دارد که در محصول سایت ذکر نشده`);
     }
   }
+  recordContribution("title");
 
   // ── ۸) قیمت (لنگر نرم) و سخت‌گیری کالای گران‌قیمت
   const isHighValue = opt.anchorPriceToman != null && Number.isFinite(opt.anchorPriceToman) && opt.anchorPriceToman >= 10_000_000;
@@ -579,8 +603,19 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
       notes.push("هم‌خوانی قیمت با لنگر محصول");
     }
   }
+  recordContribution("price");
 
   // ── ۹) معیار تایید برای کالای بی‌کد: همهٔ مشخصات راستی‌آزمایی‌شده + رده + برند (یا هر دو نامعلوم) + هم‌خوانی قیمت
+  if (t.family === "remotag") {
+    if (!familyMatch && !idByCode) block("نام متمایز ریموتگ در عنوان خودِ کالا احراز نشد");
+    const sameNamedModel = Boolean(t.attrs.access_model?.length && c.attrs.access_model?.length &&
+      valuesIntersect(t.attrs.access_model, c.attrs.access_model));
+    const corroboratedSpec = ["volt", "frequency", "ch"].some((key) =>
+      t.attrs[key]?.length && c.attrs[key]?.length && valuesIntersect(t.attrs[key], c.attrs[key]));
+    if (!idByCode && !(familyMatch && sameNamedModel && corroboratedSpec)) {
+      block("خانوادهٔ ریموتگ شناخته شد، ولی مدل دقیق و مشخصات فنی مشترک برای تأیید کافی نیست");
+    }
+  }
   if (!targetCoded) {
     const hasAnchorEvidence = attrMatches > 0 || (t.words.length > 0 && coverage >= 0.99);
     const brandOk = brand === "match";
@@ -593,10 +628,12 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     positiveId = blockers.length === 0 && !vetoes.length && classMatch === "match" && brandOk && hasAnchorEvidence;
     if (positiveId) logit += 2.4;
   }
+  recordContribution("positiveIdentification");
 
   // ───── ترکیب نهایی
-  const reviewCap = Math.max(opt.rejectBelowPct + 5, opt.approveAbovePct - 6);
-  let score = Math.round(100 * sigmoid(logit));
+  const reviewCap = Math.min(opt.approveAbovePct - 1, Math.max(opt.rejectBelowPct + 5, opt.approveAbovePct - 6));
+  const rawScore = Math.round(100 * sigmoid(logit));
+  let score = rawScore;
   let rejectReason: string | undefined;
   if (vetoes.length) {
     const cap = Math.min(...vetoes.map((v) => v.cap));
@@ -631,6 +668,10 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     positiveId,
     blockers,
     vetoes: vetoes.map((v) => v.reason),
+    hasConflict: vetoes.length > 0 || structuralConflicts.length > 0 || familyContentConflict ||
+      Boolean(c.evidenceConflicts?.length) || codeRel === "ext_seg" || codeRel === "ext_chars" || codeRel === "sibling",
+    scoreComponents,
+    rawScore,
   };
 
 }

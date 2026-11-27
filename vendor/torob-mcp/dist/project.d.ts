@@ -1,6 +1,7 @@
 /** One seller offer for a product. */
 export interface Offer {
     shop_name: string;
+    product_title?: string;
     shop_city: string | null;
     shop_id: string | null;
     /** 0-5, or null when too few votes to mean anything. */
@@ -49,6 +50,7 @@ export interface ProductCard {
     prk: string;
     name_fa: string | null;
     name_en: string | null;
+    title_source_fields?: string[];
     /** Cheapest available offer in Toman; null when out of stock. */
     price_toman: number | null;
     price_text: string | null;
@@ -71,6 +73,8 @@ export interface ProductCard {
 export interface ProductDetails extends ProductCard {
     offers: Offer[];
     offer_count: number;
+    seller_rows_seen?: number;
+    seller_schema_incomplete?: true;
     /** Spread between cheapest and dearest available offer, in Toman. */
     price_spread_toman: number | null;
     cheapest_offer: Offer | null;
@@ -106,9 +110,19 @@ export interface ProductDetails extends ProductCard {
 }
 interface RawProduct {
     random_key?: unknown;
+    prk?: unknown;
     name1?: unknown;
     name2?: unknown;
+    name_fa?: unknown;
+    name_en?: unknown;
+    title_fa?: unknown;
+    title_en?: unknown;
+    title?: unknown;
+    name?: unknown;
     price?: unknown;
+    price_toman?: unknown;
+    currency?: unknown;
+    price_unit?: unknown;
     price_text?: unknown;
     stock_status?: unknown;
     availability?: unknown;
@@ -175,6 +189,8 @@ export declare function offersOf(row: RawProduct): Offer[];
 /** One shop that sells this product in person, as Torob lists it. */
 export interface InPersonSeller {
     shop_name: string;
+    product_title?: string;
+    available?: boolean;
     shop_id: string | null;
     /** The shop's city, e.g. "مشهد". */
     city: string | null;

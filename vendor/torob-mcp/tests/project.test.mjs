@@ -30,6 +30,25 @@ test("toCard projects a search row into a compact record", () => {
   assert.equal(card.url, "https://torob.com/p/2ee0949f-e7de-4cd8-a45a-ea5bad3eff95/");
 });
 
+test("alternative title columns survive projection and unfamiliar title fields remain observable", () => {
+  const aliases = toCard({ prk: "alias-prk", title_fa: "کنترل دسترسی", title_en: "Access controller" });
+  assert.equal(aliases.name_fa, "کنترل دسترسی");
+  assert.equal(aliases.name_en, "Access controller");
+  const incomplete = toCard({ random_key: "incomplete-prk", display_title: { fa: "کنترل دسترسی" } });
+  assert.equal(incomplete.name_fa, null);
+  assert.deepEqual(incomplete.title_source_fields, ["display_title"]);
+});
+
+test("offer projections keep the seller's title and normalize explicit currency", () => {
+  const offers = offersOf({ products_info: { result: [
+    { shop_name: "Market", product_name: "Access controller", price: 12000000, currency: "IRR" },
+    { shop_name: "Other market", price: 12000000, currency: "USD" },
+  ] } });
+  assert.equal(offers[0].product_title, "Access controller");
+  assert.equal(offers[0].price_toman, 1200000);
+  assert.equal(offers[1].price_toman, null);
+});
+
 test("toCard reports price 0 as out of stock, not free", () => {
   // Torob uses price 0 for "not available". Turning that into 0 Toman would
   // read as the cheapest thing in the market.
