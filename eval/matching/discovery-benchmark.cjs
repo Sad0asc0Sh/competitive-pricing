@@ -313,6 +313,100 @@ const BENCHMARK_CASES = [
       ),
     },
   },
+  {
+    id: 'CAT9-codeless-cosmetic-similar-incident',
+    category: 'Remotes (Codeless Similar & Seller Vocabulary)',
+    target: {
+      productName: 'ریموت بلوتوثی رنگی فرکانس 433 لوکس',
+      sku: null,
+      anchorPriceToman: 360000,
+    },
+    relevantPrks: ['lux-bt-433-1', 'fancy-bt-433-2', 'silicone-bt-433-3'],
+    relevantSellers: ['باسلام', 'بست کنترل', 'آرکسیس سیستم‌های حفاظتی', 'قفلک', 'فروشگاه سیلیکون'],
+    forbiddenPrks: ['wrong-bt-315'],
+    searchPages: (req) => {
+      if (req.query.includes('سیلیکونی') || req.query.includes('مکعب')) {
+        return {
+          results: [
+            { random_key: 'silicone-bt-433-3', name1: 'ریموت بلوتوثی سیلیکونی 433', price: 330000, shop_count: 1 },
+          ],
+          count: 10,
+          next: null,
+        }
+      }
+      return {
+        results: [
+          { random_key: 'lux-bt-433-1', name1: 'ریموت بلوتوثی رنگی فرکانس 433 لوکس', price: 365000, shop_count: 1 },
+          { random_key: 'wrong-bt-315', name1: 'ریموت بلوتوثی رنگی فرکانس 315 لوکس', price: 350000, shop_count: 2 },
+        ],
+        count: 15,
+        next: null,
+      }
+    },
+    similarFn: (card) => {
+      if (card.prk === 'lux-bt-433-1') {
+        return {
+          results: [
+            { random_key: 'fancy-bt-433-2', name1: 'ریموت بلوتوثی فانتزی ۴۳۳ رنگی', price: 340000, shop_count: 3 },
+          ],
+          count: 1,
+          next: null,
+        }
+      }
+      return { results: [], count: 0, next: null }
+    },
+    detailsMap: {
+      'lux-bt-433-1': detail('lux-bt-433-1', 'ریموت بلوتوثی رنگی فرکانس 433 لوکس', [
+        offer('باسلام', 365000, 'ریموت بلوتوثی رنگی فرکانس 433 لوکس'),
+      ]),
+      'fancy-bt-433-2': detail('fancy-bt-433-2', 'ریموت بلوتوثی فانتزی ۴۳۳ رنگی', [
+        offer('بست کنترل', 335000, 'ریموت بلوتوثی فرکانس 433 سیلیکونی رنگی'),
+        offer('آرکسیس سیستم‌های حفاظتی', 345000, 'ریموت بلوتوثی 433 فانتزی رنگی'),
+        offer('قفلک', 355000, 'ریموت بلوتوثی 433 مکعب رنگی'),
+      ], {
+        specs: [
+          { key: 'فرکانس', value: '433 مگاهرتز' },
+          { key: 'نوع ریموت', value: 'بلوتوثی' },
+          { key: 'باتری', value: '12V 27A' },
+        ],
+      }),
+      'silicone-bt-433-3': detail('silicone-bt-433-3', 'ریموت بلوتوثی سیلیکونی 433', [
+        offer('فروشگاه سیلیکون', 330000, 'ریموت بلوتوثی سیلیکونی فرکانس 433 رنگی'),
+      ]),
+    },
+  },
+  {
+    id: 'CAT10-mixed-variant-seller-partition',
+    category: 'Remotes (Mixed Variant Card Partitioning)',
+    target: {
+      productName: 'ریموت بلوتوثی بتا فرکانس 433 مدل RX-4330',
+      sku: 'RX-4330',
+      anchorPriceToman: 400000,
+    },
+    relevantPrks: ['mv-generic-1', 'mv-compat-2'],
+    relevantSellers: ['فروشنده الف', 'فروشنده ب', 'فروشنده ه'],
+    forbiddenPrks: ['mv-wrong-card'],
+    searchPages: () => ({
+      results: [
+        { random_key: 'mv-generic-1', name1: 'ریموت بلوتوثی', price: 400000, shop_count: 4 },
+        { random_key: 'mv-compat-2', name1: 'ریموت بلوتوثی بتا فرکانس 433 RX-4330', price: 415000, shop_count: 1 },
+        { random_key: 'mv-wrong-card', name1: 'ریموت بلوتوثی بتا فرکانس 315 مدل RX-4330', price: 390000, shop_count: 2 },
+      ],
+      count: 3,
+      next: null,
+    }),
+    detailsMap: {
+      'mv-generic-1': detail('mv-generic-1', 'ریموت بلوتوثی', [
+        offer('فروشنده الف', 410000, 'ریموت بلوتوثی بتا فرکانس 433 مدل RX-4330'),
+        offer('فروشنده ب', 420000, 'ریموت بلوتوثی بتا 433 مدل RX-4330 اصل'),
+        offer('فروشنده ج', 405000, 'ریموت بلوتوثی بتا فرکانس 315 مدل RX-4330'),
+        offer('فروشنده د', 120000, 'کاور سیلیکونی ریموت 433 مدل RX-4330'),
+      ]),
+      'mv-compat-2': detail('mv-compat-2', 'ریموت بلوتوثی بتا فرکانس 433 RX-4330', [
+        offer('فروشنده ه', 430000, 'ریموت بلوتوثی بتا فرکانس 433 مدل RX-4330'),
+      ]),
+    },
+  },
 ]
 
 // Simulates the pre-fix baseline discovery loop (MAX_QUERIES=6, MAX_DETAILS=4, page 1 popularity only, old طرح veto).
@@ -397,6 +491,15 @@ async function runAdaptiveCase(c, cache) {
       const d = c.detailsMap[card.prk]
       return d ? { data: d, origin: 'torob_mcp' } : { unavailable: true, issue: 'not_found' }
     },
+    ...(c.similarFn
+      ? {
+          similar: async (card) => {
+            apiCalls++
+            await sleep(25)
+            return { data: c.similarFn(card), origin: 'torob_mcp' }
+          },
+        }
+      : {}),
     priceTrend: async () => null,
   })
   const latencyMs = Date.now() - t0

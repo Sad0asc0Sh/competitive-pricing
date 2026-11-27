@@ -5,6 +5,7 @@ exports.relateCodes = relateCodes;
 exports.conflictingPrimarySpec = conflictingPrimarySpec;
 exports.compareParsed = compareParsed;
 const systemone_supervisor_1 = require("../systemone-supervisor");
+const descriptors_1 = require("./descriptors");
 const lexicon_1 = require("./lexicon");
 const parse_1 = require("./parse");
 exports.DEFAULT_MATCH_FLAGS = {
@@ -564,40 +565,58 @@ function compareParsed(t, c, opt) {
     for (const conflict of c.evidenceConflicts ?? [])
         block(conflict);
     recordContribution("specifications");
-    // ── ۷) واژه‌های توصیفی (مهم‌تر برای کالای بی‌کد)
+    // ── ۷) واژه‌های توصیفی (مهم‌تر برای کالای بی‌کد — با سیاست حساس به رده)
+    const tDescWords = t.descriptorWords ?? t.words;
+    const cDescWords = c.descriptorWords ?? c.words;
+    const descCmp = (0, descriptors_1.compareTitleDescriptors)(tDescWords, t.norm, cDescWords, c.norm, t.head?.cls ?? c.head?.cls, opt.descriptorPolicy);
     const cWords = new Set(c.words.map(stem));
     const cNorm = ` ${c.norm} `;
     let coverage = 1;
+    if (descCmp.matchedColors.length > 0 && !targetCoded) {
+        logit += 0.35;
+        notes.push(`هم‌خوانی توصیف رنگ: ${descCmp.matchedColors.join("، ")}`);
+    }
+    const softTargetSet = new Set(descCmp.unmatchedTargetSoft.map((item) => item.split(":").slice(1).join(":")));
+    const hardTargetWords = t.words.filter((w) => !softTargetSet.has(w));
     if (t.words.length) {
         let hit = 0;
         for (const w of t.words)
             if (cWords.has(stem(w)) || cNorm.includes(` ${w} `))
                 hit++;
         coverage = hit / t.words.length;
-        logit += (targetCoded ? 0.5 : 1.4) * coverage - (targetCoded ? 0.2 : 0.5);
+        const hardHit = hardTargetWords.filter((w) => cWords.has(stem(w)) || cNorm.includes(` ${w} `)).length;
+        const hardCoverage = hardTargetWords.length ? hardHit / hardTargetWords.length : 1;
+        const effectiveCoverage = hardTargetWords.length ? hardCoverage : Math.max(coverage, descCmp.matchedColors.length > 0 ? 0.55 : 0.35);
+        logit += (targetCoded ? 0.5 : 1.4) * effectiveCoverage - (targetCoded ? 0.2 : 0.5);
         if (!targetCoded) {
-            const need = t.words.length >= 4 ? 0.75 : 0.99;
-            if (coverage < need) {
+            const need = hardTargetWords.length >= 4 ? 0.75 : 0.99;
+            if (hardTargetWords.length > 0 && hardCoverage < need) {
                 logit -= 1.0;
                 block("واژه‌های اختصاصی محصول سایت (نام سری/نسخه) در کارت ترب پوشش کامل ندارد");
+            }
+            else if (descCmp.unmatchedTargetSoft.length > 0) {
+                block(`توصیفات غیرفنی محصول سایت (ظاهر/جنس/شکل/بازاریابی) در کارت ترب یکسان نیست (${descCmp.unmatchedTargetSoft.map((x) => x.split(":")[1]).slice(0, 3).join("، ")})`);
             }
         }
     }
     // واژه‌های اختصاصیِ فقط-در-ترب: نام سری لاتین (Elements/Extreme)، واژهٔ نوع‌ساز (مدیریتی/پرو) یا توضیحات زیاد
-    // ⇒ برای کالای بی‌کد مانع تایید خودکارند (ممکن است واریانت/برند دیگری باشد)
+    // ⇒ برای کالای بی‌کد مانع تایید خودکارند؛ توصیفات نرمِ ظاهر/جنس/شکل فقط ابهام (نیازمند بررسی) می‌سازند نه رد قطعی.
     const tStems = new Set(t.words.map(stem));
     const tNorm = ` ${t.norm} `;
-    const candOnly = c.words.filter((w) => !tStems.has(stem(w)) && !tNorm.includes(` ${w} `));
+    const hardCandOnly = descCmp.unmatchedCandHard.filter((w) => !tStems.has(stem(w)) && !tNorm.includes(` ${w} `));
     if (!targetCoded) {
-        const latin = candOnly.filter((w) => /^[a-z]{3,}$/.test(w));
-        const variant = candOnly.filter((w) => lexicon_1.VARIANT_WORDS.has(w));
-        const other = candOnly.filter((w) => !/^[a-z]{3,}$/.test(w));
+        const latin = hardCandOnly.filter((w) => /^[a-z]{3,}$/.test(w));
+        const variant = [...new Set([...hardCandOnly.filter((w) => lexicon_1.VARIANT_WORDS.has(w)), ...descCmp.strictVariantMismatch.filter((w) => !tStems.has(stem(w)) && !tNorm.includes(` ${w} `))])];
+        const other = hardCandOnly.filter((w) => !/^[a-z]{3,}$/.test(w) && !lexicon_1.VARIANT_WORDS.has(w));
         if (latin.length)
             block(`کارت ترب نام سری/نسخهٔ لاتین دارد که در محصول سایت نیست («${latin.slice(0, 3).join("، ")}»)`);
         else if (variant.length)
             block(`کارت ترب واژهٔ نوع‌ساز دارد که در محصول سایت نیست («${variant.slice(0, 3).join("، ")}»)`);
         else if (other.length > (brand === "match" ? 3 : 1))
             block("کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)");
+        else if (descCmp.unmatchedCandSoft.length > 0 && descCmp.unmatchedTargetSoft.length === 0) {
+            block(`کارت ترب توصیف ظاهری/جنس/شکل متفاوتی دارد (${descCmp.unmatchedCandSoft.map((x) => x.split(":")[1]).slice(0, 3).join("، ")})`);
+        }
         for (const key of ["form", "tech", "hddkind"]) {
             if (c.features[key]?.length && !t.features[key]?.length)
                 block(`کارت ترب ویژگی «${c.features[key].join("/")}» دارد که در محصول سایت ذکر نشده`);

@@ -12,6 +12,7 @@ const index_ts_1 = require("../../db/index.ts");
 const matcher_1 = require("../pricing/matcher");
 const parse_1 = require("../pricing/match/parse");
 const text_1 = require("../pricing/match/text");
+const torob_identity_1 = require("./torob-identity");
 const PERSIAN_NUMBER_WORD_BY_VALUE = new Map(Object.entries(text_1.NUMBER_WORDS).map(([word, num]) => [num, word]));
 const CONTROLLED_SYNONYM_MAP = [
     [/(?:^|\s)(?:کد\s*لرن|لرن\s*کد|کدلرن|لرن|learn\s*code)(?=\s|$)/u, ["لرن", "کد لرن", "syn:learn_code"]],
@@ -151,6 +152,9 @@ function rrfRankScore(cards, targetInput, limit) {
     };
     const eligible = [];
     for (const entry of cards) {
+        if (targetDoc.parsed.head?.cls && entry.doc.parsed.head?.cls &&
+            targetDoc.parsed.head.cls !== entry.doc.parsed.head.cls)
+            continue;
         const matcherRes = (0, matcher_1.evaluateTorobCandidate)(target, {
             prk: entry.prk,
             titleFa: entry.titleFa ?? "",
@@ -159,11 +163,37 @@ function rrfRankScore(cards, targetInput, limit) {
             priceToman: entry.lastPriceToman,
             sellerCount: entry.reportedSellerCount,
         });
-        // Hard structural guardrails prevent mismatched frequencies, pack counts, or wrong device classes from polluting hints.
-        if (matcherRes.hasConflict || matcherRes.status === "IDENTITY_MISMATCH")
+        const cardElig = (0, torob_identity_1.assessDiscoveryEligibility)(target, targetDoc.parsed, matcherRes, { fromSimilarOrKnown: true });
+        // Stage A high-recall gate: block only hard structural contradictions; allow weak/cosmetic canonical cards
+        // and cards whose stronger identity evidence lives in seller listing titles.
+        if (cardElig.hardContradictions.length > 0)
             continue;
-        if (targetDoc.parsed.head?.cls && entry.doc.parsed.head?.cls &&
-            targetDoc.parsed.head.cls !== entry.doc.parsed.head.cls)
+        let bestMatcherScore = matcherRes.score;
+        let bestMatcherStatus = matcherRes.status;
+        let bestHardRejected = matcherRes.rejected;
+        let sellerEligible = false;
+        if (entry.sellerTitles?.length) {
+            for (const sTitle of entry.sellerTitles.slice(0, 12)) {
+                const sRes = (0, matcher_1.evaluateTorobCandidate)(target, {
+                    prk: entry.prk,
+                    titleFa: sTitle,
+                    titleEn: entry.titleEn,
+                    specs: entry.specs,
+                });
+                const sElig = (0, torob_identity_1.assessDiscoveryEligibility)(target, targetDoc.parsed, sRes, { fromSimilarOrKnown: true });
+                if (sElig.eligible && sElig.hardContradictions.length === 0) {
+                    sellerEligible = true;
+                    if (sRes.score > bestMatcherScore) {
+                        bestMatcherScore = sRes.score;
+                        bestMatcherStatus = sRes.status === "MATCH_CONFIRMED" && matcherRes.status !== "MATCH_CONFIRMED"
+                            ? "REVIEW_REQUIRED"
+                            : sRes.status;
+                        bestHardRejected = false;
+                    }
+                }
+            }
+        }
+        if (!cardElig.eligible && !sellerEligible)
             continue;
         let lexOverlap = 0;
         for (const term of queryTerms) {
@@ -196,16 +226,16 @@ function rrfRankScore(cards, targetInput, limit) {
             structuredHits += 1;
         }
         const structuredScore = structuredHits / Math.max(1, structuredDenom + 1);
-        if (lexicalScore <= 0 && trigramScore < 0.08 && structuredScore <= 0)
+        if (lexicalScore <= 0 && trigramScore < 0.08 && structuredScore <= 0 && !sellerEligible)
             continue;
         eligible.push({
             entry,
             lexicalScore,
             trigramScore,
             structuredScore,
-            matcherScore: matcherRes.score,
-            matcherStatus: matcherRes.status,
-            hardRejected: matcherRes.rejected,
+            matcherScore: bestMatcherScore,
+            matcherStatus: bestMatcherStatus,
+            hardRejected: bestHardRejected,
         });
     }
     if (!eligible.length)
@@ -328,7 +358,8 @@ exports.InMemoryTorobHybridIndex = InMemoryTorobHybridIndex;
 function buildLinkRecordsFromSource(opts) {
     const evList = opts.source.torob?.panelEvidence ?? [];
     const selectedSet = new Set(opts.source.torob?.selectedPanelPrks ?? (opts.source.prk ? [opts.source.prk] : []));
-    return evList.map((ev) => {
+    const seenPrks = new Set(evList.map((ev) => ev.prk));
+    const evRecords = evList.map((ev) => {
         const relationStatus = ev.groupRole === "self_only" ? "self_only"
             : ev.groupRole === "rejected" || ev.identityStatus === "IDENTITY_MISMATCH" ? "rejected"
                 : (ev.groupRole === "primary" || ev.groupRole === "compatible_secondary") && ev.identityStatus === "MATCH_CONFIRMED" ? "confirmed"
@@ -339,7 +370,7 @@ function buildLinkRecordsFromSource(opts) {
             relationStatus,
             identityScore: ev.score ?? null,
             confidence: ev.matchConfidence,
-            origin: "auto_discovery",
+            origin: ev.retrievalOrigin === "hybrid_index" ? "hybrid_index" : "auto_discovery",
             isPrimary: selectedSet.has(ev.prk) && ev.groupRole === "primary",
             ownStorePresent: ev.ownStoreOfferCount > 0,
             externalCompetitorCount: ev.confirmedCompetitorCount > 0 ? ev.confirmedCompetitorCount : ev.uniqueExternalSellerCount,
@@ -349,6 +380,26 @@ function buildLinkRecordsFromSource(opts) {
             lastVerifiedAt: opts.now,
         };
     });
+    const diagRecords = (opts.source.torob?.discoveryDiagnostics ?? [])
+        .filter((d) => !seenPrks.has(d.prk))
+        .map((d) => ({
+        productId: opts.productId,
+        prk: d.prk,
+        relationStatus: d.classification === "CONFIRMED_COMPATIBLE" ? "confirmed"
+            : d.classification === "CONFIRMED_INCOMPATIBLE" ? "rejected"
+                : "review_required",
+        identityScore: null,
+        confidence: null,
+        origin: d.retrievalOrigin === "hybrid_index" ? "hybrid_index" : "auto_discovery",
+        isPrimary: false,
+        ownStorePresent: false,
+        externalCompetitorCount: d.externalCompetitorCount,
+        reportedSellerCount: null,
+        discoveringQueries: [],
+        lastReason: d.reasonForInclusionOrExclusion,
+        lastVerifiedAt: opts.now,
+    }));
+    return [...evRecords, ...diagRecords];
 }
 /**
  * Load known multi-PRK graph links + PostgreSQL hybrid discovery candidates as non-authoritative discovery hints.

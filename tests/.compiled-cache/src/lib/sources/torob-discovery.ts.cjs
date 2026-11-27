@@ -6,7 +6,7 @@ exports.resolveTorobSource = resolveTorobSource;
 const client_1 = require("../ai/client");
 const listing_1 = require("../pricing/listing");
 const matcher_1 = require("../pricing/matcher");
-const lexicon_1 = require("../pricing/match/lexicon");
+const descriptors_1 = require("../pricing/match/descriptors");
 const parse_1 = require("../pricing/match/parse");
 const text_1 = require("../pricing/match/text");
 const own_shop_1 = require("../pricing/own-shop");
@@ -135,7 +135,7 @@ function inspectDetails(target, targetTitle, card, read, confirmation, observati
     const extraction = read.unavailable ? "unavailable" : !details || details.sellerRows == null || read.issue
         ? "incomplete" : details.sellerRows === 0 ? "empty" : "extracted";
     const cardSource = hasDetailTitle ? "product_details" : hasSearchTitle ? "search_card" : undefined;
-    const { result, sellerCorroborated, offers, ambiguousPack } = (0, torob_identity_1.inspectSellerOffers)(target, targetTitle, cardResult, details?.offers ?? [], {
+    const { result, sellerCorroborated, sellerAssessments, offers, ambiguousPack } = (0, torob_identity_1.inspectSellerOffers)(target, targetTitle, cardResult, details?.offers ?? [], {
         origin: read.origin, cardSource, complete: extraction === "extracted", truncated: Boolean(details?.offersTruncated), quantityLabel,
     });
     const sellerTitle = !hasDetailTitle && !hasSearchTitle
@@ -151,6 +151,7 @@ function inspectDetails(target, targetTitle, card, read, confirmation, observati
         sellerTitle,
         sellerCorroborated,
         adminConfirmed,
+        sellerAssessments,
         offers,
     };
 }
@@ -211,46 +212,59 @@ function stemFa(word) {
     return word.replace(/(?:های|ها|ان|ی|ه|ات)$/u, "");
 }
 function hasDescriptorOverlap(targetTitle, parsed) {
-    if (!parsed || !targetTitle.words.length)
-        return { overlapRatio: 1, matched: 0, unrelatedWords: 0 };
-    const cWords = new Set(parsed.words.map(stemFa));
+    if (!parsed)
+        return { overlapRatio: 1, matched: 0, unrelatedHardWords: 0, softMatched: 0 };
+    const tDescWords = targetTitle.descriptorWords ?? targetTitle.words;
+    const cDescWords = parsed.descriptorWords ?? parsed.words;
+    if (!tDescWords.length)
+        return { overlapRatio: 1, matched: 0, unrelatedHardWords: 0, softMatched: 0 };
+    const descCmp = (0, descriptors_1.compareTitleDescriptors)(tDescWords, targetTitle.norm, cDescWords, parsed.norm, targetTitle.head?.cls ?? parsed.head?.cls);
+    const cWords = new Set(cDescWords.map(stemFa));
     const cNorm = ` ${parsed.norm} `;
     let matched = 0;
-    for (const word of targetTitle.words) {
+    for (const word of tDescWords) {
         if (cWords.has(stemFa(word)) || cNorm.includes(` ${word} `))
             matched++;
     }
-    const tStems = new Set(targetTitle.words.map(stemFa));
-    const tNorm = ` ${targetTitle.norm} `;
-    const unrelatedWords = parsed.words.filter((w) => !tStems.has(stemFa(w)) && !tNorm.includes(` ${w} `) && !lexicon_1.VARIANT_WORDS.has(w)).length;
-    return { overlapRatio: matched / targetTitle.words.length, matched, unrelatedWords };
+    return {
+        overlapRatio: matched / tDescWords.length,
+        matched,
+        unrelatedHardWords: descCmp.unmatchedCandHard.length,
+        softMatched: descCmp.matchedSoft.length,
+    };
 }
-function isHighAlignmentReviewCandidate(target, targetTitle, result) {
+function isHighAlignmentReviewCandidate(target, targetTitle, result, meta) {
     if (result.status === "MATCH_CONFIRMED")
         return true;
-    if (result.rejected || result.hasConflict)
-        return false;
     if (result.titleState !== "present")
         return true;
+    const elig = (0, torob_identity_1.assessDiscoveryEligibility)(target, targetTitle, result, {
+        fromSimilarOrKnown: meta?.retrievalOrigin === "similar_products" || meta?.retrievalOrigin === "known_prk" || meta?.retrievalOrigin === "hybrid_index",
+    });
+    if (!elig.eligible)
+        return false;
     const parsed = result.parsed;
     if (!parsed)
         return false;
-    if (targetTitle.head && parsed.head && parsed.head.cls !== targetTitle.head.cls)
-        return false;
-    const { matched } = hasDescriptorOverlap(targetTitle, parsed);
-    const specMatches = Object.entries(targetTitle.attrs).filter(([k, vals]) => parsed.attrs[k]?.some((v) => vals.includes(v))).length;
-    const targetBrands = [...targetTitle.brands, ...targetTitle.impliedBrands];
-    const candBrands = [...parsed.brands, ...parsed.impliedBrands];
-    const brandMatch = Boolean(targetBrands.length && candBrands.length && (0, lexicon_1.areKnownBrandSetsCompatible)(targetBrands, candBrands));
     const targetAnchor = target.anchorPriceToman;
     const cardPrice = result.candidate.priceToman;
     const plausiblePrice = !(targetAnchor && targetAnchor > 0 && cardPrice && cardPrice > 0) ||
         (cardPrice / targetAnchor >= 0.45 && cardPrice / targetAnchor <= 2.1);
-    return plausiblePrice && (matched > 0 || (specMatches > 0 && brandMatch) || specMatches >= 2);
+    // کارت‌های کشف‌شده از کالاهای مشابه یا دارای هم‌پوشانی فنی/توصیفی قوی حتی با اختلاف قیمتِ ظاهری همچنان هم‌تراز در نظر گرفته می‌شوند.
+    return (plausiblePrice || meta?.retrievalOrigin === "similar_products") &&
+        (elig.sharedDescriptors.length > 0 || (elig.matchedTechnicalAttrs.length > 0 && elig.sharedBrand) || elig.matchedTechnicalAttrs.length >= 2);
 }
 function scoreInspectionPriority(target, targetTitle, result, meta, codeless, knownPrkSet, knownPrkHints) {
-    const probe = codeless && result.rejected && (0, torob_identity_1.isSellerEvidenceProbeCandidate)(target, targetTitle, result);
-    const highAlignment = isHighAlignmentReviewCandidate(target, targetTitle, result);
+    const fromSimilarOrKnown = knownPrkSet.has(result.candidate.prk) ||
+        meta?.retrievalOrigin === "similar_products" ||
+        meta?.retrievalOrigin === "known_prk" ||
+        meta?.retrievalOrigin === "hybrid_index";
+    const eligibility = (0, torob_identity_1.assessDiscoveryEligibility)(target, targetTitle, result, { fromSimilarOrKnown });
+    if (!eligibility.eligible && !knownPrkSet.has(result.candidate.prk)) {
+        return { priority: -100, probe: false, highAlignment: false, eligibility };
+    }
+    const probe = Boolean(eligibility.probe || (codeless && result.rejected && eligibility.eligible));
+    const highAlignment = isHighAlignmentReviewCandidate(target, targetTitle, result, meta);
     let score = 0;
     if (knownPrkSet.has(result.candidate.prk)) {
         const hint = knownPrkHints?.get(result.candidate.prk);
@@ -264,35 +278,42 @@ function scoreInspectionPriority(target, targetTitle, result, meta, codeless, kn
             score += 120;
         }
     }
+    if (meta?.retrievalOrigin === "similar_products")
+        score += 22;
     if (result.status === "MATCH_CONFIRMED")
         score += 100;
     else if (result.titleState !== "present")
-        score += 45;
+        score += 52;
     else if (!result.rejected)
-        score += 55;
-    else if (probe)
-        score += 42;
+        score += 58;
+    else if (eligibility.eligible)
+        score += 38;
     else
-        return { priority: -100, probe: false, highAlignment: false };
+        return { priority: -100, probe: false, highAlignment: false, eligibility };
     const parsed = result.parsed;
     if (parsed) {
         const desc = hasDescriptorOverlap(targetTitle, parsed);
-        if (targetTitle.words.length > 0) {
+        if ((targetTitle.descriptorWords ?? targetTitle.words).length > 0) {
             if (desc.matched > 0)
-                score += 30 * desc.overlapRatio;
-            else if (desc.unrelatedWords > 0)
+                score += 28 * desc.overlapRatio + Math.min(8, desc.softMatched * 4);
+            else if (desc.unrelatedHardWords > 0)
                 score -= 22;
         }
-        const matchedSpecs = Object.entries(targetTitle.attrs).filter(([k, vals]) => parsed.attrs[k]?.some((v) => vals.includes(v))).length;
-        score += matchedSpecs * 12;
+        const matchedSpecs = eligibility.matchedTechnicalAttrs.length;
+        score += matchedSpecs * 13;
+        if (eligibility.sharedBrand)
+            score += 12;
+        // جریمهٔ اولویت برای کد مدل غیرمنتظره روی کالای بی‌کد و مشخصات فنی اضافهٔ درخواست‌نشده تا نویزها جای نامزدهای اصلی را نگیرند
+        const targetHasCodes = targetTitle.codes.some((c) => !c.inCompat);
+        const candCodes = parsed.codes.filter((c) => !c.inCompat);
+        if (!targetHasCodes && candCodes.length > 0)
+            score -= 22;
+        const extraPrimarySpecs = Object.keys(parsed.attrs).filter((k) => !targetTitle.attrs[k]?.length && k !== "res" && k !== "gen").length;
+        score -= Math.min(18, extraPrimarySpecs * 7);
         const targetBrands = [...targetTitle.brands, ...targetTitle.impliedBrands];
         const candBrands = [...parsed.brands, ...parsed.impliedBrands];
-        if (targetBrands.length && candBrands.length && (0, lexicon_1.areKnownBrandSetsCompatible)(targetBrands, candBrands)) {
-            score += 10;
-        }
-        // Incomplete-title corroboration bonus: shares class + descriptor/spec, zero conflicts, missing brand or spec.
-        if (!result.rejected && result.status !== "MATCH_CONFIRMED" && !result.hasConflict &&
-            (desc.matched > 0 || matchedSpecs > 0) &&
+        // پاداش تکمیل عنوان ناقص: اشتراک رده و مشخصات فنی بدون تعارض ساختاری
+        if (!result.hasConflict && (desc.matched > 0 || matchedSpecs > 0) &&
             ((targetBrands.length > 0 && !candBrands.length) ||
                 Object.keys(targetTitle.attrs).some((k) => !parsed.attrs[k]?.length))) {
             score += 12;
@@ -304,12 +325,14 @@ function scoreInspectionPriority(target, targetTitle, result, meta, codeless, kn
     if (anchor && anchor > 0 && price && price > 0) {
         const r = price / anchor;
         if (r >= 0.55 && r <= 1.85)
-            score += 6;
+            score += 8;
+        else if (r < 0.42 || r > 2.3)
+            score -= 18;
     }
     const distinctQueries = meta?.observations.length ?? 0;
     score += Math.min(9, distinctQueries * 3);
     score += Math.min(6, Math.log2((result.candidate.sellerCount ?? 1) + 1) * 2);
-    return { priority: score, probe, highAlignment };
+    return { priority: score, probe, highAlignment, eligibility };
 }
 function titleBucketKey(card) {
     const title = (0, text_1.normalizeText)(`${card.titleFa ?? ""} ${card.titleEn ?? ""}`);
@@ -322,6 +345,7 @@ async function resolveTorobSource(options) {
         anchorPriceToman: options.anchorPriceToman,
         rejectBelowPct: options.matchConfig?.rejectBelowPct,
         approveAbovePct: options.matchConfig?.approveAbovePct,
+        descriptorPolicy: options.matchConfig?.descriptorPolicy,
     };
     const targetTitle = (0, parse_1.parseTitle)(target.productName, { sku: target.sku });
     const profile = (0, torob_query_1.decomposeTargetProduct)(options.productName, options.sku);
@@ -363,6 +387,9 @@ async function resolveTorobSource(options) {
     const buildItemPanelEvidence = (item, role, selectionReason, exclusionReason) => {
         const rawId = resolveIdentity(item);
         const identityStatus = rawId === "MATCH_CONFIRMED" || rawId === "IDENTITY_MISMATCH" ? rawId : "REVIEW_REQUIRED";
+        const classification = identityStatus === "MATCH_CONFIRMED" ? "CONFIRMED_COMPATIBLE"
+            : identityStatus === "IDENTITY_MISMATCH" || item.result.rejected ? "CONFIRMED_INCOMPATIBLE"
+                : "POTENTIAL_MATCH";
         const externalKeys = new Set();
         const confirmedExternalKeys = new Set();
         let ownStoreOfferCount = 0;
@@ -406,14 +433,37 @@ async function resolveTorobSource(options) {
                 : offersTruncated ? "partial"
                     : "complete_within_scope";
         const metaInfo = candidates.get(item.result.candidate.prk);
+        const retrievalOrigin = metaInfo?.retrievalOrigin ?? (options.prk ? "direct_prk" : "search");
+        const similarProductSeed = metaInfo?.similarSeedPrk ?? null;
         const discoveringQueries = metaInfo
             ? [...new Set(metaInfo.observations.map((o) => search.queries[o.query - 1]?.query).filter((q) => Boolean(q)))]
             : [];
+        const sellerSpecificTitles = [...new Set(item.offers.map((o) => o.listingTitle?.trim()).filter((t) => Boolean(t)))];
+        const cardElig = (0, torob_identity_1.assessDiscoveryEligibility)(target, targetTitle, item.result, {
+            fromSimilarOrKnown: retrievalOrigin === "similar_products" || retrievalOrigin === "known_prk" || retrievalOrigin === "hybrid_index",
+        });
+        const technicalAttributeMatches = [...new Set([
+                ...cardElig.matchedTechnicalAttrs,
+                ...item.sellerAssessments.flatMap((a) => a.matchedAttributes),
+            ])];
+        const missingIdentityEvidence = [...new Set([
+                ...item.sellerAssessments.flatMap((a) => a.missingAttributes),
+                ...(item.result.blockers ?? []),
+            ])];
+        const hardContradictions = [...new Set([
+                ...cardElig.hardContradictions,
+                ...item.sellerAssessments.flatMap((a) => a.conflictingAttributes),
+                ...(item.result.rejectReason ? [item.result.rejectReason] : []),
+            ])];
         const evidenceSources = [];
         if (item.result.titleState === "present")
             evidenceSources.push(item.origin ?? "card_title");
         if (item.result.candidate.specs?.length)
             evidenceSources.push("card_specs");
+        if (sellerSpecificTitles.length > 0)
+            evidenceSources.push("seller_listing");
+        if (retrievalOrigin === "similar_products")
+            evidenceSources.push("similar_products");
         if (item.sellerCorroborated)
             evidenceSources.push("seller_corroboration");
         if (item.adminConfirmed)
@@ -421,6 +471,7 @@ async function resolveTorobSource(options) {
         return {
             prk: item.result.candidate.prk,
             identityStatus,
+            classification,
             title: item.result.candidate.titleFa || item.result.candidate.titleEn || item.sellerTitle || null,
             url: (0, torob_payload_1.torobProductUrl)(item.result.candidate.prk),
             matchConfidence: Math.max(0, Math.min(1, (item.result.score ?? 0) / 100)),
@@ -435,10 +486,17 @@ async function resolveTorobSource(options) {
             offersTruncated,
             coverageStatus,
             ...(role ? { groupRole: role } : {}),
+            retrievalOrigin,
+            similarProductSeed,
+            sellerSpecificTitles,
+            technicalAttributeMatches,
+            missingIdentityEvidence,
+            hardContradictions,
+            sellerAssessments: item.sellerAssessments,
             freshness: newestMs > 0 ? new Date(newestMs).toISOString() : null,
             freshExternalCount,
             discoveringQueries,
-            evidenceSources,
+            evidenceSources: [...new Set(evidenceSources)],
             ...(selectionReason !== undefined ? { selectionReason } : {}),
             ...(exclusionReason !== undefined ? { exclusionReason } : {}),
         };
@@ -470,11 +528,97 @@ async function resolveTorobSource(options) {
     const executedNormalizedQueries = new Set();
     const observedSuggestedQueries = new Set();
     const discoveredCategories = [];
-    const trackSearch = (coverage) => {
+    const buildDiscoveryDiagnostics = (panelMap) => {
+        const diagnostics = [];
+        const seen = new Set();
+        for (const item of inspected) {
+            const prk = item.result.candidate.prk;
+            seen.add(prk);
+            const ev = panelMap?.get(prk) ?? buildItemPanelEvidence(item);
+            const metaInfo = candidates.get(prk);
+            const retrievalOrigin = metaInfo?.retrievalOrigin ?? (options.prk === prk ? "direct_prk" : "search");
+            const rawId = resolveIdentity(item);
+            const classification = rawId === "MATCH_CONFIRMED" ? "CONFIRMED_COMPATIBLE"
+                : rawId === "IDENTITY_MISMATCH" || item.result.rejected ? "CONFIRMED_INCOMPATIBLE"
+                    : "POTENTIAL_MATCH";
+            const adminState = classification === "CONFIRMED_COMPATIBLE" ? "confirmed_compatible"
+                : classification === "CONFIRMED_INCOMPATIBLE" ? "confirmed_incompatible"
+                    : "inspected_insufficient_evidence";
+            const sellerSpecificTitles = ev.sellerSpecificTitles ??
+                [...new Set(item.offers.map((o) => o.listingTitle?.trim()).filter((t) => Boolean(t)))];
+            diagnostics.push({
+                prk,
+                canonicalCardTitle: item.result.candidate.titleFa || item.result.candidate.titleEn || null,
+                sellerSpecificTitles,
+                retrievalOrigin,
+                similarProductSeed: metaInfo?.similarSeedPrk ?? null,
+                classification,
+                adminState,
+                technicalAttributeMatches: ev.technicalAttributeMatches ?? [],
+                missingIdentityEvidence: ev.missingIdentityEvidence ?? [],
+                hardContradictions: ev.hardContradictions ?? [],
+                candidateInspectionPriority: priorityMap.get(prk) ?? null,
+                inspectionCompleted: item.extraction !== "incomplete" && item.extraction !== "unavailable",
+                confirmedSellerCount: item.offers.filter((o) => o.torobIdentity?.status === "MATCH_CONFIRMED").length,
+                reviewRequiredSellerCount: item.offers.filter((o) => !o.torobIdentity || o.torobIdentity.status === "REVIEW_REQUIRED").length,
+                rejectedSellerCount: item.offers.filter((o) => o.torobIdentity?.status === "IDENTITY_MISMATCH").length,
+                externalCompetitorCount: ev.uniqueExternalSellerCount,
+                reasonForInclusionOrExclusion: ev.selectionReason ?? ev.exclusionReason ??
+                    item.result.rejectReason ?? item.result.blockers?.[0] ?? "جزئیات کارت بررسی شد",
+                sellerAssessments: item.sellerAssessments,
+            });
+        }
+        for (const r of ranked) {
+            const prk = r.candidate.prk;
+            if (seen.has(prk))
+                continue;
+            seen.add(prk);
+            const metaInfo = candidates.get(prk);
+            const retrievalOrigin = metaInfo?.retrievalOrigin ?? (knownPrkSet.has(prk) ? "known_prk" : "search");
+            const elig = (0, torob_identity_1.assessDiscoveryEligibility)(target, targetTitle, r, {
+                fromSimilarOrKnown: retrievalOrigin === "similar_products" || retrievalOrigin === "known_prk" || retrievalOrigin === "hybrid_index",
+            });
+            const classification = elig.eligible ? "NOT_YET_INSPECTED" : "CONFIRMED_INCOMPATIBLE";
+            const adminState = elig.eligible ? "discovered_not_inspected" : "confirmed_incompatible";
+            diagnostics.push({
+                prk,
+                canonicalCardTitle: r.candidate.titleFa || r.candidate.titleEn || null,
+                sellerSpecificTitles: [],
+                retrievalOrigin,
+                similarProductSeed: metaInfo?.similarSeedPrk ?? null,
+                classification,
+                adminState,
+                technicalAttributeMatches: elig.matchedTechnicalAttrs,
+                missingIdentityEvidence: elig.eligible
+                    ? [...new Set([...(r.blockers ?? []), "جزئیات کارت در محدودهٔ فعلی استعلام دریافت نشد"])]
+                    : [],
+                hardContradictions: elig.hardContradictions,
+                candidateInspectionPriority: priorityMap.get(prk) ?? null,
+                inspectionCompleted: false,
+                confirmedSellerCount: 0,
+                reviewRequiredSellerCount: 0,
+                rejectedSellerCount: 0,
+                externalCompetitorCount: 0,
+                reasonForInclusionOrExclusion: elig.reason,
+            });
+        }
+        return diagnostics;
+    };
+    const trackSearch = (coverage, panelMap) => {
+        const diagnostics = buildDiscoveryDiagnostics(panelMap);
+        const diagMap = new Map(diagnostics.map((d) => [d.prk, d]));
         search.candidates = ranked.map((result) => {
-            const observations = candidates.get(result.candidate.prk)?.observations ?? [];
+            const metaEntry = candidates.get(result.candidate.prk);
+            const observations = metaEntry?.observations ?? [];
             const item = inspected.find((entry) => entry.result.candidate.prk === result.candidate.prk);
             const trace = candidateTrace(result, item?.extraction ?? "not_requested", observations.map(({ query }) => query), priorityMap.get(result.candidate.prk));
+            const diag = diagMap.get(result.candidate.prk);
+            if (metaEntry) {
+                trace.retrievalOrigin = metaEntry.retrievalOrigin;
+                trace.similarProductSeed = metaEntry.similarSeedPrk;
+            }
+            if (diag)
+                trace.classification = diag.classification;
             if (item) {
                 const { status, reasons, titleFa, titleEn, specs, imageUrls } = candidateTrace(item.result, item.extraction, []);
                 trace.inspection = { status, reasons, titleFa, titleEn, specs, imageUrls, origin: item.read.origin };
@@ -483,14 +627,28 @@ async function resolveTorobSource(options) {
         });
         for (const item of inspected) {
             if (!candidates.has(item.result.candidate.prk)) {
-                search.candidates.push({ ...candidateTrace(item.result, item.extraction, [], priorityMap.get(item.result.candidate.prk)), origin: item.read.origin });
+                const diag = diagMap.get(item.result.candidate.prk);
+                search.candidates.push({
+                    ...candidateTrace(item.result, item.extraction, [], priorityMap.get(item.result.candidate.prk)),
+                    origin: item.read.origin,
+                    retrievalOrigin: options.prk === item.result.candidate.prk ? "direct_prk" : "search",
+                    ...(diag ? { classification: diag.classification } : {}),
+                });
             }
         }
         search.accepted = ranked.filter((result) => result.status === "MATCH_CONFIRMED").length;
-        search.eligible = ranked.filter((result) => result.status === "MATCH_CONFIRMED" || result.status === "REVIEW_REQUIRED").length;
+        search.eligible = ranked.filter((result) => {
+            if (result.status === "MATCH_CONFIRMED" || result.status === "REVIEW_REQUIRED")
+                return true;
+            const metaEntry = candidates.get(result.candidate.prk);
+            return (0, torob_identity_1.assessDiscoveryEligibility)(target, targetTitle, result, {
+                fromSimilarOrKnown: metaEntry?.retrievalOrigin === "similar_products" || metaEntry?.retrievalOrigin === "known_prk" || metaEntry?.retrievalOrigin === "hybrid_index",
+            }).eligible;
+        }).length;
         if (coverage)
             search.coverage = coverage;
-        return search.queries.length ? search : undefined;
+        search.discoveryDiagnostics = diagnostics;
+        return search.queries.length || diagnostics.length ? search : undefined;
     };
     const meta = () => ({
         via: options.via,
@@ -501,8 +659,9 @@ async function resolveTorobSource(options) {
         const pagesRemaining = [...streamLastPage.values()].filter((s) => s.hasNextPage).length;
         const uninspected = ranked.filter((r) => !inspectedPrks.has(r.candidate.prk));
         const promisingUninspectedCount = uninspected.filter((r) => {
-            const p = scoreInspectionPriority(target, targetTitle, r, candidates.get(r.candidate.prk), codeless, knownPrkSet, knownPrkHints);
-            return p.highAlignment || p.probe;
+            const metaEntry = candidates.get(r.candidate.prk);
+            const p = scoreInspectionPriority(target, targetTitle, r, metaEntry, codeless, knownPrkSet, knownPrkHints);
+            return p.highAlignment || p.probe || (p.eligibility.eligible && metaEntry?.retrievalOrigin === "similar_products");
         }).length;
         const evaluatedOffers = offers ?? inspected.flatMap((i) => i.offers);
         const confirmedSellerListings = evaluatedOffers.filter((o) => o.torobIdentity?.status === "MATCH_CONFIRMED").length;
@@ -581,6 +740,7 @@ async function resolveTorobSource(options) {
     };
     const fail = (status, reason, extraMeta = {}) => {
         const coverage = buildCoverage(status === "SOURCE_UNAVAILABLE" ? "unavailable" : undefined, []);
+        const searchTrace = trackSearch(coverage);
         return {
             source: "torob",
             prk: options.prk,
@@ -594,8 +754,9 @@ async function resolveTorobSource(options) {
                 reason,
                 sellerRows: null,
                 reportedSellers: null,
-                search: trackSearch(coverage),
+                search: searchTrace,
                 coverage,
+                ...(searchTrace?.discoveryDiagnostics ? { discoveryDiagnostics: searchTrace.discoveryDiagnostics } : {}),
                 ...(status === "IDENTITY_MISMATCH" || status === "REVIEW_REQUIRED" ? { identityStatus: status } : {}),
             },
             meta: { ...meta(), coverage, ...extraMeta },
@@ -611,7 +772,8 @@ async function resolveTorobSource(options) {
         const curr = search.queries[search.queries.length - 2];
         return Boolean(prev.issue && curr.issue && prev.rows == null && curr.rows == null);
     };
-    const ingestCards = (decoded, queryIdx, searchKeyStr) => {
+    const originRank = (origin) => origin === "direct_prk" ? 4 : origin === "similar_products" ? 3 : origin === "known_prk" || origin === "hybrid_index" ? 2 : 1;
+    const ingestCards = (decoded, queryIdx, searchKeyStr, provenance) => {
         let newPrks = 0;
         let newPromising = 0;
         for (const card of decoded.candidates) {
@@ -625,12 +787,23 @@ async function resolveTorobSource(options) {
             const searchKeys = existing?.searchKeys ?? new Set();
             searchKeys.add(searchKeyStr);
             const merged = existing ? mergeCards(target, existing.card, card) : card;
-            candidates.set(card.prk, { card: merged, observations, searchKeys });
+            const defaultOrigin = knownPrkHints.has(card.prk)
+                ? "hybrid_index"
+                : knownPrkSet.has(card.prk)
+                    ? "known_prk"
+                    : "search";
+            const incomingOrigin = provenance?.retrievalOrigin ?? defaultOrigin;
+            const retrievalOrigin = existing && originRank(existing.retrievalOrigin) > originRank(incomingOrigin)
+                ? existing.retrievalOrigin
+                : incomingOrigin;
+            const similarSeedPrk = existing?.similarSeedPrk ?? provenance?.similarSeedPrk ?? null;
+            const metaEntry = { card: merged, observations, searchKeys, retrievalOrigin, similarSeedPrk };
+            candidates.set(card.prk, metaEntry);
             if (!existing) {
                 newPrks++;
                 const scored = (0, matcher_1.evaluateTorobCandidate)(target, merged);
-                if (isHighAlignmentReviewCandidate(target, targetTitle, scored) ||
-                    (codeless && (0, torob_identity_1.isSellerEvidenceProbeCandidate)(target, targetTitle, scored))) {
+                const p = scoreInspectionPriority(target, targetTitle, scored, metaEntry, codeless, knownPrkSet, knownPrkHints);
+                if (p.highAlignment || p.probe || (p.eligibility.eligible && provenance?.retrievalOrigin === "similar_products")) {
                     newPromising++;
                 }
             }
@@ -786,13 +959,26 @@ async function resolveTorobSource(options) {
                 actions.push({ ...action, priority });
             }
         }
-        // 2. Vocabulary expansions from Torob suggestions and high-alignment observed titles.
-        const highAlignTitles = ranked
-            .filter((r) => isHighAlignmentReviewCandidate(target, targetTitle, r))
-            .slice(0, 6)
-            .map((r) => `${r.candidate.titleFa ?? ""} ${r.candidate.titleEn ?? ""}`.trim());
-        const vocabExpansions = mode === "extended" || ranked.filter((r) => !r.rejected).length <= 1
-            ? (0, torob_query_1.extractVocabularyExpansions)(profile, highAlignTitles, [...observedSuggestedQueries], executedNormalizedQueries, 2)
+        // 2. Vocabulary expansions from Torob suggestions and high-alignment observed titles + seller listings.
+        const highAlignTitles = [
+            ...ranked
+                .filter((r) => isHighAlignmentReviewCandidate(target, targetTitle, r, candidates.get(r.candidate.prk)))
+                .slice(0, 6)
+                .map((r) => `${r.candidate.titleFa ?? ""} ${r.candidate.titleEn ?? ""}`.trim()),
+            ...inspected.flatMap((item) => item.offers.map((o) => o.listingTitle).filter((t) => Boolean(t))),
+        ];
+        const stageAEligibleCount = ranked.filter((r) => {
+            if (!r.rejected)
+                return true;
+            const metaEntry = candidates.get(r.candidate.prk);
+            return (0, torob_identity_1.assessDiscoveryEligibility)(target, targetTitle, r, {
+                fromSimilarOrKnown: metaEntry?.retrievalOrigin === "similar_products" ||
+                    metaEntry?.retrievalOrigin === "known_prk" ||
+                    metaEntry?.retrievalOrigin === "hybrid_index",
+            }).eligible;
+        }).length;
+        const vocabExpansions = mode === "extended" || codeless || stageAEligibleCount <= 2
+            ? (0, torob_query_1.extractVocabularyExpansions)(profile, highAlignTitles, [...observedSuggestedQueries], executedNormalizedQueries, 3, options.matchConfig?.descriptorPolicy)
             : [];
         for (const planned of vocabExpansions) {
             actions.push(toAction(planned));
@@ -879,7 +1065,18 @@ async function resolveTorobSource(options) {
                     const bestCodeRel = bestOutcome.best.codeRelation;
                     const bestHint = knownPrkHints.get(bestCard.prk);
                     const knownSelfOnly = Boolean(bestHint && bestHint.ownStorePresent && (bestHint.externalCompetitorCount ?? 0) === 0);
-                    const otherPromising = ranked.some((r) => r.candidate.prk !== bestCard.prk && (!r.rejected || (0, torob_identity_1.isSellerEvidenceProbeCandidate)(target, targetTitle, r)));
+                    const otherPromising = ranked.some((r) => {
+                        if (r.candidate.prk === bestCard.prk)
+                            return false;
+                        if (!r.rejected)
+                            return true;
+                        const metaEntry = candidates.get(r.candidate.prk);
+                        return (0, torob_identity_1.assessDiscoveryEligibility)(target, targetTitle, r, {
+                            fromSimilarOrKnown: metaEntry?.retrievalOrigin === "similar_products" ||
+                                metaEntry?.retrievalOrigin === "known_prk" ||
+                                metaEntry?.retrievalOrigin === "hybrid_index",
+                        }).eligible;
+                    });
                     const lastDecoded = outcomes.find((o) => o.decoded)?.decoded;
                     const hasExpansionSignals = Boolean(options.matchConfig?.preferBroadDiscovery) ||
                         knownSelfOnly ||
@@ -917,14 +1114,18 @@ async function resolveTorobSource(options) {
             }
             let zeroGainStreak = 0;
             const triedStrategies = new Set();
+            const noConfirmedYet = confirmedCards.length === 0;
             const fragmentedCandidateSignal = confirmedCards.some((r) => (r.candidate.sellerCount ?? 1) <= 2);
-            const reserveSimilarSearchSlot = Boolean(inspected.length === 0 &&
+            const similarSlotsWanted = (inspected.length === 0 &&
                 !options.prk &&
                 options.similar &&
                 budgets.maxSearchRequests >= 8 &&
                 similarProbesExecuted === 0 &&
-                (codeless || fragmentedCandidateSignal));
-            const loopSearchCap = reserveSimilarSearchSlot ? budgets.maxSearchRequests - 1 : budgets.maxSearchRequests;
+                (codeless || fragmentedCandidateSignal || noConfirmedYet))
+                ? (fastQueries.length <= 4 && (codeless || noConfirmedYet || mode === "extended") ? 2 : 1)
+                : 0;
+            const reserveSimilarSearchSlot = similarSlotsWanted > 0;
+            const loopSearchCap = Math.max(fastQueries.length, budgets.maxSearchRequests - similarSlotsWanted);
             while (budgetExhaustedReason === "none" && searchRequestsUsed < loopSearchCap && deadline - Date.now() > 0) {
                 const queue = buildExpansionActions();
                 if (!queue.length)
@@ -1058,13 +1259,17 @@ async function resolveTorobSource(options) {
             hasHighPriorityLeft: (doneSet) => [...highPriorityPrks].some((prk) => !doneSet.has(prk)),
         };
     };
-    const reserveDetailSlotForSimilar = Boolean(!options.prk &&
+    const confirmedSearchCount = ranked.filter((r) => r.status === "MATCH_CONFIRMED").length;
+    const reserveDetailCount = (!options.prk &&
         options.similar &&
         budgets.maxDetails >= 6 &&
         budgets.maxSearchRequests >= 8 &&
-        candidates.size > budgets.maxDetails &&
-        ranked.some((r) => !r.rejected && ((r.candidate.sellerCount ?? 1) <= 2 || Boolean(knownPrkHints.get(r.candidate.prk)?.ownStorePresent))));
-    const initialPlan = buildInspectionOrder(reserveDetailSlotForSimilar ? budgets.maxDetails - 1 : budgets.maxDetails);
+        candidates.size >= budgets.maxDetails &&
+        ranked.some((r) => !r.rejected && ((r.candidate.sellerCount ?? 1) <= 2 || Boolean(knownPrkHints.get(r.candidate.prk)?.ownStorePresent) || codeless)))
+        ? (budgets.maxDetails >= 8 && (confirmedSearchCount === 0 || (codeless && fastQueries.length <= 4 && confirmedSearchCount <= 1)) && ranked.length > budgets.maxDetails ? 2 : 1)
+        : 0;
+    const reserveDetailSlotForSimilar = reserveDetailCount > 0;
+    const initialPlan = buildInspectionOrder(budgets.maxDetails - reserveDetailCount);
     if (!initialPlan.cards.length) {
         if (extractionIssue)
             return fail("EXTRACTION_INCOMPLETE", "ساختار بعضی پاسخ‌ها یا شناسه‌های کارت ترب قابل استخراج نبود");
@@ -1150,23 +1355,71 @@ async function resolveTorobSource(options) {
         }
     };
     await inspectShortlist(initialPlan);
-    // Similar-product discovery when confirmed or self-only card is fragmented (few external sellers) and budgets permit.
+    // Multi-seed similar-product discovery (within bounded search + detail budgets).
     if (!options.prk &&
         options.similar &&
         !accessRestricted &&
         budgetExhaustedReason === "none" &&
         searchTimeLeft > 800) {
+        const rankSimilarSeeds = () => {
+            const extCount = (item) => buildItemPanelEvidence(item).uniqueExternalSellerCount;
+            const ownCount = (item) => buildItemPanelEvidence(item).ownStoreOfferCount;
+            const eligibleSeeds = inspected.filter((item) => !item.result.rejected && !item.read.blocked);
+            return [...eligibleSeeds].sort((a, b) => {
+                const tier = (item) => {
+                    if (verifiedOffers(item).length > 0 && extCount(item) <= 3)
+                        return 4;
+                    if (ownCount(item) > 0 && extCount(item) === 0)
+                        return 3;
+                    if (item.result.status === "REVIEW_REQUIRED" && extCount(item) > 0)
+                        return 2;
+                    return 1;
+                };
+                const ta = tier(a);
+                const tb = tier(b);
+                if (tb !== ta)
+                    return tb - ta;
+                return (b.result.score ?? 0) - (a.result.score ?? 0);
+            });
+        };
+        const onlySelfStoreForSimilar = () => !inspected.some((item) => verifiedExternalOffers(item).length > 0) &&
+            inspected.some((item) => verifiedOwnOffers(item).length > 0 || buildItemPanelEvidence(item).ownStoreOfferCount > 0);
+        const totalExternalCount = inspected.reduce((sum, item) => sum + buildItemPanelEvidence(item).uniqueExternalSellerCount, 0);
         const externalConfirmedPrimary = inspected.find((item) => verifiedExternalOffers(item).length > 0);
-        const seedCandidate = inspected.find((item) => verifiedOffers(item).length > 0 && buildItemPanelEvidence(item).uniqueExternalSellerCount <= 2) ??
-            inspected.find((item) => !item.result.rejected && buildItemPanelEvidence(item).ownStoreOfferCount > 0 && buildItemPanelEvidence(item).uniqueExternalSellerCount === 0);
-        const seedExtCount = seedCandidate ? buildItemPanelEvidence(seedCandidate).uniqueExternalSellerCount : 0;
-        const hasFragmentation = Boolean(seedCandidate &&
-            seedExtCount <= 2 &&
-            (codeless || candidates.size <= 4 || (!externalConfirmedPrimary && seedExtCount === 0)));
-        if (seedCandidate && hasFragmentation && searchRequestsUsed < budgets.maxSearchRequests) {
+        const initialSeeds = rankSimilarSeeds();
+        const topSeed = initialSeeds[0];
+        const topSeedExtCount = topSeed ? buildItemPanelEvidence(topSeed).uniqueExternalSellerCount : 0;
+        const fragmentedReviewSeed = Boolean(topSeed &&
+            topSeed.result.status === "REVIEW_REQUIRED" &&
+            totalExternalCount <= 2);
+        const shouldProbeSimilar = Boolean(topSeed &&
+            searchRequestsUsed < budgets.maxSearchRequests &&
+            (mode === "extended" ||
+                (codeless && verifiedOffers(topSeed).length > 0 && topSeedExtCount <= 3) ||
+                (codeless && fragmentedReviewSeed && (fastQueries.length <= 4 || totalExternalCount <= 1)) ||
+                onlySelfStoreForSimilar() ||
+                (topSeedExtCount <= 2 && verifiedOffers(topSeed).length > 0 && (candidates.size <= 4 || codeless))));
+        const maxSimilarProbes = !shouldProbeSimilar
+            ? 0
+            : mode === "extended"
+                ? Math.min(3, budgets.maxSearchRequests - searchRequestsUsed)
+                : (codeless && (fastQueries.length <= 4 || totalExternalCount <= 1) && topSeedExtCount <= 2)
+                    ? Math.min(2, budgets.maxSearchRequests - searchRequestsUsed)
+                    : 1;
+        const probedSeedPrks = new Set();
+        while (probedSeedPrks.size < maxSimilarProbes &&
+            searchRequestsUsed < budgets.maxSearchRequests &&
+            searchTimeLeft > 800 &&
+            !accessRestricted &&
+            budgetExhaustedReason === "none") {
+            const nextSeed = rankSimilarSeeds().find((s) => !probedSeedPrks.has(s.result.candidate.prk));
+            if (!nextSeed)
+                break;
+            const seedPrk = nextSeed.result.candidate.prk;
+            probedSeedPrks.add(seedPrk);
             similarProbesExecuted++;
             searchRequestsUsed++;
-            const simKey = `${seedCandidate.result.candidate.prk}|${ROW_LIMIT}`;
+            const simKey = `${seedPrk}|${ROW_LIMIT}`;
             const cachedSim = options.cache?.getSimilar(simKey, options.now.getTime());
             let simRead;
             if (cachedSim) {
@@ -1175,15 +1428,34 @@ async function resolveTorobSource(options) {
             }
             else {
                 apiRequestsMade++;
-                simRead = await singleFlight("similar", simKey, () => options.similar(seedCandidate.result.candidate, ROW_LIMIT, Math.min(searchTimeLeft, budgets.searchTimeoutMs)));
+                simRead = await singleFlight("similar", simKey, () => options.similar(nextSeed.result.candidate, ROW_LIMIT, Math.min(searchTimeLeft, budgets.searchTimeoutMs)));
                 if (options.cache && !simRead.blocked && !simRead.unavailable && !simRead.issue && simRead.data !== undefined) {
                     options.cache.setSimilar(simKey, simRead, options.now.getTime());
                 }
             }
-            if (!simRead.blocked && !simRead.unavailable && simRead.data !== undefined) {
+            if (simRead.blocked) {
+                accessRestricted = true;
+                stoppingReason = "access_restricted";
+                break;
+            }
+            if (!simRead.unavailable && simRead.data !== undefined) {
                 const simDecoded = (0, torob_payload_1.decodeTorobSearch)(simRead.data, ROW_LIMIT, 1);
-                ingestCards(simDecoded, search.queries.length + 1, `similar:${seedCandidate.result.candidate.prk}`);
+                const simGain = ingestCards(simDecoded, search.queries.length + 1, `similar:${seedPrk}`, {
+                    retrievalOrigin: "similar_products",
+                    similarSeedPrk: seedPrk,
+                });
                 recomputeRanking();
+                // Pass 2 immediate inspection for newly discovered similar-product cards so seller evidence feeds downstream vocab expansion.
+                if ((reserveDetailSlotForSimilar || inspected.length < budgets.maxDetails) &&
+                    inspected.length < budgets.maxDetails &&
+                    !accessRestricted &&
+                    simDecoded.candidates.length > 0) {
+                    await inspectShortlist(buildInspectionOrder());
+                }
+                // If this probe yielded useful candidates in interactive mode and 1 search slot remains, preserve it for seller-vocab search.
+                if (mode !== "extended" && simGain.newPromising > 0 && budgets.maxSearchRequests - searchRequestsUsed <= 1) {
+                    break;
+                }
             }
         }
     }
@@ -1191,11 +1463,13 @@ async function resolveTorobSource(options) {
         await inspectShortlist(buildInspectionOrder());
     }
     // Closed-loop search resumption when no independent external offers are verified yet (including self-only panels),
-    // OR when inspected card/seller listings reveal unseen market phrasing.
+    // OR when inspected card/seller listings reveal unseen market phrasing on fragmented codeless products.
     const hasExternalVerifiedOffersYet = () => inspected.some((item) => item.read.blocked || verifiedExternalOffers(item).length > 0);
+    const totalConfirmedExternalSellers = () => inspected.reduce((sum, item) => sum + verifiedExternalOffers(item).length, 0);
     const onlySelfStoreVerifiedSoFar = () => !hasExternalVerifiedOffersYet() &&
         inspected.some((item) => verifiedOwnOffers(item).length > 0 || buildItemPanelEvidence(item).ownStoreOfferCount > 0);
     const noExternalOffersYet = !hasExternalVerifiedOffersYet();
+    const fragmentedCodelessMarket = codeless && totalConfirmedExternalSellers() <= 2;
     if (fastIdx < fastQueries.length && searchTimeLeft > 0 && inspected.length < budgets.maxDetails && noExternalOffersYet) {
         const resumedFailure = await runSearchPhase(false);
         if (resumedFailure)
@@ -1203,19 +1477,19 @@ async function resolveTorobSource(options) {
         await inspectShortlist(buildInspectionOrder());
     }
     else if (!options.prk && !accessRestricted && searchTimeLeft > 800 && searchRequestsUsed < budgets.maxSearchRequests &&
-        budgetExhaustedReason === "none" && (codeless || mode === "extended" || noExternalOffersYet || onlySelfStoreVerifiedSoFar())) {
-        const extraExpansionRounds = onlySelfStoreVerifiedSoFar() ? 2 : 1;
+        budgetExhaustedReason === "none" && (fragmentedCodelessMarket || mode === "extended" || noExternalOffersYet || onlySelfStoreVerifiedSoFar())) {
+        const extraExpansionRounds = onlySelfStoreVerifiedSoFar() ? 2 : fragmentedCodelessMarket ? 2 : 1;
         for (let round = 0; round < extraExpansionRounds; round++) {
             if (accessRestricted || searchTimeLeft <= 800 || searchRequestsUsed >= budgets.maxSearchRequests || budgetExhaustedReason !== "none")
                 break;
-            if (round > 0 && hasExternalVerifiedOffersYet())
+            if (round > 0 && hasExternalVerifiedOffersYet() && !fragmentedCodelessMarket)
                 break;
             const observedTitles = [
                 ...inspected.flatMap((i) => i.offers.map((o) => o.listingTitle).filter((t) => Boolean(t))),
                 ...inspected.map((i) => i.result.candidate.titleFa).filter((t) => Boolean(t)),
             ];
-            const sellerVocab = ((codeless || onlySelfStoreVerifiedSoFar()) && (!hasExternalVerifiedOffersYet() || mode === "extended"))
-                ? (0, torob_query_1.extractVocabularyExpansions)(profile, observedTitles, [...observedSuggestedQueries], executedNormalizedQueries, 2)
+            const sellerVocab = ((codeless || onlySelfStoreVerifiedSoFar()) && (!hasExternalVerifiedOffersYet() || fragmentedCodelessMarket || mode === "extended"))
+                ? (0, torob_query_1.extractVocabularyExpansions)(profile, observedTitles, [...observedSuggestedQueries], executedNormalizedQueries, 3, options.matchConfig?.descriptorPolicy)
                 : [];
             const fallbackAction = sellerVocab.length
                 ? toAction(sellerVocab[0])
@@ -1504,7 +1778,8 @@ async function resolveTorobSource(options) {
     }
     const offersTruncated = panels.some((panel) => panel.offersTruncated);
     const coverage = buildCoverage(status === "SOURCE_UNAVAILABLE" ? "unavailable" : undefined, offers, offersTruncated);
-    const searchTrace = trackSearch(coverage);
+    const searchTrace = trackSearch(coverage, panelEvidenceMap);
+    const discoveryDiagnostics = searchTrace?.discoveryDiagnostics ?? buildDiscoveryDiagnostics(panelEvidenceMap);
     if (searchTrace) {
         for (const c of searchTrace.candidates) {
             const pe = panelEvidenceMap.get(c.prk);
@@ -1512,6 +1787,7 @@ async function resolveTorobSource(options) {
                 c.panelEvidence = pe;
         }
     }
+    const hybridIndexHintsUsed = [...candidates.values()].filter((m) => m.retrievalOrigin === "hybrid_index" || m.retrievalOrigin === "known_prk").length;
     const selected = {
         ...candidateTrace(primary.result, primary.extraction, candidates.get(candidate.prk)?.observations.map(({ query }) => query) ?? [], priorityMap.get(candidate.prk)),
         origin: primary.read.origin,
@@ -1545,6 +1821,8 @@ async function resolveTorobSource(options) {
             offerIdentityEvaluated: true,
             coverage,
             panelEvidence,
+            discoveryDiagnostics,
+            hybridIndexHintsUsed,
             selectedPanelPrks,
             selfOnlyPanelPrks,
             reviewPanelPrks,

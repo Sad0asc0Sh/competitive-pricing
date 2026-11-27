@@ -3,6 +3,7 @@ import { evaluateTorobCandidate } from "@/lib/pricing/matcher";
 import { parseIdentityTitle, parseTitle, type AttrValue, type ParsedTitle } from "@/lib/pricing/match/parse";
 import { normalizeText, NUMBER_WORDS, tokenize } from "@/lib/pricing/match/text";
 import type { PanelCompetitiveEvidence, SourceResult } from "@/lib/pricing/types";
+import { assessDiscoveryEligibility } from "./torob-identity";
 import type { KnownPrkHint } from "./types";
 
 export interface CatalogCardInput {
@@ -220,6 +221,9 @@ function rrfRankScore(
 
   const eligible: ScoredCandidate[] = [];
   for (const entry of cards) {
+    if (targetDoc.parsed.head?.cls && entry.doc.parsed.head?.cls &&
+        targetDoc.parsed.head.cls !== entry.doc.parsed.head.cls) continue;
+
     const matcherRes = evaluateTorobCandidate(target, {
       prk: entry.prk,
       titleFa: entry.titleFa ?? "",
@@ -228,10 +232,39 @@ function rrfRankScore(
       priceToman: entry.lastPriceToman,
       sellerCount: entry.reportedSellerCount,
     });
-    // Hard structural guardrails prevent mismatched frequencies, pack counts, or wrong device classes from polluting hints.
-    if (matcherRes.hasConflict || matcherRes.status === "IDENTITY_MISMATCH") continue;
-    if (targetDoc.parsed.head?.cls && entry.doc.parsed.head?.cls &&
-        targetDoc.parsed.head.cls !== entry.doc.parsed.head.cls) continue;
+    const cardElig = assessDiscoveryEligibility(target, targetDoc.parsed, matcherRes, { fromSimilarOrKnown: true });
+    // Stage A high-recall gate: block only hard structural contradictions; allow weak/cosmetic canonical cards
+    // and cards whose stronger identity evidence lives in seller listing titles.
+    if (cardElig.hardContradictions.length > 0) continue;
+
+    let bestMatcherScore = matcherRes.score;
+    let bestMatcherStatus = matcherRes.status;
+    let bestHardRejected = matcherRes.rejected;
+    let sellerEligible = false;
+
+    if (entry.sellerTitles?.length) {
+      for (const sTitle of entry.sellerTitles.slice(0, 12)) {
+        const sRes = evaluateTorobCandidate(target, {
+          prk: entry.prk,
+          titleFa: sTitle,
+          titleEn: entry.titleEn,
+          specs: entry.specs,
+        });
+        const sElig = assessDiscoveryEligibility(target, targetDoc.parsed, sRes, { fromSimilarOrKnown: true });
+        if (sElig.eligible && sElig.hardContradictions.length === 0) {
+          sellerEligible = true;
+          if (sRes.score > bestMatcherScore) {
+            bestMatcherScore = sRes.score;
+            bestMatcherStatus = sRes.status === "MATCH_CONFIRMED" && matcherRes.status !== "MATCH_CONFIRMED"
+              ? "REVIEW_REQUIRED"
+              : sRes.status;
+            bestHardRejected = false;
+          }
+        }
+      }
+    }
+
+    if (!cardElig.eligible && !sellerEligible) continue;
 
     let lexOverlap = 0;
     for (const term of queryTerms) {
@@ -260,16 +293,16 @@ function rrfRankScore(
       structuredHits += 1;
     }
     const structuredScore = structuredHits / Math.max(1, structuredDenom + 1);
-    if (lexicalScore <= 0 && trigramScore < 0.08 && structuredScore <= 0) continue;
+    if (lexicalScore <= 0 && trigramScore < 0.08 && structuredScore <= 0 && !sellerEligible) continue;
 
     eligible.push({
       entry,
       lexicalScore,
       trigramScore,
       structuredScore,
-      matcherScore: matcherRes.score,
-      matcherStatus: matcherRes.status,
-      hardRejected: matcherRes.rejected,
+      matcherScore: bestMatcherScore,
+      matcherStatus: bestMatcherStatus,
+      hardRejected: bestHardRejected,
     });
   }
 
@@ -406,7 +439,8 @@ export function buildLinkRecordsFromSource(opts: {
 }): ProductPrkLinkRecord[] {
   const evList: PanelCompetitiveEvidence[] = opts.source.torob?.panelEvidence ?? [];
   const selectedSet = new Set(opts.source.torob?.selectedPanelPrks ?? (opts.source.prk ? [opts.source.prk] : []));
-  return evList.map((ev) => {
+  const seenPrks = new Set(evList.map((ev) => ev.prk));
+  const evRecords: ProductPrkLinkRecord[] = evList.map((ev) => {
     const relationStatus: ProductPrkLinkRecord["relationStatus"] =
       ev.groupRole === "self_only" ? "self_only"
       : ev.groupRole === "rejected" || ev.identityStatus === "IDENTITY_MISMATCH" ? "rejected"
@@ -418,7 +452,7 @@ export function buildLinkRecordsFromSource(opts: {
       relationStatus,
       identityScore: ev.score ?? null,
       confidence: ev.matchConfidence,
-      origin: "auto_discovery",
+      origin: ev.retrievalOrigin === "hybrid_index" ? "hybrid_index" : "auto_discovery",
       isPrimary: selectedSet.has(ev.prk) && ev.groupRole === "primary",
       ownStorePresent: ev.ownStoreOfferCount > 0,
       externalCompetitorCount: ev.confirmedCompetitorCount > 0 ? ev.confirmedCompetitorCount : ev.uniqueExternalSellerCount,
@@ -428,6 +462,27 @@ export function buildLinkRecordsFromSource(opts: {
       lastVerifiedAt: opts.now,
     };
   });
+  const diagRecords: ProductPrkLinkRecord[] = (opts.source.torob?.discoveryDiagnostics ?? [])
+    .filter((d) => !seenPrks.has(d.prk))
+    .map((d) => ({
+      productId: opts.productId,
+      prk: d.prk,
+      relationStatus:
+        d.classification === "CONFIRMED_COMPATIBLE" ? "confirmed"
+        : d.classification === "CONFIRMED_INCOMPATIBLE" ? "rejected"
+        : "review_required",
+      identityScore: null,
+      confidence: null,
+      origin: d.retrievalOrigin === "hybrid_index" ? "hybrid_index" : "auto_discovery",
+      isPrimary: false,
+      ownStorePresent: false,
+      externalCompetitorCount: d.externalCompetitorCount,
+      reportedSellerCount: null,
+      discoveringQueries: [],
+      lastReason: d.reasonForInclusionOrExclusion,
+      lastVerifiedAt: opts.now,
+    }));
+  return [...evRecords, ...diagRecords];
 }
 
 /**

@@ -8,6 +8,7 @@
  */
 import type { SystemOneVerdict, TorobIdentityStatus, TorobTitleState } from "./types";
 import { compareParsed, conflictingPrimarySpec, DEFAULT_MATCH_FLAGS, relateCodes, type MatchFlags } from "./match/compare";
+import type { DescriptorPolicyConfig } from "./match/descriptors";
 import { areKnownBrandSetsCompatible } from "./match/lexicon";
 import { parseIdentityTitle, parseTitle, type IdentitySpec, type ParsedTitle } from "./match/parse";
 import { isInternalOrDatabaseId as isInternalId, normalizeText } from "./match/text";
@@ -34,6 +35,7 @@ export interface ProductMatchTarget {
   anchorPriceToman?: number | null;
   rejectBelowPct?: number;
   approveAbovePct?: number;
+  descriptorPolicy?: DescriptorPolicyConfig;
 }
 
 export interface ScoredCandidateResult {
@@ -188,6 +190,7 @@ export function evaluateTorobCandidate(
     rejectBelowPct,
     approveAbovePct,
     flags: MATCHER_FLAGS,
+    descriptorPolicy: target.descriptorPolicy,
   });
 
   const notes = [...r.notes];

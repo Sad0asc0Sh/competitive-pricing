@@ -1,5 +1,8 @@
 import { faDate, faNum, torobStatusLabel } from "@/lib/format";
 import type {
+  AdminDiscoveryState,
+  DiscoveryCardClassification,
+  DiscoveryRetrievalOrigin,
   PanelCompetitiveEvidence,
   PanelGroupRole,
   TorobCoverageDiagnostics,
@@ -7,7 +10,31 @@ import type {
   TorobInquiryAudit,
   TorobOfferEvidence,
   TorobOfferIdentity,
+  TorobPrkDiagnostic,
 } from "@/lib/pricing/types";
+
+const adminStateMeta: Record<AdminDiscoveryState, { label: string; cls: string }> = {
+  never_discovered: { label: "کشف‌نشده", cls: "bg-slate-100 text-slate-700" },
+  discovered_not_inspected: { label: "کشف‌شده (بدون بررسی جزئیات)", cls: "bg-sky-50 text-sky-900" },
+  inspected_insufficient_evidence: { label: "بررسی‌شده — شواهد ناکافی", cls: "bg-amber-50 text-amber-900" },
+  confirmed_compatible: { label: "هم‌هویت تأییدشده", cls: "bg-emerald-50 text-emerald-800" },
+  confirmed_incompatible: { label: "ناسازگار تأییدشده", cls: "bg-rose-50 text-rose-800" },
+};
+
+const classificationLabels: Record<DiscoveryCardClassification, string> = {
+  CONFIRMED_COMPATIBLE: "سازگار قطعی",
+  POTENTIAL_MATCH: "نامزد بالقوه",
+  CONFIRMED_INCOMPATIBLE: "ناسازگار قطعی",
+  NOT_YET_INSPECTED: "در انتظار بررسی",
+};
+
+const retrievalOriginLabels: Record<DiscoveryRetrievalOrigin, string> = {
+  search: "جست‌وجو",
+  similar_products: "کالاهای مشابه",
+  known_prk: "گراف شناخته‌شده",
+  hybrid_index: "نمایه ترکیبی",
+  direct_prk: "PRK مستقیم",
+};
 
 const groupRoleMeta: Record<PanelGroupRole, { label: string; cls: string; groupTitle: string }> = {
   primary: { label: "پنل مرجع اصلی", cls: "bg-emerald-100 text-emerald-900", groupTitle: "پنل‌های منتخب بازار" },
@@ -202,6 +229,7 @@ export function TorobOfferDetails({ evidence }: { evidence: TorobOfferEvidence }
     <details className="mt-1 max-w-lg text-xs whitespace-normal text-slate-700">
       <summary className="cursor-pointer">
         <span className={`badge ${color}`}>{torobStatusLabel[identity.status]}</span>
+        {identity.identityScore != null && <span className="mr-1.5 text-[11px] text-slate-500 num">({faNum(Math.round(identity.identityScore))}٪)</span>}
       </summary>
       <div className="mt-2 space-y-1.5 rounded-lg border border-slate-200 bg-slate-50 p-2 leading-5">
         <p>{identity.reason}</p>
@@ -211,6 +239,15 @@ export function TorobOfferDetails({ evidence }: { evidence: TorobOfferEvidence }
           {identity.sources.map((source) => <span key={source}>{sourceLabels[source]}</span>)}
         </div>
         <Specs specs={identity.specs} expected={identity.expectedSpecs} />
+        {Boolean(identity.matchedAttributes?.length) && (
+          <p className="text-[11px] text-emerald-800"><strong>ویژگی‌های هم‌تراز:</strong> {identity.matchedAttributes!.join("، ")}</p>
+        )}
+        {Boolean(identity.missingAttributes?.length) && (
+          <p className="text-[11px] text-amber-900"><strong>شواهد نامشخص / نیازمند بررسی:</strong> {identity.missingAttributes!.join("، ")}</p>
+        )}
+        {Boolean(identity.conflictingAttributes?.length) && (
+          <p className="text-[11px] text-rose-800"><strong>تعارض‌های فنی:</strong> {identity.conflictingAttributes!.join("، ")}</p>
+        )}
         {Boolean(identity.brands?.length || identity.models?.length) && <p dir="auto">{[...(identity.brands ?? []), ...(identity.models ?? [])].join(" · ")}</p>}
         {identity.packageUnits != null && <p>تعداد در بسته · {faNum(identity.packageUnits)}</p>}
         {identity.sharedImage && <p>نشانی تصویر مشترک در کارت و پیشنهاد فروشنده ثبت شد.</p>}
@@ -220,17 +257,86 @@ export function TorobOfferDetails({ evidence }: { evidence: TorobOfferEvidence }
   );
 }
 
+function DiscoveryDiagnosticsSection({ diagnostics }: { diagnostics?: TorobPrkDiagnostic[] }) {
+  if (!diagnostics?.length) return null;
+  return (
+    <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-bold text-slate-900">وضعیت کشف و ارزیابی تک‌تک کارت‌ها ({faNum(diagnostics.length)} PRK)</span>
+        <span className="text-[11px] text-slate-500">تفکیک منشأ کشف، عنوان فروشندگان، شواهد هم‌تراز و دلیل شمول/رد</span>
+      </div>
+      <div className="space-y-2">
+        {diagnostics.map((d) => {
+          const stateStyle = adminStateMeta[d.adminState];
+          return (
+            <details key={d.prk} className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+              <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                  <span className={`badge ${stateStyle.cls}`}>{stateStyle.label}</span>
+                  <span className="badge bg-slate-100 text-slate-700">{classificationLabels[d.classification]}</span>
+                  <span className="badge bg-indigo-50 text-indigo-800">{retrievalOriginLabels[d.retrievalOrigin]}</span>
+                  <strong className="text-slate-900">{d.canonicalCardTitle || "بدون عنوان متعارف"}</strong>
+                </div>
+                <span className="num font-mono text-[11px] text-slate-600">PRK: {d.prk}</span>
+              </summary>
+              <div className="mt-2 space-y-1.5 leading-5 text-[11px]">
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-slate-600 num">
+                  <span>تکمیل استعلام جزئیات: <strong>{d.inspectionCompleted ? "بله" : "خیر"}</strong></span>
+                  {d.candidateInspectionPriority != null && <span>اولویت بررسی: <strong>{faNum(d.candidateInspectionPriority)}</strong></span>}
+                  {d.similarProductSeed && <span>بذر کالاهای مشابه: <strong className="font-mono">{d.similarProductSeed}</strong></span>}
+                  <span>فروشندگان تأییدشده: <strong className="text-emerald-800">{faNum(d.confirmedSellerCount)}</strong></span>
+                  <span>نیازمند بازبینی: <strong className="text-amber-800">{faNum(d.reviewRequiredSellerCount)}</strong></span>
+                  <span>ردشده: <strong className="text-rose-800">{faNum(d.rejectedSellerCount)}</strong></span>
+                  <span>رقبای مستقل: <strong>{faNum(d.externalCompetitorCount)}</strong></span>
+                </div>
+                <p><strong>دلیل شمول یا عدم شمول:</strong> {d.reasonForInclusionOrExclusion}</p>
+                {d.sellerSpecificTitles.length > 0 && (
+                  <p><strong>عنوان‌های فروشندگان:</strong> {d.sellerSpecificTitles.join(" | ")}</p>
+                )}
+                {d.technicalAttributeMatches.length > 0 && (
+                  <p className="text-emerald-800"><strong>انطباق‌های فنی:</strong> {d.technicalAttributeMatches.join("، ")}</p>
+                )}
+                {d.missingIdentityEvidence.length > 0 && (
+                  <p className="text-amber-900"><strong>شواهد نامشخص/کسری:</strong> {d.missingIdentityEvidence.join("، ")}</p>
+                )}
+                {d.hardContradictions.length > 0 && (
+                  <p className="text-rose-800"><strong>تعارض‌های سخت:</strong> {d.hardContradictions.join("، ")}</p>
+                )}
+                {d.sellerAssessments && d.sellerAssessments.length > 0 && (
+                  <ul className="space-y-1 rounded border border-slate-200 bg-white p-2">
+                    {d.sellerAssessments.map((s, idx) => (
+                      <li key={`${s.sellerName}-${idx}`} className="border-b border-slate-100 pb-1 last:border-b-0 last:pb-0">
+                        <span className="font-semibold text-slate-900">{s.sellerName}</span>
+                        {" · "}
+                        <span>{torobStatusLabel[s.status]} ({faNum(Math.round(s.identityScore))}٪)</span>
+                        {s.sellerListingTitle && <span> · «{s.sellerListingTitle}»</span>}
+                        <span className="block text-slate-500">{s.confidenceReason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function TorobSearchDetails({ audit }: { audit?: TorobInquiryAudit }) {
-  if (!audit?.search && !audit?.candidate && !audit?.coverage && !audit?.panelEvidence?.length) return null;
+  if (!audit?.search && !audit?.candidate && !audit?.coverage && !audit?.panelEvidence?.length && !audit?.discoveryDiagnostics?.length) return null;
   const queries = audit.search?.queries ?? [];
   const cards = audit.search?.candidates?.length ? audit.search.candidates : audit.candidate ? [audit.candidate] : [];
   const counts = audit.offerIdentityCounts;
   const coverage = audit.coverage ?? audit.search?.coverage;
   const covStyle = coverage ? coverageLabels[coverage.status] : undefined;
+  const diagnostics = audit.discoveryDiagnostics ?? audit.search?.discoveryDiagnostics;
   return (
     <details className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-700">
       <summary className="cursor-pointer font-semibold">شواهد جست‌وجو و تطبیق ترب</summary>
       <TorobPanelComparison panels={audit?.panelEvidence} />
+      <DiscoveryDiagnosticsSection diagnostics={diagnostics} />
       {coverage && covStyle && (
         <div className="space-y-1.5 rounded-lg border border-slate-200 bg-white p-2">
           <div className="flex flex-wrap items-center gap-2">

@@ -4,6 +4,7 @@ exports.decomposeTargetProduct = decomposeTargetProduct;
 exports.buildSearchQueryPlan = buildSearchQueryPlan;
 exports.buildSearchQueries = buildSearchQueries;
 exports.extractVocabularyExpansions = extractVocabularyExpansions;
+const descriptors_1 = require("../pricing/match/descriptors");
 const lexicon_1 = require("../pricing/match/lexicon");
 const parse_1 = require("../pricing/match/parse");
 const text_1 = require("../pricing/match/text");
@@ -223,13 +224,34 @@ function buildSearchQueryPlan(productName, sku) {
             const chSpec = technicalSpecs.find((s) => s.key === "ch");
             const [channels] = parsed.attrs.ch ?? [];
             const styleToken = parsed.designStyle ? (0, text_1.normalizeText)(parsed.designStyle.replace(/^طرح\s+/u, "")) : "";
-            const functionalDescriptors = words.filter((w) => w !== styleToken);
-            const primaryDesc = functionalDescriptors[0] ?? words[0];
-            const secondaryDesc = functionalDescriptors[1];
+            const allDescWords = parsed.descriptorWords ?? words;
+            const classified = allDescWords.map((w) => (0, descriptors_1.classifyDescriptorToken)(w, "acc:remote"));
+            const colorWords = classified.filter((d) => d.group === "color").map((d) => d.token);
+            const marketingWords = classified.filter((d) => d.group === "marketing").map((d) => d.token);
+            const softStyleWords = classified.filter((d) => ["cosmetic_style", "shape", "material"].includes(d.group)).map((d) => d.token);
+            const functionalDescriptors = words.filter((w) => w !== styleToken && !marketingWords.includes(w) && !colorWords.includes(w) && !softStyleWords.includes(w));
+            const primaryDesc = functionalDescriptors[0] ?? colorWords[0] ?? softStyleWords[0] ?? words[0];
+            const secondaryDesc = functionalDescriptors[1] ?? (functionalDescriptors[0] ? colorWords[0] ?? softStyleWords[0] : colorWords[1] ?? softStyleWords[1]);
             const pairedDesc = functionalDescriptors.slice(0, 2).join(" ");
-            const altStyle = parsed.designStyle ?? (primaryDesc ? `طرح ${primaryDesc}` : undefined);
-            // Preserve proven fast core remote queries while ensuring strong brandless/wall/channel/learn-code/design/alias coverage.
-            add([...head, primaryDesc, rf, brand].filter(Boolean).join(" "), "technical", "fast", 94);
+            // فقط وقتی واژهٔ اصلی توصیف طرح/مدل واقعی است (نه صفت تبلیغاتی مثل «لوکس» یا رنگ/جنس) عبارت «طرح ...» بساز.
+            const designCandidate = functionalDescriptors.find((w) => w !== "لرن" && w !== "دیواری");
+            const altStyle = parsed.designStyle ?? (designCandidate ? `طرح ${designCandidate}` : undefined);
+            const colorDesc = colorWords[0];
+            const marketingDesc = marketingWords[0];
+            // Preserve proven fast core remote queries while ensuring strong brandless/wall/channel/learn-code/design/color/alias coverage.
+            if (functionalDescriptors.length || brand) {
+                add([...head, primaryDesc, rf, brand].filter(Boolean).join(" "), "technical", "fast", 94);
+            }
+            else if (rf && (hasBt || colorDesc)) {
+                add([...head, hasBt ? "بلوتوثی" : undefined, colorDesc, rf].filter(Boolean).join(" "), "technical", "fast", 95);
+                if (colorDesc) {
+                    add([...head, colorDesc, "فرکانس", rf].filter(Boolean).join(" "), "alternative_wording", "fast", 92);
+                }
+                add([...head, hasBt ? "بلوتوثی" : undefined, rf].filter(Boolean).join(" "), "technical", "fast", 90);
+                if (marketingDesc && hasBt) {
+                    add([...head, "بلوتوثی", marketingDesc].join(" "), "descriptor", "expand", 82);
+                }
+            }
             if (functionalDescriptors.length >= 2 && rf) {
                 add([...head, pairedDesc, rf, brand].filter(Boolean).join(" "), "technical", "fast", 93);
             }
@@ -248,7 +270,7 @@ function buildSearchQueryPlan(productName, sku) {
                 add([...head, primaryDesc, brand].join(" "), "brand", "fast", 86);
             if (pairedDesc && !brand)
                 add([...head, pairedDesc].join(" "), "descriptor", "expand", 84);
-            else if (primaryDesc)
+            else if (primaryDesc && functionalDescriptors.length)
                 add([...head, primaryDesc].join(" "), "descriptor", "fast", 82);
             if (primaryDesc && buttons)
                 add([...head, primaryDesc, String(buttons), "دکمه"].join(" "), "descriptor", "fast", 78);
@@ -276,6 +298,9 @@ function buildSearchQueryPlan(productName, sku) {
             }
             if (hasBt && rf && primaryDesc) {
                 add([...head, "بلوتوثی", rf].filter(Boolean).join(" "), "technical", "expand", 81);
+            }
+            if (colorDesc && rf) {
+                add([...head, colorDesc, rf].join(" "), "descriptor", "expand", 85);
             }
             if (brandFa && (rf || primaryDesc)) {
                 add([...head, primaryDesc, rf, brandFa].filter(Boolean).join(" "), "brand", "expand", 84);
@@ -346,22 +371,21 @@ function buildSearchQueries(productName, sku) {
     const selected = fast.length >= 3 || plan.length <= 6 ? (fast.length ? fast : plan) : plan;
     return selected.slice(0, 6).map(({ query }) => query);
 }
-function extractVocabularyExpansions(profile, observedTitles, suggestedQueries, alreadyNormalized, limit = 2) {
-    const expansions = [];
+function extractVocabularyExpansions(profile, observedTitles, suggestedQueries, alreadyNormalized, limit = 2, descriptorPolicy) {
+    const candidates = [];
     const seenBag = new Set([...alreadyNormalized].map(tokenBagKey));
+    const seenNorm = new Set(alreadyNormalized);
     const add = (query, strategy, priority) => {
-        if (expansions.length >= limit)
-            return;
         const text = query.replace(/[\u200c\u200d\s]+/g, " ").trim().slice(0, 180);
         const normalized = (0, text_1.normalizeText)(text);
-        if (normalized.length < 3 || alreadyNormalized.has(normalized))
+        if (normalized.length < 3 || seenNorm.has(normalized))
             return;
         const bag = tokenBagKey(normalized);
         if (seenBag.has(bag))
             return;
-        alreadyNormalized.add(normalized);
+        seenNorm.add(normalized);
         seenBag.add(bag);
-        expansions.push({ query: text, strategy, phase: "expand", priority });
+        candidates.push({ query: text, strategy, phase: "expand", priority });
     };
     for (const suggestion of suggestedQueries) {
         const parsed = (0, parse_1.parseTitle)(suggestion);
@@ -376,27 +400,62 @@ function extractVocabularyExpansions(profile, observedTitles, suggestedQueries, 
     const head = profile.headTokens;
     const freq = profile.parsed.attrs.frequency?.[0];
     const rf = typeof freq === "number" ? formatFrequency(freq).short : undefined;
+    const hasBt = profile.parsed.attrs.bluetooth?.includes("yes");
+    const targetDescWords = new Set(profile.parsed.descriptorWords ?? profile.descriptors);
+    const targetColors = (profile.parsed.descriptorWords ?? [])
+        .filter((w) => (0, descriptors_1.classifyDescriptorToken)(w, profile.productClass, descriptorPolicy).group === "color");
+    // استخراج واژگان بازار از عنوان‌های فروشندگان و کارت‌های هم‌تراز (با شمارش فراوانی برای رتبه‌بندی بازدهی کشف)
+    const termCounts = new Map();
     for (const title of observedTitles) {
-        if (expansions.length >= limit)
-            break;
         const parsed = (0, parse_1.parseTitle)(title);
         if (profile.productClass && parsed.head && parsed.head.cls !== profile.productClass)
             continue;
+        if (parsed.counterfeit || parsed.used || parsed.defective || parsed.pack)
+            continue;
+        // اگر مشخصات فنی اصلی متضاد است (مثلاً فرکانس دیگر)، واژگان آن عنوان را برای گسترش جست‌وجو نگیر
+        const hasAttrConflict = Object.entries(profile.parsed.attrs).some(([k, vals]) => vals.length > 0 && parsed.attrs[k]?.length && !parsed.attrs[k].some((v) => vals.includes(v)));
+        if (hasAttrConflict)
+            continue;
         if (parsed.designStyle && head.length) {
-            add([...head, parsed.designStyle, rf, profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", 76);
+            add([...head, parsed.designStyle, rf, profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", 77);
         }
         if (profile.productClass === "acc:remote" && parsed.tokens.includes("لرن") && parsed.tokens.includes("کد") && head.length) {
             const sideDesc = profile.descriptors.find((d) => d !== "لرن");
-            add([...head, sideDesc, "کد لرن", rf, profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", 75);
+            add([...head, sideDesc, "کد لرن", rf, profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", 76);
         }
-        if (profile.productClass === "acc:remote" && parsed.attrs.bluetooth?.includes("yes") && !profile.parsed.attrs.bluetooth?.includes("yes") && head.length) {
+        if (profile.productClass === "acc:remote" && parsed.attrs.bluetooth?.includes("yes") && !hasBt && head.length) {
             const sideDesc = profile.descriptors.find((d) => d !== "لرن") ?? profile.descriptors[0];
-            add([...head, sideDesc, "بلوتوثی", rf].filter(Boolean).join(" "), "vocabulary_expansion", 73);
+            add([...head, sideDesc, "بلوتوثی", rf].filter(Boolean).join(" "), "vocabulary_expansion", 74);
         }
         const freqSpec = profile.technicalSpecs.find((s) => s.key === "frequency");
         if (freqSpec?.alternatives[0] && parsed.tokens.some((t) => t.endsWith("mhz") || t.endsWith("khz")) && head.length) {
-            add([...head, profile.descriptors[0], freqSpec.alternatives[0], profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", 74);
+            add([...head, profile.descriptors[0], freqSpec.alternatives[0], profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", 75);
+        }
+        for (const w of parsed.descriptorWords ?? parsed.words) {
+            if (targetDescWords.has(w))
+                continue;
+            const cls = (0, descriptors_1.classifyDescriptorToken)(w, profile.productClass, descriptorPolicy);
+            if (["cosmetic_style", "material", "shape", "color", "marketing", "unknown"].includes(cls.group)) {
+                const prev = termCounts.get(w);
+                termCounts.set(w, { group: cls.group, count: (prev?.count ?? 0) + 1 });
+            }
         }
     }
-    return expansions;
+    if (head.length && (rf || hasBt || targetColors.length)) {
+        const rankedTerms = [...termCounts.entries()].sort((a, b) => {
+            const weight = (g) => (g === "cosmetic_style" || g === "material" || g === "shape" ? 2 : 1);
+            return b[1].count * weight(b[1].group) - a[1].count * weight(a[1].group);
+        });
+        for (const [term, info] of rankedTerms.slice(0, 6)) {
+            const prio = 80 + Math.min(8, info.count * 2);
+            add([...head, hasBt ? "بلوتوثی" : undefined, term, rf, profile.brands[0]].filter(Boolean).join(" "), "vocabulary_expansion", prio);
+            if (targetColors[0] && info.group === "shape") {
+                add([...head, hasBt ? "بلوتوثی" : undefined, term, targetColors[0]].filter(Boolean).join(" "), "vocabulary_expansion", prio - 1);
+            }
+        }
+    }
+    const chosen = candidates.sort((a, b) => b.priority - a.priority).slice(0, limit);
+    for (const item of chosen)
+        alreadyNormalized.add((0, text_1.normalizeText)(item.query));
+    return chosen;
 }

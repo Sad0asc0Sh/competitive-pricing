@@ -1,3 +1,4 @@
+import type { DescriptorPolicyConfig } from "@/lib/pricing/match/descriptors";
 import type { SourceResult, SupplierQuote, TorobLinkConfirmation } from "@/lib/pricing/types";
 
 export interface KnownPrkHint {
@@ -22,6 +23,7 @@ export interface SourceMatchConfig {
   hybridIndexEnabled?: boolean;
   multiPrkGraphEnabled?: boolean;
   singleFlightEnabled?: boolean;
+  descriptorPolicy?: DescriptorPolicyConfig;
 }
 
 export interface SourceProduct {

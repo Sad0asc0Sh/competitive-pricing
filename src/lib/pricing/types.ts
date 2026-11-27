@@ -117,6 +117,70 @@ export type TorobTitleOrigin = "search_card" | "product_details" | "seller_listi
 export type TorobTitleState = "present" | "source_missing" | "parser_missing" | "mapping_missing";
 export type TorobDataOrigin = "torob_mcp" | "torob_api" | "torob_page";
 
+export interface SellerIdentityAssessment {
+  prk: string;
+  sellerId?: string;
+  sellerName: string;
+
+  canonicalCardTitle: string;
+  sellerListingTitle: string;
+
+  matchedAttributes: string[];
+  missingAttributes: string[];
+  conflictingAttributes: string[];
+
+  identityScore: number;
+
+  status:
+    | "MATCH_CONFIRMED"
+    | "REVIEW_REQUIRED"
+    | "IDENTITY_MISMATCH";
+
+  evidenceSources: string[];
+  confidenceReason: string;
+}
+
+export type DiscoveryCardClassification =
+  | "CONFIRMED_COMPATIBLE"
+  | "POTENTIAL_MATCH"
+  | "CONFIRMED_INCOMPATIBLE"
+  | "NOT_YET_INSPECTED";
+
+export type DiscoveryRetrievalOrigin =
+  | "search"
+  | "similar_products"
+  | "known_prk"
+  | "hybrid_index"
+  | "direct_prk";
+
+export type AdminDiscoveryState =
+  | "never_discovered"
+  | "discovered_not_inspected"
+  | "inspected_insufficient_evidence"
+  | "confirmed_compatible"
+  | "confirmed_incompatible";
+
+export interface TorobPrkDiagnostic {
+  prk: string;
+  canonicalCardTitle: string | null;
+  sellerSpecificTitles: string[];
+  retrievalOrigin: DiscoveryRetrievalOrigin;
+  similarProductSeed: string | null;
+  classification: DiscoveryCardClassification;
+  adminState: AdminDiscoveryState;
+  technicalAttributeMatches: string[];
+  missingIdentityEvidence: string[];
+  hardContradictions: string[];
+  candidateInspectionPriority: number | null;
+  inspectionCompleted: boolean;
+  confirmedSellerCount: number;
+  reviewRequiredSellerCount: number;
+  rejectedSellerCount: number;
+  externalCompetitorCount: number;
+  reasonForInclusionOrExclusion: string;
+  sellerAssessments?: SellerIdentityAssessment[];
+}
+
 export interface TorobOfferIdentity {
   prk: string;
   status: Exclude<TorobIdentityStatus, "EXTRACTION_INCOMPLETE">;
@@ -129,6 +193,11 @@ export interface TorobOfferIdentity {
   models?: string[];
   packageUnits?: number;
   sharedImage?: boolean;
+  identityScore?: number;
+  matchedAttributes?: string[];
+  missingAttributes?: string[];
+  conflictingAttributes?: string[];
+  assessment?: SellerIdentityAssessment;
 }
 
 export type TorobCoverageStatus = "complete_within_scope" | "partial" | "uncertain" | "unavailable";
@@ -182,6 +251,7 @@ export type PanelGroupRole = "primary" | "compatible_secondary" | "self_only" | 
 export interface PanelCompetitiveEvidence {
   prk: string;
   identityStatus: "MATCH_CONFIRMED" | "REVIEW_REQUIRED" | "IDENTITY_MISMATCH";
+  classification?: DiscoveryCardClassification;
   title?: string | null;
   url?: string | null;
   matchConfidence: number;
@@ -196,6 +266,13 @@ export interface PanelCompetitiveEvidence {
   offersTruncated: boolean;
   coverageStatus: PanelCoverageStatus;
   groupRole?: PanelGroupRole;
+  retrievalOrigin?: DiscoveryRetrievalOrigin;
+  similarProductSeed?: string | null;
+  sellerSpecificTitles?: string[];
+  technicalAttributeMatches?: string[];
+  missingIdentityEvidence?: string[];
+  hardContradictions?: string[];
+  sellerAssessments?: SellerIdentityAssessment[];
   freshness?: string | null;
   freshExternalCount?: number;
   discoveringQueries?: string[];
@@ -209,6 +286,9 @@ export interface TorobCandidateTrace {
   url: string;
   queries: number[];
   observations?: { query: number; titleFa: string | null; titleEn: string | null }[];
+  retrievalOrigin?: DiscoveryRetrievalOrigin;
+  similarProductSeed?: string | null;
+  classification?: DiscoveryCardClassification;
   titleFa: string | null;
   titleEn: string | null;
   titleState: TorobTitleState;
@@ -253,6 +333,7 @@ export interface TorobSearchTrace {
   accepted: number;
   eligible: number;
   coverage?: TorobCoverageDiagnostics;
+  discoveryDiagnostics?: TorobPrkDiagnostic[];
 }
 
 export interface TorobSourceAssessment {
@@ -270,6 +351,7 @@ export interface TorobSourceAssessment {
   offerIdentityEvaluated?: true;
   coverage?: TorobCoverageDiagnostics;
   panelEvidence?: PanelCompetitiveEvidence[];
+  discoveryDiagnostics?: TorobPrkDiagnostic[];
   selectedPanelPrks?: string[];
   selfOnlyPanelPrks?: string[];
   reviewPanelPrks?: string[];
@@ -292,6 +374,7 @@ export interface TorobInquiryReport {
   offerIdentityCounts?: Record<TorobOfferIdentity["status"], number>;
   coverage?: TorobCoverageDiagnostics;
   panelEvidence?: PanelCompetitiveEvidence[];
+  discoveryDiagnostics?: TorobPrkDiagnostic[];
   selectedPanelPrks?: string[];
   selfOnlyPanelPrks?: string[];
   reviewPanelPrks?: string[];

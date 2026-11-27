@@ -477,6 +477,7 @@ function runPricingPipeline(source, ctx) {
             ...(source.torob.reviewPanelPrks ? { reviewPanelPrks: source.torob.reviewPanelPrks } : {}),
             ...(source.torob.rejectedPanelPrks ? { rejectedPanelPrks: source.torob.rejectedPanelPrks } : {}),
             ...(source.torob.ownStoreOnlyOnPrimary !== undefined ? { ownStoreOnlyOnPrimary: source.torob.ownStoreOnlyOnPrimary } : {}),
+            ...(source.torob.discoveryDiagnostics ? { discoveryDiagnostics: source.torob.discoveryDiagnostics } : {}),
             ...(identityAssessed ? { offerIdentityCounts: {
                     MATCH_CONFIRMED: identityConfirmed.length,
                     REVIEW_REQUIRED: source.offers.filter((offer) => !offer.torobIdentity || offer.torobIdentity.status === "REVIEW_REQUIRED").length,
@@ -492,6 +493,7 @@ function runPricingPipeline(source, ctx) {
                 sellerTitle: source.meta?.sellerTitle, aiIdentityCheck: source.meta?.aiIdentityCheck, adminConfirmed: source.torob.adminConfirmed,
                 coverage: source.torob.coverage,
                 panelEvidence: source.torob.panelEvidence,
+                discoveryDiagnostics: source.torob.discoveryDiagnostics,
                 selectedPanelPrks: source.torob.selectedPanelPrks,
                 selfOnlyPanelPrks: source.torob.selfOnlyPanelPrks,
                 reviewPanelPrks: source.torob.reviewPanelPrks,

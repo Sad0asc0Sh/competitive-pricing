@@ -1,6 +1,7 @@
 /**
  * تجزیهٔ ساختاریافتهٔ عنوان محصول: برند، کدهای مدل، رده (head noun)، مشخصات تایپ‌شده، پک/استوک/کپی و واژه‌های توصیفی.
  */
+import { analyzeTitleDescriptors, type ClassifiedDescriptors } from "./descriptors";
 import {
   COMPANION_MARKERS,
   COMPAT_MARKERS,
@@ -62,6 +63,12 @@ export interface ParsedTitle {
   /** قطعه/لوازم جانبی که در انتهای عنوان پس از نام دستگاه اصلی آمده است (مثل «دوربین ... پایه دیواری» یا «کلید اتوماتیک ... کنتاکت کمکی») */
   trailingAccessory: string | null;
   words: string[];
+  /** توصیف‌گرهای ساختاریافته (تبلیغاتی، ظاهری، رنگ، شکل، جنس، ناشناخته) با حفظ واژه‌های غیرکمرا مثل «رنگی» */
+  descriptors?: ClassifiedDescriptors;
+  /** واژه‌های توصیفی کامل شامل رنگ/جنسِ غیرفنی (مثلاً «رنگی» برای ریموت) جهت رده‌بندی حساس به دسته */
+  descriptorWords?: string[];
+  /** اطلاعات کمکی استخراج‌شده از مشخصات کارت (مثل باتری یا جنس بدنه) بدون تزریق تعارض اشتباه */
+  specDescriptors?: string[];
 }
 
 // ───────────────────────────── کد مدل ─────────────────────────────
@@ -978,14 +985,23 @@ export function parseTitle(text: string | null | undefined, opts: ParseOptions =
 
   // واژه‌های توصیفی (هر آنچه مصرف نشده و بی‌اثر نیست)
   const words: string[] = [];
+  const descriptorWords: string[] = [];
+  const COLOR_MATERIAL_KEEP = new Set(["رنگی", "فلزی", "پلاستیکی"]);
   for (let i = 0; i < (family ? attrEnd : tokens.length); i++) {
     if (consumed.has(i)) continue;
     const tok = tokens[i];
     if (tok.length < 2 || /^\d/.test(tok) || /^[\d.]+$/.test(tok)) continue;
-    if (STOPWORDS.has(tok) || GENERIC_WORDS.has(tok)) continue;
+    if (STOPWORDS.has(tok)) continue;
     if (/^[a-z]+$/.test(tok) && tok.length < 3 && tok !== "fe" && tok !== "se") continue;
-    if (!words.includes(tok)) words.push(tok);
+    const isCameraColor = head?.cls === "camera" && tok === "رنگی";
+    if (!GENERIC_WORDS.has(tok)) {
+      if (!words.includes(tok)) words.push(tok);
+      if (!descriptorWords.includes(tok)) descriptorWords.push(tok);
+    } else if (!isCameraColor && COLOR_MATERIAL_KEEP.has(tok)) {
+      if (!descriptorWords.includes(tok)) descriptorWords.push(tok);
+    }
   }
+  const descriptors = analyzeTitleDescriptors(descriptorWords, head?.cls);
 
   const parsed: ParsedTitle = {
     norm,
@@ -1009,6 +1025,8 @@ export function parseTitle(text: string | null | undefined, opts: ParseOptions =
     withAccessories,
     trailingAccessory,
     words,
+    descriptors,
+    descriptorWords,
   };
   if (CACHE.size >= CACHE_MAX) CACHE.clear();
   CACHE.set(source, parsed);
@@ -1031,6 +1049,8 @@ export function parseIdentityTitle(text: string, specs?: IdentitySpec[]): Parsed
   let pack = title.pack;
   let packageUnits = title.packageUnits;
   const titleCodes = title.codes.filter((code) => !code.inCompat);
+  const specDescriptors = [...(title.specDescriptors ?? [])];
+  const descriptorWords = [...(title.descriptorWords ?? title.words)];
   const mergeAttr = (key: string, values: AttrValue[]) => {
     if (attrs[key]?.length && values.some((v) => !attrs[key].includes(v))) {
       evidenceConflicts.push(`مقادیر متناقض برای ${key} در عنوان و مشخصات ترب`);
@@ -1084,6 +1104,12 @@ export function parseIdentityTitle(text: string, specs?: IdentitySpec[]): Parsed
     } else if (title.head?.cls === "acc:remote" && /^(?:بلوتوث|bluetooth)$/.test(key)) {
       if (/^(?:دارد|بله|yes|true|supported)$/.test(value)) mergeAttr("bluetooth", ["yes"]);
       if (/^(?:ندارد|خیر|no|false|unsupported)$/.test(value)) mergeAttr("bluetooth", ["no"]);
+    } else if (title.head?.cls === "acc:remote" && /^(?:نوع|نوع ریموت|فناوری|تکنولوژی|type|remote type)$/.test(key)) {
+      const valTokens = tokenize(value);
+      if (valTokens.some((t) => BLUETOOTH_WORDS.has(t))) {
+        const negated = valTokens.some((t) => ["بدون", "غیر", "فاقد", "ندارد", "خیر", "no", "non", "non-bluetooth"].includes(t));
+        mergeAttr("bluetooth", [negated ? "no" : "yes"]);
+      }
     } else if (/^(?:ولتاژ|ولتاژ ورودی|ولتاژ تغذیه|input voltage|supply voltage|voltage)$/.test(key)) {
       const volts = parseTitle(/^\d+(?:\.\d+)?$/.test(value) ? `${value} v` : value).attrs.volt;
       if (volts?.length) mergeAttr("volt", volts);
@@ -1093,7 +1119,26 @@ export function parseIdentityTitle(text: string, specs?: IdentitySpec[]): Parsed
       const text = title.head?.cls === "acc:remote" ? `فرکانس ${value}` : value;
       addFrequencyAttrs(tokenize(text), frequency, new Set(), false);
       if (frequency.frequency?.length) mergeAttr("frequency", frequency.frequency);
+    } else if (/^(?:جنس|جنس بدنه|جنس قاب|رنگ|رنگ بندی|طرح|شکل|باتری|نوع باتری|material|color|shape|battery)$/.test(key)) {
+      specDescriptors.push(`${key}:${value}`);
+      for (const tok of tokenize(value)) {
+        if (tok.length >= 2 && !STOPWORDS.has(tok) && !descriptorWords.includes(tok)) {
+          descriptorWords.push(tok);
+        }
+      }
     }
   }
-  return { ...title, attrs, codes, brands, pack, packageUnits, evidenceConflicts: [...new Set(evidenceConflicts)] };
+  const descriptors = analyzeTitleDescriptors(descriptorWords, title.head?.cls);
+  return {
+    ...title,
+    attrs,
+    codes,
+    brands,
+    pack,
+    packageUnits,
+    descriptorWords,
+    descriptors,
+    ...(specDescriptors.length ? { specDescriptors: [...new Set(specDescriptors)] } : {}),
+    evidenceConflicts: [...new Set(evidenceConflicts)],
+  };
 }

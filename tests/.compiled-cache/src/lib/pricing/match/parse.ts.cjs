@@ -7,6 +7,7 @@ exports.parseIdentityTitle = parseIdentityTitle;
 /**
  * تجزیهٔ ساختاریافتهٔ عنوان محصول: برند، کدهای مدل، رده (head noun)، مشخصات تایپ‌شده، پک/استوک/کپی و واژه‌های توصیفی.
  */
+const descriptors_1 = require("./descriptors");
 const lexicon_1 = require("./lexicon");
 const text_1 = require("./text");
 // ───────────────────────────── کد مدل ─────────────────────────────
@@ -938,19 +939,31 @@ function parseTitle(text, opts = {}) {
     }
     // واژه‌های توصیفی (هر آنچه مصرف نشده و بی‌اثر نیست)
     const words = [];
+    const descriptorWords = [];
+    const COLOR_MATERIAL_KEEP = new Set(["رنگی", "فلزی", "پلاستیکی"]);
     for (let i = 0; i < (family ? attrEnd : tokens.length); i++) {
         if (consumed.has(i))
             continue;
         const tok = tokens[i];
         if (tok.length < 2 || /^\d/.test(tok) || /^[\d.]+$/.test(tok))
             continue;
-        if (lexicon_1.STOPWORDS.has(tok) || lexicon_1.GENERIC_WORDS.has(tok))
+        if (lexicon_1.STOPWORDS.has(tok))
             continue;
         if (/^[a-z]+$/.test(tok) && tok.length < 3 && tok !== "fe" && tok !== "se")
             continue;
-        if (!words.includes(tok))
-            words.push(tok);
+        const isCameraColor = head?.cls === "camera" && tok === "رنگی";
+        if (!lexicon_1.GENERIC_WORDS.has(tok)) {
+            if (!words.includes(tok))
+                words.push(tok);
+            if (!descriptorWords.includes(tok))
+                descriptorWords.push(tok);
+        }
+        else if (!isCameraColor && COLOR_MATERIAL_KEEP.has(tok)) {
+            if (!descriptorWords.includes(tok))
+                descriptorWords.push(tok);
+        }
     }
+    const descriptors = (0, descriptors_1.analyzeTitleDescriptors)(descriptorWords, head?.cls);
     const parsed = {
         norm,
         tokens,
@@ -973,6 +986,8 @@ function parseTitle(text, opts = {}) {
         withAccessories,
         trailingAccessory,
         words,
+        descriptors,
+        descriptorWords,
     };
     if (CACHE.size >= CACHE_MAX)
         CACHE.clear();
@@ -991,6 +1006,8 @@ function parseIdentityTitle(text, specs) {
     let pack = title.pack;
     let packageUnits = title.packageUnits;
     const titleCodes = title.codes.filter((code) => !code.inCompat);
+    const specDescriptors = [...(title.specDescriptors ?? [])];
+    const descriptorWords = [...(title.descriptorWords ?? title.words)];
     const mergeAttr = (key, values) => {
         if (attrs[key]?.length && values.some((v) => !attrs[key].includes(v))) {
             evidenceConflicts.push(`مقادیر متناقض برای ${key} در عنوان و مشخصات ترب`);
@@ -1060,6 +1077,13 @@ function parseIdentityTitle(text, specs) {
             if (/^(?:ندارد|خیر|no|false|unsupported)$/.test(value))
                 mergeAttr("bluetooth", ["no"]);
         }
+        else if (title.head?.cls === "acc:remote" && /^(?:نوع|نوع ریموت|فناوری|تکنولوژی|type|remote type)$/.test(key)) {
+            const valTokens = (0, text_1.tokenize)(value);
+            if (valTokens.some((t) => BLUETOOTH_WORDS.has(t))) {
+                const negated = valTokens.some((t) => ["بدون", "غیر", "فاقد", "ندارد", "خیر", "no", "non", "non-bluetooth"].includes(t));
+                mergeAttr("bluetooth", [negated ? "no" : "yes"]);
+            }
+        }
         else if (/^(?:ولتاژ|ولتاژ ورودی|ولتاژ تغذیه|input voltage|supply voltage|voltage)$/.test(key)) {
             const volts = parseTitle(/^\d+(?:\.\d+)?$/.test(value) ? `${value} v` : value).attrs.volt;
             if (volts?.length)
@@ -1073,6 +1097,26 @@ function parseIdentityTitle(text, specs) {
             if (frequency.frequency?.length)
                 mergeAttr("frequency", frequency.frequency);
         }
+        else if (/^(?:جنس|جنس بدنه|جنس قاب|رنگ|رنگ بندی|طرح|شکل|باتری|نوع باتری|material|color|shape|battery)$/.test(key)) {
+            specDescriptors.push(`${key}:${value}`);
+            for (const tok of (0, text_1.tokenize)(value)) {
+                if (tok.length >= 2 && !lexicon_1.STOPWORDS.has(tok) && !descriptorWords.includes(tok)) {
+                    descriptorWords.push(tok);
+                }
+            }
+        }
     }
-    return { ...title, attrs, codes, brands, pack, packageUnits, evidenceConflicts: [...new Set(evidenceConflicts)] };
+    const descriptors = (0, descriptors_1.analyzeTitleDescriptors)(descriptorWords, title.head?.cls);
+    return {
+        ...title,
+        attrs,
+        codes,
+        brands,
+        pack,
+        packageUnits,
+        descriptorWords,
+        descriptors,
+        ...(specDescriptors.length ? { specDescriptors: [...new Set(specDescriptors)] } : {}),
+        evidenceConflicts: [...new Set(evidenceConflicts)],
+    };
 }

@@ -114,6 +114,7 @@ function evaluateTorobCandidate(target, candidate, _minSellerCount = 1) {
         rejectBelowPct,
         approveAbovePct,
         flags: exports.MATCHER_FLAGS,
+        descriptorPolicy: target.descriptorPolicy,
     });
     const notes = [...r.notes];
     if (candidate.available === false)

@@ -1,0 +1,60 @@
+{
+  "observedAt": "2026-11-27T14:00:00.000Z",
+  "target": {
+    "productName": "ریموت بلوتوثی رنگی فرکانس 433 لوکس",
+    "sku": null,
+    "anchorPriceToman": 360000
+  },
+  "initialCard": {
+    "prk": "lux-bt-433-1",
+    "name_fa": "ریموت بلوتوثی رنگی فرکانس 433 لوکس",
+    "price_toman": 365000,
+    "shop_count": 1,
+    "shop_name": "باسلام",
+    "offers": [
+      {
+        "shop_name": "باسلام",
+        "shop_id": "basalam-ext",
+        "price_toman": 365000,
+        "product_title": "ریموت بلوتوثی رنگی فرکانس 433 لوکس",
+        "available": true
+      }
+    ]
+  },
+  "relatedSimilarCard": {
+    "prk": "fancy-bt-433-2",
+    "name_fa": "ریموت بلوتوثی فانتزی ۴۳۳ رنگی",
+    "price_toman": 340000,
+    "shop_count": 3,
+    "specs": [
+      { "key": "فرکانس", "value": "433 مگاهرتز" },
+      { "key": "نوع ریموت", "value": "بلوتوثی" },
+      { "key": "باتری", "value": "12V 27A" },
+      { "key": "جنس", "value": "سیلیکونی و پلاستیک فشرده" },
+      { "key": "تنوع رنگ", "value": "چند رنگ" }
+    ],
+    "offers": [
+      {
+        "shop_name": "بست کنترل",
+        "shop_id": "best-control",
+        "price_toman": 335000,
+        "product_title": "ریموت بلوتوثی فرکانس 433 سیلیکونی رنگی",
+        "available": true
+      },
+      {
+        "shop_name": "آرکسیس سیستم‌های حفاظتی",
+        "shop_id": "arxis-sec",
+        "price_toman": 345000,
+        "product_title": "ریموت بلوتوثی 433 فانتزی رنگی",
+        "available": true
+      },
+      {
+        "shop_name": "قفلک",
+        "shop_id": "ghoflak",
+        "price_toman": 355000,
+        "product_title": "ریموت بلوتوثی 433 مکعب رنگی",
+        "available": true
+      }
+    ]
+  }
+}
