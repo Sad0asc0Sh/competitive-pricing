@@ -490,7 +490,7 @@ export async function fetchViaTorobMcpServer(opts: {
     if (outcome) {
       const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
       const shouldAskAiForPanels =
-        opts.matchConfig?.aiIdentityEnabled !== false &&
+        opts.matchConfig?.aiIdentityEnabled === true &&
         cardsByPrk.size > 0 &&
         (!outcome.confident || nonRejectedCount > 1) &&
         (await aiEnabled());

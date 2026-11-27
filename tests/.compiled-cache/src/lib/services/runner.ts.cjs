@@ -589,7 +589,7 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
             rejectBelowPct: config.supervisor?.gates?.identity_match?.rejectBelowPct ?? config.supervisor?.rejectBelowPct ?? 45,
             approveAbovePct: config.supervisor?.gates?.identity_match?.approveAbovePct ?? config.supervisor?.approveAbovePct ?? 80,
             minSellerCount: config.filters.minSellerCount,
-            aiIdentityEnabled: config.ai.enabled,
+            aiIdentityEnabled: Boolean(config.ai.enabled && config.ai.torobMatchEnabled === true),
         },
     }, manualOffers);
     const ownRecentPrices = await loadOwnRecentPrices(product.id, product.currentFinalPrice);
@@ -604,17 +604,19 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
         currentFinalPrice: product.currentFinalPrice,
         ownRecentPrices,
         category: product.category,
+        torobUrlManual: Boolean(product.torobUrl && product.torobUrl.trim()),
         config,
         discountContext,
     });
     const allowCostless = (0, sourcing_1.isMarketMakerWithoutCostEnabled)(config);
-    // اگر PRK از قبل قفل بوده و گیت هویت در بازه مبهم (review) افتاده، از AI فقط برای تایید/رد تطابق پنل ترب استفاده کن (نه قیمت!)
+    // اگر PRK از قبل قفل بوده و گیت هویت در بازه مبهم (review) افتاده، فقط در صورت فعال‌بودن صریح در پروفایل از AI استفاده کن
     if (source.ok &&
         source.prk &&
         source.productTitle &&
         !source.meta?.aiIdentityCheck &&
         result.supervisor.gates.identity_match?.verdict === "review" &&
         config.ai.enabled &&
+        config.ai.torobMatchEnabled === true &&
         (await (0, client_1.aiEnabled)())) {
         const prices = source.offers.map((o) => o.price).filter((p) => Number.isFinite(p) && p > 0).sort((a, b) => a - b);
         const repPrice = prices.length ? prices[Math.floor((prices.length - 1) / 2)] : null;

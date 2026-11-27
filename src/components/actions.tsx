@@ -6,7 +6,7 @@ import { useState, useTransition } from "react";
 import { IconChevronDown, IconSliders, IconSpinner } from "./icons";
 import { ConfirmDialog, useToast } from "./ui";
 
-async function safeJsonFetch(
+export async function safeJsonFetch(
   url: string,
   init: RequestInit,
 ): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
@@ -350,6 +350,7 @@ export function DecisionActions({
   initialDiscountPct,
   initialCampaignType,
   effectiveCost,
+  quickPrices,
 }: {
   decisionId?: number;
   id?: number;
@@ -361,6 +362,7 @@ export function DecisionActions({
   initialDiscountPct?: number | null;
   initialCampaignType?: string | null;
   effectiveCost?: number | null;
+  quickPrices?: Array<{ label: string; price: number }>;
 }) {
   const targetId = decisionId ?? id ?? 0;
   const router = useRouter();
@@ -516,6 +518,24 @@ export function DecisionActions({
           <div className="text-xs font-bold text-indigo-900">
             ✏️ ویرایش دستی قیمت یوزر و تخفیف نمایشی پیش از ارسال به سایت
           </div>
+          {quickPrices && quickPrices.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {quickPrices.map((qp) => (
+                <button
+                  key={`${qp.label}-${qp.price}`}
+                  type="button"
+                  onClick={() => setEditFinalPrice(String(Math.round(qp.price)))}
+                  className={`rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
+                    parsedFinal === Math.round(qp.price)
+                      ? "border-indigo-500 bg-indigo-600 text-white"
+                      : "border-indigo-200 bg-white text-indigo-900 hover:bg-indigo-100"
+                  }`}
+                >
+                  {qp.label}: {Math.round(qp.price).toLocaleString("fa-IR")}
+                </button>
+              ))}
+            </div>
+          )}
           <div>
             <label className="label text-[11px]">قیمت نهایی فروش به یوزر (تومان)</label>
             <input
@@ -651,9 +671,11 @@ export function DecisionActions({
 export function RelinkTorobAction({
   decisionId,
   initialTorobUrl,
+  canConfirmCurrent = false,
 }: {
   decisionId: number;
   initialTorobUrl?: string | null;
+  canConfirmCurrent?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -661,8 +683,8 @@ export function RelinkTorobAction({
   const [torobUrl, setTorobUrl] = useState(initialTorobUrl ?? "");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const submitRelink = () => {
-    const clean = torobUrl.trim();
+  const submitRelink = (overrideUrl?: string) => {
+    const clean = (overrideUrl ?? torobUrl).trim();
     if (!clean) return;
     start(async () => {
       setMsg(null);
@@ -684,8 +706,21 @@ export function RelinkTorobAction({
 
   return (
     <div className="mt-2.5 space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
-      <div className="text-[11px] font-semibold text-slate-700">
-        🔗 اصلاح لینک صفحه محصول در ترب و استعلام مجدد (اگر پنل اشتباه انتخاب شده است):
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-slate-700">
+          🔗 اصلاح لینک صفحه محصول در ترب و استعلام مجدد (اگر پنل اشتباه انتخاب شده است):
+        </span>
+        {canConfirmCurrent && initialTorobUrl && (
+          <button
+            type="button"
+            className="btn-success btn-sm text-[11px]"
+            disabled={pending}
+            onClick={() => submitRelink(initialTorobUrl)}
+          >
+            {pending && <IconSpinner className="h-3 w-3" />}
+            <span>✅ تأیید این پنل ترب و انتقال به پنل قیمت‌گذاری</span>
+          </button>
+        )}
       </div>
       <div className="flex flex-col gap-2 sm:flex-row">
         <input
@@ -699,7 +734,7 @@ export function RelinkTorobAction({
           type="button"
           className="btn-primary shrink-0 text-xs"
           disabled={pending || !torobUrl.trim()}
-          onClick={submitRelink}
+          onClick={() => submitRelink()}
         >
           {pending && <IconSpinner className="h-3.5 w-3.5" />}
           <span>اتصال و استعلام مجدد</span>

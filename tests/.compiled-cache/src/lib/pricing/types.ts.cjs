@@ -120,7 +120,7 @@ exports.DEFAULT_PROFILE_CONFIG = {
     },
     supervisor: {
         enabled: true,
-        mode: "hybrid_subq_and_local",
+        mode: "local_instant_only",
         baseUrl: "https://api.subq.ai/v1",
         model: "subq-snap-preview",
         rejectBelowPct: 45,
@@ -135,7 +135,8 @@ exports.DEFAULT_PROFILE_CONFIG = {
         },
     },
     ai: {
-        enabled: true,
+        enabled: false,
+        torobMatchEnabled: false,
         reviewBelowConfidence: 0.72,
     },
     costless: {

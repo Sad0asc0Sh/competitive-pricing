@@ -8,6 +8,25 @@ const schema_1 = require("../../db/schema");
 const review_client_1 = require("@/components/review-client");
 const drizzle_orm_1 = require("drizzle-orm");
 exports.dynamic = "force-dynamic";
+function numOrNull(v) {
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+function extractAlternative(v) {
+    if (!v || typeof v !== "object")
+        return null;
+    const r = v;
+    const finalPrice = numOrNull(r.finalPrice);
+    const p = numOrNull(r.p);
+    const lowestPrice = numOrNull(r.lowestPrice);
+    if (finalPrice == null || p == null || lowestPrice == null)
+        return null;
+    return {
+        finalPrice: Math.round(finalPrice),
+        p,
+        lowestPrice: Math.round(lowestPrice),
+        shopName: String(r.shopName ?? "رقیب"),
+    };
+}
 function extractSupervisorGates(supStep) {
     const overallRaw = supStep?.data?.overallScorePct;
     const overallPct = typeof overallRaw === "number" && Number.isFinite(overallRaw) ? Math.round(overallRaw) : null;
@@ -128,6 +147,8 @@ async function ReviewPage() {
         const aiIdentityMsg = steps.find((s) => s.step === "ai_identity")?.message ?? null;
         const liquidationMsg = steps.find((s) => s.step === "liquidation_guard")?.message ?? null;
         const gateStep = steps.find((s) => s.step === "supervision_gate");
+        const robStep = steps.find((s) => s.step === "robustness");
+        const valStep = steps.find((s) => s.step === "validity");
         const positionStep = steps.find((s) => s.step === "position");
         const rankIncludingSuspect = d.rankIncludingSuspect ?? (Number(positionStep?.data?.rankIncludingSuspect) || null);
         const totalIncludingSuspect = d.totalSellersIncludingSuspect || Number(positionStep?.data?.totalSellersIncludingSuspect) || 0;
@@ -138,9 +159,19 @@ async function ReviewPage() {
             ((effectiveCost > 0 && finalPrice <= effectiveCost) ||
                 (effectiveFloor > 0 && finalPrice < effectiveFloor));
         const syncFailed = d.status === "sync_failed" || d.status === "pending_sync" || d.pushStatus === "failed";
-        const readyForApproval = typeof gateStep?.data?.readyForApproval === "boolean"
-            ? gateStep.data.readyForApproval
-            : !isBelowFloor && !d.marketConflict && !syncFailed && reasons.length === 0;
+        const pRight = numOrNull(robStep?.data?.pRight);
+        const pTooHigh = numOrNull(robStep?.data?.pTooHigh);
+        const pTooLow = numOrNull(robStep?.data?.pTooLow);
+        const alternative = extractAlternative(robStep?.data?.alternative);
+        const marketSigma = numOrNull(valStep?.data?.sigma);
+        const pAnchorOk = numOrNull(valStep?.data?.pAnchorOk);
+        const confidence = Number.isFinite(d.confidence) ? d.confidence : 0;
+        const errorRiskPct = Math.max(0, Math.min(100, Math.round((1 - (pRight ?? confidence)) * 100)));
+        const readyForApproval = Boolean(!isBelowFloor &&
+            !syncFailed &&
+            !d.marketConflict &&
+            finalPrice > 0 &&
+            (errorRiskPct <= 20 || confidence >= 0.8 || gateStep?.data?.readyForApproval === true));
         return {
             id: d.id,
             productId: d.productId,
@@ -152,10 +183,24 @@ async function ReviewPage() {
             effectiveCost,
             current,
             referencePrice: d.referencePrice,
+            marketMedian: d.marketMedian,
             basePrice: d.basePrice,
             finalPrice: d.finalPrice,
             discountPct: d.discountPct,
             campaignType: d.campaignType,
+            strategy: d.strategy ?? null,
+            netProfitToman: d.netProfitToman ?? null,
+            netMarginPct: d.netMarginPct ?? null,
+            offersUsed: d.offersUsed,
+            offersTotal: d.offersTotal,
+            confidence,
+            errorRiskPct,
+            pRight,
+            pTooHigh,
+            pTooLow,
+            alternative,
+            marketSigma,
+            pAnchorOk,
             projectedNationalRank: d.projectedNationalRank,
             rankIncludingSuspect,
             totalIncludingSuspect,
@@ -192,6 +237,10 @@ async function ReviewPage() {
             name,
             sku,
             createdAt: d.createdAt.toISOString(),
+            finalPrice: d.finalPrice,
+            basePrice: d.basePrice,
+            offersUsed: d.offersUsed,
+            offersTotal: d.offersTotal,
             supMsg,
             supOverallPct,
             supGates,

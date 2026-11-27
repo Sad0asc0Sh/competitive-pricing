@@ -116,8 +116,9 @@ const labels: Record<string, string> = {
   approveAbovePct: "آستانه تایید خودکار ٪ (بین رد تا این عدد = ریویو | بالای این عدد = تایید و ادامه خودکار)",
   strictGateVeto: "قانون وتوی سخت‌گیرانه (اگر حتی ۱ مقیاس رد شود، کل تصمیم متوقف شود)",
   shareCostWithApi: "ارسال اعداد خام هزینه/کف سود به API خارجی SubQ (پیش‌فرض false = محرمانگی کامل)",
-  ai: "۱۰) هوش مصنوعی مکمل",
-  reviewBelowConfidence: "بازبینی AI وقتی اعتماد کمتر از",
+  ai: "۱۰) هوش مصنوعی مکمل (پیش‌فرض خاموش — موتور آماری/ریاضی فعال)",
+  torobMatchEnabled: "تطبیق پنل ترب با هوش مصنوعی خارجی روی MCP (پیش‌فرض خاموش)",
+  reviewBelowConfidence: "بازبینی وقتی اعتماد کمتر از",
   costless: "۱۱) مسیر کالاهای بدون قیمت خرید (Provisional)",
   provisionalPercentile: "صدک استخراج قیمت موقت بازار در نبود قیمت خرید",
   minCredibleFresh: "حداقل فروشندگان معتبر و به‌روز برای فعال‌شدن قیمت موقت",
@@ -931,8 +932,8 @@ export function AISettingsPanel({ initial }: { initial: AIStatus }) {
       )}
       <div className="grid gap-4 lg:grid-cols-2">
         <ProviderCard
-          title="هوش مصنوعی تطبیق پنل ترب (OpenAI-compatible)"
-          desc="هوش مصنوعی فقط برای تشخیص و ادغام پنل‌های هم‌سان در ترب و استخراج HTML استفاده می‌شود و هیچ‌گونه نقشی در تعیین، تغییر یا رد قیمت ندارد."
+          title="هوش مصنوعی خارجی روی MCP (اختیاری — پیش‌فرض خاموش)"
+          desc="به‌طور پیش‌فرض غیرفعال است و سیستم با موتور آمار و احتمال محلی کار می‌کند. تنها در صورت روشن‌کردن دستی، فقط برای تطبیق پنل ادغام ترب استفاده می‌شود و هیچ نقشی در قیمت ندارد."
           status={status.ai}
           draft={ai}
           onChange={setAi}
@@ -943,8 +944,8 @@ export function AISettingsPanel({ initial }: { initial: AIStatus }) {
           keyPlaceholder="sk-..."
         />
         <ProviderCard
-          title="ناظر هویتی SubQ SystemOne (محرمانه)"
-          desc="محاسبه قیمت ۱۰۰٪ با ریاضیات قطعی انجام می‌شود؛ این سرویس در صورت فعال‌بودن فقط به تأیید تطابق عنوان محصول با پنل ترب کمک می‌کند و هرگز قیمت پیشنهادشده را تغییر یا رد نمی‌کند."
+          title="ناظر هویتی SubQ SystemOne (اختیاری — پیش‌فرض محلی)"
+          desc="حالت پیش‌فرض ناظر روی موتور آنی و آماری محلی است و هیچ درخواست بیرونی نمی‌زند؛ برای فعال‌سازی استعلام هویت بیرونی، حالت ناظر را تغییر دهید."
           status={status.subq}
           draft={subq}
           onChange={setSubq}

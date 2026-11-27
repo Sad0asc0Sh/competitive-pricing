@@ -262,7 +262,7 @@ async function searchTorobProductV4(query, targetPrk, opts) {
         }, candidates, opts?.matchConfig?.minSellerCount ?? 1);
         let aiIdentityCheck = null;
         const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
-        if (opts?.matchConfig?.aiIdentityEnabled !== false &&
+        if (opts?.matchConfig?.aiIdentityEnabled === true &&
             candidates.length > 0 &&
             (!outcome.confident || nonRejectedCount > 1) &&
             (await (0, client_1.aiEnabled)())) {

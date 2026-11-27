@@ -332,7 +332,7 @@ export async function searchTorobProductV4(
     let aiIdentityCheck: AIIdentityCheckMeta | null = null;
     const nonRejectedCount = outcome.allRanked.filter((x) => !x.rejected).length;
     if (
-      opts?.matchConfig?.aiIdentityEnabled !== false &&
+      opts?.matchConfig?.aiIdentityEnabled === true &&
       candidates.length > 0 &&
       (!outcome.confident || nonRejectedCount > 1) &&
       (await aiEnabled())

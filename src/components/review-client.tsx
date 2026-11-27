@@ -1,11 +1,28 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { campaignLabel, faDate, faNum, pct, statusColor, statusLabel, toman } from "@/lib/format";
-import { DecisionActions, RelinkTorobAction } from "./actions";
+import { useRouter } from "next/navigation";
+import { useMemo, useState, useTransition } from "react";
+import {
+  campaignLabel,
+  faDate,
+  faNum,
+  pct,
+  statusColor,
+  statusLabel,
+  strategyLabel,
+  toman,
+} from "@/lib/format";
+import { DecisionActions, RelinkTorobAction, RunButton, safeJsonFetch } from "./actions";
 import { IconSearch } from "./icons";
-import { EmptyState, SegmentedTabs } from "./ui";
+import { EmptyState, SegmentedTabs, useToast } from "./ui";
+
+export interface ReviewAlternativeScenario {
+  finalPrice: number;
+  p: number;
+  lowestPrice: number;
+  shopName: string;
+}
 
 export interface ReviewCompetitorItem {
   id: number;
@@ -37,10 +54,24 @@ export interface ReviewPendingItem {
   effectiveCost: number;
   current: number | null;
   referencePrice: number | null;
+  marketMedian: number | null;
   basePrice: number | null;
   finalPrice: number | null;
   discountPct: number | null;
   campaignType: string | null;
+  strategy: string | null;
+  netProfitToman: number | null;
+  netMarginPct: number | null;
+  offersUsed: number;
+  offersTotal: number;
+  confidence: number;
+  errorRiskPct: number;
+  pRight: number | null;
+  pTooHigh: number | null;
+  pTooLow: number | null;
+  alternative: ReviewAlternativeScenario | null;
+  marketSigma: number | null;
+  pAnchorOk: number | null;
   projectedNationalRank: number | null;
   rankIncludingSuspect: number | null;
   totalIncludingSuspect: number;
@@ -67,6 +98,10 @@ export interface ReviewRejectedItem {
   name: string;
   sku: string;
   createdAt: string;
+  finalPrice: number | null;
+  basePrice: number | null;
+  offersUsed: number;
+  offersTotal: number;
   supMsg: string;
   supOverallPct: number | null;
   supGates: ReviewSupervisorGate[];
@@ -76,6 +111,24 @@ export interface ReviewRejectedItem {
 
 type ReviewTab = "all_pending" | "ready" | "pending_review" | "sync_issues" | "warnings" | "rejected";
 
+function buildQuickPrices(item: ReviewPendingItem): Array<{ label: string; price: number }> {
+  const seen = new Set<number>();
+  const out: Array<{ label: string; price: number }> = [];
+  const add = (label: string, raw: number | null | undefined) => {
+    if (raw == null || !Number.isFinite(raw) || raw <= 0) return;
+    const p = Math.round(raw);
+    if (seen.has(p)) return;
+    seen.add(p);
+    out.push({ label, price: p });
+  };
+  add("پیشنهاد بهینه موتور", item.finalPrice);
+  add("میانه بازار ترب", item.marketMedian);
+  if (item.alternative) {
+    add(`سناریوی جایگزین (${Math.round(item.alternative.p * 100)}٪)`, item.alternative.finalPrice);
+  }
+  return out;
+}
+
 export function ReviewClient({
   pendingItems,
   rejectedItems,
@@ -83,19 +136,36 @@ export function ReviewClient({
   pendingItems: ReviewPendingItem[];
   rejectedItems: ReviewRejectedItem[];
 }) {
+  const router = useRouter();
+  const toast = useToast();
   const [tab, setTab] = useState<ReviewTab>("all_pending");
   const [query, setQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [bulkPending, startBulk] = useTransition();
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
+
+  const stats = useMemo(() => {
+    const readyCount = pendingItems.filter((x) => x.readyForApproval && !x.syncFailed).length;
+    const withConf = pendingItems.filter((x) => Number.isFinite(x.confidence));
+    const avgConfPct = withConf.length
+      ? Math.round((withConf.reduce((s, x) => s + x.confidence, 0) / withConf.length) * 100)
+      : 0;
+    const avgRiskPct = withConf.length
+      ? Math.round(withConf.reduce((s, x) => s + x.errorRiskPct, 0) / withConf.length)
+      : 0;
+    return { readyCount, avgConfPct, avgRiskPct };
+  }, [pendingItems]);
 
   const counts = useMemo(
     () => ({
       all_pending: pendingItems.length,
-      ready: pendingItems.filter((x) => x.readyForApproval && !x.syncFailed).length,
+      ready: stats.readyCount,
       pending_review: pendingItems.filter((x) => x.status === "pending_review" && !x.syncFailed).length,
       sync_issues: pendingItems.filter((x) => x.syncFailed).length,
       warnings: pendingItems.filter((x) => x.marketConflict || x.isBelowFloor).length,
       rejected: rejectedItems.length,
     }),
-    [pendingItems, rejectedItems],
+    [pendingItems, rejectedItems, stats.readyCount],
   );
 
   const filteredPending = useMemo(() => {
@@ -118,196 +188,384 @@ export function ReviewClient({
     );
   }, [rejectedItems, query]);
 
+  const selectableIds = useMemo(
+    () =>
+      filteredPending
+        .filter((x) => !x.isBelowFloor && !x.syncFailed && (x.finalPrice ?? 0) > 0)
+        .map((x) => x.id),
+    [filteredPending],
+  );
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedVisibleIds = useMemo(
+    () => selectableIds.filter((id) => selectedSet.has(id)),
+    [selectableIds, selectedSet],
+  );
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const runBulkApprove = () => {
+    const targets = selectedVisibleIds;
+    if (!targets.length) return;
+    startBulk(async () => {
+      let okCount = 0;
+      let errCount = 0;
+      for (let i = 0; i < targets.length; i++) {
+        setBulkProgress(`${i + 1}/${targets.length}`);
+        const { ok } = await safeJsonFetch(`/api/decisions/${targets[i]}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "approve", force: true }),
+        });
+        if (ok) okCount++;
+        else errCount++;
+      }
+      setBulkProgress(null);
+      setSelectedIds([]);
+      if (errCount === 0) toast.success(`${faNum(okCount)} تصمیم با موفقیت تأیید و ارسال شد`);
+      else toast.info(`${faNum(okCount)} تأیید شد · ${faNum(errCount)} مورد با خطا متوقف ماند`);
+      router.refresh();
+    });
+  };
+
   return (
     <div className="space-y-5 sm:space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-lg font-extrabold text-slate-900 sm:text-2xl">صف بازبینی و نظارت انسانی</h1>
+          <h1 className="text-lg font-extrabold text-slate-900 sm:text-2xl">
+            پنل قیمت‌گذاری آماری و نظارت انسانی
+          </h1>
           <p className="mt-1 text-xs leading-5 text-slate-500 sm:text-sm">
-            هیچ قیمتی بدون تأیید شما روی سایت اعمال نمی‌شود؛ اینجا قیمت یوزر، تخفیف خط‌خورده، پنل ترب و رقبای هر کالا را بررسی، ویرایش و تأیید کنید.
+            قیمت‌گذاری با مدل احتمالات بیزین (سود خالص، پراکندگی بازار و ضریب خطا) محاسبه می‌شود؛ بدون تأیید شما هیچ قیمتی روی سایت اعمال نمی‌شود.
           </p>
         </div>
 
-        <div className="relative w-full sm:w-64 shrink-0">
-          <IconSearch className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            className="input pr-9 text-xs"
-            placeholder="جستجو در صف بازبینی (نام یا SKU)…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <RunButton label="🔍 استعلام ۵ کارت اول" className="btn-primary btn-sm" />
+          <div className="relative w-full sm:w-56">
+            <IconSearch className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              className="input pr-9 text-xs"
+              placeholder="جستجو (نام یا SKU)…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatTile label="کل صف قیمت‌گذاری" value={faNum(pendingItems.length)} />
+        <StatTile label="آماده تأیید کم‌خطا" value={faNum(stats.readyCount)} tone="emerald" />
+        <StatTile
+          label="میانگین اعتماد / ضریب خطا"
+          value={pendingItems.length ? `${faNum(stats.avgConfPct)}٪ / ${faNum(stats.avgRiskPct)}٪` : "—"}
+          tone={stats.avgRiskPct <= 25 ? "indigo" : "amber"}
+        />
+        <StatTile label="ردشده (نیازمند بررسی لینک/داده)" value={faNum(rejectedItems.length)} tone="rose" />
       </div>
 
       <SegmentedTabs<ReviewTab>
         value={tab}
         onChange={setTab}
         items={[
-          { key: "all_pending", label: "همه صف بازبینی", count: counts.all_pending },
+          { key: "all_pending", label: "همه صف قیمت‌گذاری", count: counts.all_pending },
           { key: "ready", label: "آماده تأیید سریع", count: counts.ready },
-          { key: "pending_review", label: "در انتظار تأیید", count: counts.pending_review },
+          { key: "pending_review", label: "در انتظار بررسی", count: counts.pending_review },
           { key: "sync_issues", label: "خطای همگام‌سازی", count: counts.sync_issues },
           { key: "warnings", label: "تعارض / زیر کف", count: counts.warnings },
           { key: "rejected", label: "ردشده‌های ناظر", count: counts.rejected },
         ]}
       />
 
+      {tab !== "rejected" && selectableIds.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-indigo-950">
+            <button
+              type="button"
+              onClick={() => setSelectedIds(selectableIds)}
+              className="btn-secondary btn-sm text-xs"
+              disabled={bulkPending}
+            >
+              انتخاب همهٔ موارد مجاز ({faNum(selectableIds.length)})
+            </button>
+            {selectedVisibleIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="text-xs font-medium text-slate-600 hover:underline"
+                disabled={bulkPending}
+              >
+                لغو انتخاب ({faNum(selectedVisibleIds.length)})
+              </button>
+            )}
+          </div>
+          {selectedVisibleIds.length > 0 && (
+            <button
+              type="button"
+              onClick={runBulkApprove}
+              disabled={bulkPending}
+              className="btn-success btn-sm text-xs"
+            >
+              {bulkPending
+                ? `در حال تأیید ${bulkProgress ?? ""}…`
+                : `✅ تأیید گروهی ${faNum(selectedVisibleIds.length)} مورد انتخاب‌شده`}
+            </button>
+          )}
+        </div>
+      )}
+
       {tab !== "rejected" ? (
         <div className="space-y-4">
-          {filteredPending.map((item) => (
-            <div key={item.id} className="card space-y-3.5">
-              <div className="flex flex-col gap-3 border-b border-slate-100 pb-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Link
-                      href={`/products/${item.productId}`}
-                      className="text-base font-bold text-indigo-700 hover:underline sm:text-lg"
-                    >
-                      {item.name}
-                    </Link>
-                    <span className={`badge ${statusColor[item.status] ?? "bg-slate-100"}`}>
-                      {statusLabel[item.status] ?? item.status}
-                    </span>
-                    {item.readyForApproval && !item.syncFailed && (
-                      <span className="badge bg-emerald-100 text-emerald-800">✅ آماده تأیید سریع</span>
-                    )}
-                    {item.isBelowFloor && (
-                      <span className="badge bg-rose-100 text-rose-800">⚠️ زیر کف سود</span>
-                    )}
-                    {item.marketConflict && (
-                      <span className="badge bg-amber-100 text-amber-900">تعارض بازار</span>
-                    )}
-                    {item.supOverallPct != null && (
-                      <span className="badge bg-slate-100 text-slate-700">
-                        امتیاز کل ناظر: {faNum(item.supOverallPct)}٪
+          {filteredPending.map((item) => {
+            const canBulkSelect = !item.isBelowFloor && !item.syncFailed && (item.finalPrice ?? 0) > 0;
+            const confPct = Math.round((item.confidence ?? 0) * 100);
+            const quickPrices = buildQuickPrices(item);
+            return (
+              <div key={item.id} className="card space-y-3.5">
+                <div className="flex flex-col gap-3 border-b border-slate-100 pb-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canBulkSelect && (
+                        <input
+                          type="checkbox"
+                          checked={selectedSet.has(item.id)}
+                          onChange={() => toggleSelect(item.id)}
+                          aria-label={`انتخاب ${item.name}`}
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                        />
+                      )}
+                      <Link
+                        href={`/products/${item.productId}`}
+                        className="text-base font-bold text-indigo-700 hover:underline sm:text-lg"
+                      >
+                        {item.name}
+                      </Link>
+                      <span className={`badge ${statusColor[item.status] ?? "bg-slate-100"}`}>
+                        {statusLabel[item.status] ?? item.status}
+                      </span>
+                      {item.readyForApproval && !item.syncFailed && (
+                        <span className="badge bg-emerald-100 text-emerald-800">✅ آماده تأیید سریع</span>
+                      )}
+                      {item.isBelowFloor && (
+                        <span className="badge bg-rose-100 text-rose-800">⚠️ زیر کف سود</span>
+                      )}
+                      {item.marketConflict && (
+                        <span className="badge bg-amber-100 text-amber-900">تعارض بازار</span>
+                      )}
+                      {item.supOverallPct != null && (
+                        <span className="badge bg-slate-100 text-slate-700">
+                          امتیاز کل ناظر: {faNum(item.supOverallPct)}٪
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                      <span>
+                        {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)} · {faNum(item.offersUsed)}/
+                        {faNum(item.offersTotal)} پیشنهاد معتبر
+                      </span>
+                      {item.torobUrl && (
+                        <a
+                          href={item.torobUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-sky-600 hover:underline"
+                        >
+                          🔗 مشاهده در ترب{item.torobTitle ? ` (${item.torobTitle.slice(0, 48)}${item.torobTitle.length > 48 ? "…" : ""})` : ""}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+
+                  <DecisionActions
+                    decisionId={item.id}
+                    force
+                    isBelowFloor={item.isBelowFloor}
+                    syncFailed={item.syncFailed}
+                    initialFinalPrice={item.finalPrice}
+                    initialBasePrice={item.basePrice}
+                    initialDiscountPct={item.discountPct}
+                    initialCampaignType={item.campaignType}
+                    effectiveCost={item.effectiveCost}
+                    quickPrices={quickPrices}
+                  />
+                </div>
+
+                {/* نوار تحلیل آماری و احتمالات بیزین */}
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-indigo-950">📊 تحلیل آماری و ضریب خطا:</span>
+                      <span
+                        className={`badge ${
+                          item.errorRiskPct <= 15
+                            ? "bg-emerald-100 text-emerald-800"
+                            : item.errorRiskPct <= 30
+                              ? "bg-amber-100 text-amber-900"
+                              : "bg-rose-100 text-rose-800"
+                        }`}
+                      >
+                        اعتماد: {faNum(confPct)}٪ · ضریب خطای تخمینی: {faNum(item.errorRiskPct)}٪
+                      </span>
+                      {item.pRight != null && (
+                        <span className="text-[11px] text-slate-600">
+                          احتمال صحت قیمت: <strong className="num">{faNum(Math.round(item.pRight * 100))}٪</strong>
+                        </span>
+                      )}
+                      {item.pTooHigh != null && item.pTooLow != null && (
+                        <span className="text-[11px] text-slate-600">
+                          (ریسک گران‌بودن: <strong className="num">{faNum(Math.round(item.pTooHigh * 100))}٪</strong> · ریسک ارزان‌بودن:{" "}
+                          <strong className="num">{faNum(Math.round(item.pTooLow * 100))}٪</strong>)
+                        </span>
+                      )}
+                    </div>
+                    {item.strategy && (
+                      <span className="text-[11px] font-medium text-indigo-800">
+                        استراتژی: {strategyLabel[item.strategy] ?? item.strategy}
                       </span>
                     )}
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                    <span>
-                      {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)}
-                    </span>
-                    {item.torobUrl && (
-                      <a
-                        href={item.torobUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-medium text-sky-600 hover:underline"
-                      >
-                        🔗 مشاهده در ترب{item.torobTitle ? ` (${item.torobTitle.slice(0, 48)}${item.torobTitle.length > 48 ? "…" : ""})` : ""}
-                      </a>
+
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className={`h-full rounded-full ${
+                        confPct >= 80 ? "bg-emerald-500" : confPct >= 60 ? "bg-amber-500" : "bg-rose-500"
+                      }`}
+                      style={{ width: `${Math.max(4, Math.min(100, confPct))}%` }}
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600">
+                    {item.marketSigma != null && (
+                      <span>
+                        پراکندگی بازار (σ):{" "}
+                        <strong className="num text-slate-800">{faNum(item.marketSigma * 100, 1)}٪</strong>
+                      </span>
+                    )}
+                    {item.pAnchorOk != null && (
+                      <span>
+                        اطمینان به کف بازار:{" "}
+                        <strong className="num text-slate-800">{faNum(Math.round(item.pAnchorOk * 100))}٪</strong>
+                      </span>
+                    )}
+                    {item.netProfitToman != null && item.effectiveCost > 0 && (
+                      <span>
+                        سود خالص روی قیمت همکار:{" "}
+                        <strong className={`num ${item.netProfitToman > 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                          {toman(item.netProfitToman)}
+                          {item.netMarginPct != null ? ` (${faNum(item.netMarginPct, 1)}٪)` : ""}
+                        </strong>
+                      </span>
                     )}
                   </div>
+
+                  {item.alternative && (
+                    <div className="rounded-lg border border-indigo-200/80 bg-white/80 px-2.5 py-1.5 text-[11px] text-slate-700">
+                      🔄 <strong>سناریوی جایگزین احتمالی:</strong>{" "}
+                      <span className="num font-semibold text-indigo-800">{toman(item.alternative.finalPrice)}</span>{" "}
+                      (احتمال <span className="num">{faNum(Math.round(item.alternative.p * 100))}٪</span> — اگر کف واقعی متعلق به «
+                      {item.alternative.shopName}» با {toman(item.alternative.lowestPrice)} باشد)
+                    </div>
+                  )}
                 </div>
 
-                <DecisionActions
-                  decisionId={item.id}
-                  force
-                  isBelowFloor={item.isBelowFloor}
-                  syncFailed={item.syncFailed}
-                  initialFinalPrice={item.finalPrice}
-                  initialBasePrice={item.basePrice}
-                  initialDiscountPct={item.discountPct}
-                  initialCampaignType={item.campaignType}
-                  effectiveCost={item.effectiveCost}
-                />
-              </div>
+                <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+                  <Item k="تمام‌شده همکار" v={toman(item.effectiveCost || item.cost)} />
+                  <Item k="قیمت فعلی سایت" v={toman(item.current)} />
+                  <Item k="میانه بازار ترب" v={toman(item.marketMedian ?? item.referencePrice)} />
+                  <Item k="خط‌خورده (سقف)" v={toman(item.basePrice)} />
+                  <Item k="پیشنهاد یوزر (نهایی)" v={toman(item.finalPrice)} strong />
+                  <Item
+                    k="تخفیف نمایشی / کمپین"
+                    v={`${item.discountPct && item.discountPct > 0 ? pct(item.discountPct) : "بدون تخفیف"} · ${campaignLabel[item.campaignType ?? "none"] ?? item.campaignType ?? "عادی"}`}
+                  />
+                  <Item
+                    k="رتبه ملی / با مشکوک"
+                    v={`${item.projectedNationalRank != null ? `#${faNum(item.projectedNationalRank)}` : "—"} / ${
+                      item.rankIncludingSuspect != null ? `#${faNum(item.rankIncludingSuspect)}` : "—"
+                    } از ${item.totalIncludingSuspect ? faNum(item.totalIncludingSuspect) : "—"}`}
+                  />
+                </div>
 
-              <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-                <Item k="تمام‌شده همکار" v={toman(item.effectiveCost || item.cost)} />
-                <Item k="قیمت فعلی سایت" v={toman(item.current)} />
-                <Item k="مرجع بازار ترب" v={toman(item.referencePrice)} />
-                <Item k="خط‌خورده (سقف)" v={toman(item.basePrice)} />
-                <Item k="پیشنهاد یوزر (نهایی)" v={toman(item.finalPrice)} strong />
-                <Item
-                  k="تخفیف نمایشی / کمپین"
-                  v={`${item.discountPct && item.discountPct > 0 ? pct(item.discountPct) : "بدون تخفیف"} · ${campaignLabel[item.campaignType ?? "none"] ?? item.campaignType ?? "عادی"}`}
-                />
-                <Item
-                  k="رتبه ملی / با مشکوک"
-                  v={`${item.projectedNationalRank != null ? `#${faNum(item.projectedNationalRank)}` : "—"} / ${
-                    item.rankIncludingSuspect != null ? `#${faNum(item.rankIncludingSuspect)}` : "—"
-                  } از ${item.totalIncludingSuspect ? faNum(item.totalIncludingSuspect) : "—"}`}
-                />
-              </div>
+                <SupervisorGateChips gates={item.supGates} />
 
-              <SupervisorGateChips gates={item.supGates} />
-
-              {item.competitors.length > 0 && (
-                <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2.5">
-                  <div className="mb-1.5 text-[11px] font-semibold text-slate-600">
-                    ارزان‌ترین فروشندگان کشف‌شده در ترب (مقایسه با پیشنهاد یوزر):
-                  </div>
-                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-                    {item.competitors.map((c) => (
-                      <div
-                        key={c.id}
-                        className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs ${
-                          c.included
-                            ? "border-slate-200 bg-white text-slate-800"
-                            : "border-amber-200 bg-amber-50/70 text-amber-900"
-                        }`}
-                      >
-                        <div className="min-w-0 truncate">
-                          <span className="font-medium">{c.shopName}</span>
-                          {c.shopCity && (
-                            <span className={`mr-1 text-[10px] ${c.isLocalCity ? "font-bold text-indigo-700" : "text-slate-400"}`}>
-                              ({c.shopCity})
-                            </span>
-                          )}
-                          {!c.included && c.excludeReason && (
-                            <div className="truncate text-[10px] text-amber-700">حذف: {c.excludeReason}</div>
-                          )}
+                {item.competitors.length > 0 && (
+                  <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2.5">
+                    <div className="mb-1.5 text-[11px] font-semibold text-slate-600">
+                      ارزان‌ترین فروشندگان کشف‌شده در ترب (مقایسه با پیشنهاد یوزر):
+                    </div>
+                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                      {item.competitors.map((c) => (
+                        <div
+                          key={c.id}
+                          className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs ${
+                            c.included
+                              ? "border-slate-200 bg-white text-slate-800"
+                              : "border-amber-200 bg-amber-50/70 text-amber-900"
+                          }`}
+                        >
+                          <div className="min-w-0 truncate">
+                            <span className="font-medium">{c.shopName}</span>
+                            {c.shopCity && (
+                              <span className={`mr-1 text-[10px] ${c.isLocalCity ? "font-bold text-indigo-700" : "text-slate-400"}`}>
+                                ({c.shopCity})
+                              </span>
+                            )}
+                            {!c.included && c.excludeReason && (
+                              <div className="truncate text-[10px] text-amber-700">حذف: {c.excludeReason}</div>
+                            )}
+                          </div>
+                          <div className="num shrink-0 font-semibold">{toman(c.price)}</div>
                         </div>
-                        <div className="num shrink-0 font-semibold">{toman(c.price)}</div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {item.marketConflict && (
-                <p className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs leading-6 text-rose-800">
-                  ⚠️ تعارض بازار: فروشنده‌ی «مشکوک پایین» زیر قیمت پیشنهادی ما هست — پیش از تأیید، رتبه‌ی ستون
-                  «با مشکوک» را با رتبه‌ی رسمی مقایسه کنید.
-                </p>
-              )}
+                {item.marketConflict && (
+                  <p className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs leading-6 text-rose-800">
+                    ⚠️ تعارض بازار: فروشنده‌ی «مشکوک پایین» زیر قیمت پیشنهادی ما هست — پیش از تأیید، رتبه‌ی ستون
+                    «با مشکوک» را با رتبه‌ی رسمی مقایسه کنید.
+                  </p>
+                )}
 
-              {item.liquidationMsg && (
-                <p className="rounded-xl border border-cyan-200 bg-cyan-50 px-3.5 py-2.5 text-xs leading-6 text-cyan-900">
-                  🧮 فیلتر فروشنده منفرد نقدکننده انبار: {item.liquidationMsg}
-                </p>
-              )}
+                {item.liquidationMsg && (
+                  <p className="rounded-xl border border-cyan-200 bg-cyan-50 px-3.5 py-2.5 text-xs leading-6 text-cyan-900">
+                    🧮 فیلتر فروشنده منفرد نقدکننده انبار: {item.liquidationMsg}
+                  </p>
+                )}
 
-              {item.aiIdentityMsg && (
-                <p className="rounded-xl border border-violet-200 bg-violet-50 px-3.5 py-2.5 text-xs leading-6 text-violet-900">
-                  🔎 تطابق پنل ترب (AI): {item.aiIdentityMsg}
-                </p>
-              )}
+                {item.aiIdentityMsg && (
+                  <p className="rounded-xl border border-violet-200 bg-violet-50 px-3.5 py-2.5 text-xs leading-6 text-violet-900">
+                    🔎 تطابق پنل ترب (AI): {item.aiIdentityMsg}
+                  </p>
+                )}
 
-              {item.reasons && (
-                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs leading-6 text-amber-900 sm:text-sm">
-                  {item.reasons}
-                </p>
-              )}
+                {item.reasons && (
+                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs leading-6 text-amber-900 sm:text-sm">
+                    {item.reasons}
+                  </p>
+                )}
 
-              {item.supMsg && (
-                <p className="rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-xs leading-6 text-indigo-900">
-                  🛡️ ناظر: {item.supMsg}
-                </p>
-              )}
+                {item.supMsg && (
+                  <p className="rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-xs leading-6 text-indigo-900">
+                    🛡️ ناظر: {item.supMsg}
+                  </p>
+                )}
 
-              {item.aiMsg && (
-                <p className="rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-2.5 text-xs leading-6 text-slate-700">
-                  🤖 هوش مصنوعی: {item.aiMsg}
-                </p>
-              )}
-            </div>
-          ))}
+                {item.aiMsg && (
+                  <p className="rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-2.5 text-xs leading-6 text-slate-700">
+                    🤖 هوش مصنوعی: {item.aiMsg}
+                  </p>
+                )}
+              </div>
+            );
+          })}
 
           {filteredPending.length === 0 && (
             <EmptyState
-              title={pendingItems.length === 0 ? "صف بازبینی خالی است ✅" : "موردی مطابق فیلتر انتخاب‌شده یافت نشد"}
+              title={pendingItems.length === 0 ? "صف قیمت‌گذاری خالی است ✅" : "موردی مطابق فیلتر انتخاب‌شده یافت نشد"}
               description={
                 pendingItems.length === 0
                   ? "در حال حاضر همه تصمیم‌ها بررسی شده‌اند یا منتظر اجرای بعدی هستند."
@@ -325,7 +583,7 @@ export function ReviewClient({
                     ردشده‌های اخیر ناظر (وارد فروشگاه نمی‌شوند)
                   </h2>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    این تصمیم‌ها به‌خاطر امتیاز کل پایین‌تر از ۴۵٪ یا رد شدن در یکی از مقیاس‌های حیاتی (مثلاً عدم تطابق پنل ترب یا افتادن زیر کف سود) متوقف شده‌اند.
+                    این تصمیم‌ها به‌خاطر امتیاز کل پایین‌تر از ۴۵٪ یا رد شدن در یکی از مقیاس‌های حیاتی متوقف شده‌اند؛ از پایین کارت می‌توانید پنل ترب را تأیید یا اصلاح کنید.
                   </p>
                 </div>
                 <button type="button" onClick={() => setTab("rejected")} className="btn-secondary btn-sm shrink-0">
@@ -347,7 +605,7 @@ export function ReviewClient({
               ردشده‌های اخیر ناظر (وارد فروشگاه نمی‌شوند)
             </h2>
             <p className="mt-1 text-xs text-slate-500">
-              این تصمیم‌ها به‌خاطر امتیاز کل پایین‌تر از ۴۵٪ یا رد شدن در یکی از مقیاس‌های حیاتی (قانون وتو: افتادن حتی یک مقیاس حیاتی زیر ۴۵٪ باعث توقف کارت می‌شود، حتی اگر میانگین کل بالای ۴۵٪ مثلاً ۶۹٪ باشد) متوقف شده‌اند؛ می‌توانید از پایین کارت لینک ترب را اصلاح و دوباره استعلام بگیرید.
+              این تصمیم‌ها به‌خاطر امتیاز کل پایین‌تر از ۴۵٪ یا رد شدن در یکی از مقیاس‌های حیاتی متوقف شده‌اند؛ اگر پنل ترب انتخاب‌شده صحیح است با یک کلیک تأیید و استعلام مجدد بگیرید یا لینک دیگری ثبت کنید.
             </p>
           </div>
           {filteredRejected.map((r) => (
@@ -358,6 +616,33 @@ export function ReviewClient({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function StatTile({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "emerald" | "indigo" | "amber" | "rose";
+}) {
+  const cls =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50/70 text-emerald-800"
+      : tone === "indigo"
+        ? "border-indigo-200 bg-indigo-50/70 text-indigo-800"
+        : tone === "amber"
+          ? "border-amber-200 bg-amber-50/70 text-amber-800"
+          : tone === "rose"
+            ? "border-rose-200 bg-rose-50/70 text-rose-800"
+            : "text-slate-900";
+  return (
+    <div className={`card ${cls}`}>
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="num mt-1 text-lg font-extrabold sm:text-xl">{value}</div>
     </div>
   );
 }
@@ -403,10 +688,16 @@ function RejectedCard({ item }: { item: ReviewRejectedItem }) {
                 میانگین کل: {faNum(item.supOverallPct)}٪
               </span>
             )}
+            {item.finalPrice != null && item.finalPrice > 0 && (
+              <span className="badge bg-slate-100 text-slate-700 num">
+                پیشنهاد موقت: {toman(item.finalPrice)}
+              </span>
+            )}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-400">
             <span>
-              {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)}
+              {item.sku} · تصمیم #{faNum(item.id)} · {faDate(item.createdAt)} · {faNum(item.offersUsed)}/
+              {faNum(item.offersTotal)} پیشنهاد معتبر
             </span>
             {item.torobUrl && (
               <a href={item.torobUrl} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">
@@ -421,7 +712,11 @@ function RejectedCard({ item }: { item: ReviewRejectedItem }) {
         <SupervisorGateChips gates={item.supGates} />
       </div>
       <p className="mt-2.5 rounded-xl bg-rose-50 px-3 py-2 text-xs leading-6 text-rose-800">{item.supMsg}</p>
-      <RelinkTorobAction decisionId={item.id} initialTorobUrl={item.torobUrl} />
+      <RelinkTorobAction
+        decisionId={item.id}
+        initialTorobUrl={item.torobUrl}
+        canConfirmCurrent={Boolean(item.torobUrl)}
+      />
     </div>
   );
 }

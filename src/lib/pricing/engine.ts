@@ -200,20 +200,28 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       });
     }
 
-    const hardIdentityReject = identityCheck.verdict === "reject" || aiIdCheck?.verdict === "no_match";
+    const hardIdentityReject =
+      aiIdCheck?.verdict === "no_match" ||
+      (identityCheck.verdict === "reject" && !ctx.torobUrlManual);
+    const manualLinkOverrodeReject =
+      Boolean(ctx.torobUrlManual) &&
+      identityCheck.verdict === "reject" &&
+      aiIdCheck?.verdict !== "no_match";
     const variantConflict = Boolean(identityCheck.codeRelation && variantRelations.has(identityCheck.codeRelation));
     const aiConfirmsAmbiguous =
       aiIdCheck?.verdict === "match" && identityCheck.verdict === "review" && !variantConflict;
-    const selfConfirms = selfShopInListing && !hardIdentityReject && !variantConflict;
+    const selfConfirms = selfShopInListing && !hardIdentityReject && !variantConflict && !manualLinkOverrodeReject;
     selfConfirmsIdentity = selfConfirms;
     identityMatchScorePct =
       aiIdCheck?.verdict === "no_match"
         ? Math.min(identityCheck.score, 25)
-        : selfConfirms
-          ? Math.max(95, identityCheck.score)
-          : aiConfirmsAmbiguous
-            ? Math.max(88, identityCheck.score)
-            : identityCheck.score;
+        : manualLinkOverrodeReject
+          ? Math.max(identityCheck.score, idRej + 5)
+          : selfConfirms
+            ? Math.max(95, identityCheck.score)
+            : aiConfirmsAmbiguous
+              ? Math.max(88, identityCheck.score)
+              : identityCheck.score;
 
     if (hardIdentityReject) {
       const rejWhy =
@@ -231,6 +239,17 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         message: `رد شد (امتیاز ${identityMatchScorePct}% / noul=${(identityMatchScorePct / 100).toFixed(2)} < ${idRej}%): «${source.productTitle}» در برابر «${ctx.productName}» — ${rejWhy}${selfShopInListing ? " — حضور فروشگاه خودمان در لیستینگ، رد هویتی را نمی‌پوشاند" : ""}`,
         level: "error",
         data: { score: identityMatchScorePct, noul: identityMatchScorePct / 100, verdict: "reject", selfShopInListing, codeRelation: identityCheck.codeRelation ?? null },
+      });
+    } else if (manualLinkOverrodeReject) {
+      reviewReasons.push(
+        `هشدار اختلاف عنوان/قیمت با لینک دستی ترب (${identityCheck.score}% — ${identityCheck.rejectReason ?? "اختلاف مشخصات"}): چون لینک ترب توسط شما ثبت شده، کارت در پنل قیمت‌گذاری برای بررسی باز ماند`,
+      );
+      log({
+        step: "identity",
+        title: "گیت ۱ (ورودی): هشدار تطابق روی لینک دستی ترب",
+        message: `امتیاز تطابق خودکار ${identityCheck.score}% بود (${identityCheck.rejectReason ?? "اختلاف عنوان/مشخصات"})؛ به‌دلیل ثبت دستی لینک ترب، به‌جای رد کامل با امتیاز ${identityMatchScorePct}% به پنل قیمت‌گذاری هدایت شد`,
+        level: "warn",
+        data: { score: identityMatchScorePct, rawScore: identityCheck.score, verdict: "review", manualLinkOverride: true, codeRelation: identityCheck.codeRelation ?? null },
       });
     } else if (identityCheck.verdict === "review" && !selfConfirms && !aiConfirmsAmbiguous) {
       reviewReasons.push(
@@ -472,6 +491,36 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     const credibleFresh = offers.filter((o) => o.included && o.fresh && o.credible && o.price > 0);
     const minCredibleNeeded = Math.max(1, cfg.costless?.minCredibleFresh ?? 3);
 
+    const tryCostlessV2Fallback = () => {
+      const validIncluded = offers.filter((o) => o.included && o.price > 0);
+      const minFallbackNeeded = v2 ? 1 : Math.max(2, cfg.guards.minValidOffers);
+      if (!v2 || validIncluded.length < minFallbackNeeded || market.reference == null) {
+        return false;
+      }
+      const poolPrices = validIncluded.map((o) => o.price);
+      const fallbackPct = Math.max(35, cfg.costless.provisionalPercentile ?? 30);
+      const rawProv = poolPrices.length >= 2 ? percentile(poolPrices, fallbackPct) : poolPrices[0];
+      const provisional = ceilToStep(rawProv, Math.max(1, cfg.rounding.finalStep));
+      strategy = "provisional_market_percentile";
+      competitionTier = "provisional_market_percentile";
+      target = provisional;
+      isProvisional = true;
+      reviewReasons.push(
+        poolPrices.length === 1
+          ? `بدون قیمت خرید و تک‌پیشنهادی در ترب — قیمت پیشنهادی موقت (${fa(provisional)}) بر اساس تنها پیشنهاد معتبر، نیازمند تأیید شما در پنل قیمت‌گذاری`
+          : `بدون قیمت خرید و کمبود فروشندگان خوش‌امتیاز تازه (${credibleFresh.length} < ${minCredibleNeeded}) — قیمت پیشنهادی موقت (${fa(provisional)} = صدک ${fallbackPct} از ${poolPrices.length} پیشنهاد معتبر ترب) نیازمند بازبینی دستی است`,
+      );
+      log({
+        step: "provisional",
+        title: "مسیر آماری بی‌هزینه Provisional (از پیشنهادهای معتبر ترب)",
+        message:
+          `فروشنده خوش‌امتیاز تازه کافی نبود (${credibleFresh.length} < ${minCredibleNeeded})؛ قیمت پیشنهادی موقت ${fa(provisional)} تومان از ${poolPrices.length} پیشنهاد معتبر ترب محاسبه شد`,
+        level: "warn",
+        data: { provisional, poolSize: poolPrices.length, credibleFreshCount: credibleFresh.length },
+      });
+      return true;
+    };
+
     if (marketMakerOptIn) {
       if (credibleFresh.length >= minCredibleNeeded && market.reference != null && market.count >= Math.max(2, cfg.guards.minValidOffers)) {
         supply = deriveSafeMarketConsensusSupply(supply, market, cfg, source.priceTrend);
@@ -491,7 +540,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
             usedMarketConsensusFloor: supply.usedMarketConsensusFloor,
           },
         });
-      } else {
+      } else if (!tryCostlessV2Fallback()) {
         target = null;
         isProvisional = true;
         reviewReasons.push(
@@ -542,39 +591,15 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         level: "warn",
         data: { provisional, poolSize: poolPrices.length, desiredMinProfit: supply.hardFloorPrice },
       });
-    } else {
-      const validIncluded = offers.filter((o) => o.included && o.price > 0);
-      const minFallbackNeeded = Math.max(2, cfg.guards.minValidOffers);
-      if (v2 && validIncluded.length >= minFallbackNeeded && market.reference != null) {
-        const poolPrices = validIncluded.map((o) => o.price);
-        const fallbackPct = Math.max(40, cfg.costless.provisionalPercentile ?? 30);
-        const rawProv = percentile(poolPrices, fallbackPct);
-        const provisional = ceilToStep(rawProv, Math.max(1, cfg.rounding.finalStep));
-        strategy = "provisional_market_percentile";
-        competitionTier = "provisional_market_percentile";
-        target = provisional;
-        isProvisional = true;
-        reviewReasons.push(
-          `بدون قیمت خرید و کمبود فروشندگان خوش‌امتیاز تازه (${credibleFresh.length} < ${minCredibleNeeded}) — قیمت پیشنهادی موقت (${fa(provisional)} = صدک ${fallbackPct} از ${poolPrices.length} پیشنهاد معتبر ترب) نیازمند بازبینی دستی است`,
-        );
-        log({
-          step: "provisional",
-          title: "مسیر بی‌هزینه Provisional (جایگزین از کل پیشنهادهای معتبر ترب)",
-          message:
-            `فروشنده خوش‌امتیاز تازه کافی نبود (${credibleFresh.length} < ${minCredibleNeeded})، اما ${poolPrices.length} پیشنهاد معتبر در ترب موجود است → قیمت پیشنهادی موقت ${fa(provisional)} تومان (صدک ${fallbackPct}) برای بازبینی مدیر`,
-          level: "warn",
-          data: { provisional, poolSize: poolPrices.length, credibleFreshCount: credibleFresh.length },
-        });
-      } else {
-        // داده کافی نیست → تصمیم واقعی تنها با استعلام مجدد/انبار ممکن است (no_data)
-        target = null;
-        log({
-          step: "provisional",
-          title: "مسیر بی‌هزینه Provisional غیرفعال",
-          message: `فقط ${credibleFresh.length} فروشنده به‌روز و معتبر (حداقل لازم: ${minCredibleNeeded}) — بدون پیشنهاد Provisional`,
-          level: "warn",
-        });
-      }
+    } else if (!tryCostlessV2Fallback()) {
+      // داده کافی نیست → تصمیم واقعی تنها با استعلام مجدد/انبار ممکن است (no_data)
+      target = null;
+      log({
+        step: "provisional",
+        title: "مسیر بی‌هزینه Provisional غیرفعال",
+        message: `فقط ${credibleFresh.length} فروشنده به‌روز و معتبر (حداقل لازم: ${minCredibleNeeded}) — بدون پیشنهاد Provisional`,
+        level: "warn",
+      });
     }
   }
 
@@ -606,13 +631,23 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     reviewReasons.push(`تعداد پیشنهاد معتبر (${market.count}) کمتر از حداقل ${cfg.guards.minValidOffers}`);
   }
 
-  // Veto «تازگی» (نسخه ۴.۱): نسبت پیشنهادهای به‌روز — رد آن همیشه review است (نه reject)
+  // Veto «تازگی» (نسخه ۴.۱ / ۴.۲): در حالت نرم v2، نسبت وزنی تازگی ملاک است تا یک فروشنده قدیمی کم‌وزن اخطار کاذب ندهد
   if (market.count > 0) {
-    const freshCount = offers.filter((o) => o.included && o.fresh).length;
-    const freshRatio = freshCount / market.count;
+    const includedValid = offers.filter((o) => o.included);
+    let freshRatio: number;
+    if (softStaleness) {
+      const totalW = includedValid.reduce((s, o) => s + Math.max(0.01, o.weight || 0), 0);
+      const freshW = includedValid
+        .filter((o) => o.fresh)
+        .reduce((s, o) => s + Math.max(0.01, o.weight || 0), 0);
+      freshRatio = totalW > 0 ? freshW / totalW : 0;
+    } else {
+      const freshCount = includedValid.filter((o) => o.fresh).length;
+      freshRatio = freshCount / market.count;
+    }
     if (freshRatio < Math.max(0, cfg.guards.minFreshRatio)) {
       reviewReasons.push(
-        `نسبت پیشنهادهای به‌روز (${(freshRatio * 100).toFixed(0)}%) زیر حداقل ${Math.round(cfg.guards.minFreshRatio * 100)}% — اطمینان بازار پایین است`,
+        `نسبت ${softStaleness ? "وزنی " : ""}پیشنهادهای به‌روز (${(freshRatio * 100).toFixed(0)}%) زیر حداقل ${Math.round(cfg.guards.minFreshRatio * 100)}% — اطمینان بازار پایین است`,
       );
     }
   }
@@ -688,6 +723,15 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
         discountPct: null,
         dispersion: market.dispersion,
         config: cfg,
+      });
+      log({
+        step: "no_data",
+        title: "توقف استعلام (نبود داده معتبر بازار و قیمت خرید)",
+        message: !source.ok && source.error
+          ? `داده معتبر از منبع دریافت نشد (${source.error}) و قیمت خرید همکار هم صفر است`
+          : `از ${source.offers.length} پیشنهاد دریافتی، هیچ پیشنهاد معتبری باقی نماند و قیمت خرید همکار ثبت نشده است`,
+        level: "error",
+        data: { rawOffers: source.offers.length, sourceOk: source.ok, rejectedBySupervisor: emptySupervisor.enabled && emptySupervisor.verdict === "reject" },
       });
       return {
         offers,

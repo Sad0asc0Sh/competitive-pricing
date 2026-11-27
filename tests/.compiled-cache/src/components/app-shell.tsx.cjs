@@ -14,7 +14,7 @@ const ui_1 = require("./ui");
 const NAV = [
     { href: "/", label: "داشبورد", shortLabel: "داشبورد", desc: "نمای کلی و آخرین تصمیم‌ها", Icon: icons_1.IconDashboard },
     { href: "/products", label: "محصولات", shortLabel: "محصولات", desc: "کارت‌های محصول و استعلام", Icon: icons_1.IconProducts },
-    { href: "/review", label: "بازبینی", shortLabel: "بازبینی", desc: "صف تأیید انسانی", Icon: icons_1.IconReview },
+    { href: "/review", label: "پنل قیمت‌گذاری", shortLabel: "قیمت‌گذاری", desc: "قیمت‌گذاری آماری و تأیید انسانی", Icon: icons_1.IconReview },
     { href: "/runs", label: "اجراها", shortLabel: "اجراها", desc: "تاریخچه استعلام‌ها", Icon: icons_1.IconRuns },
     { href: "/campaigns", label: "کمپین‌های تخفیف", shortLabel: "کمپین‌ها", desc: "۳ سیستم تخفیف فروشگاه", Icon: icons_1.IconCampaigns },
     { href: "/settings", label: "تنظیمات موتور", shortLabel: "تنظیمات", desc: "پروفایل، زمان‌بندی، اتصال", Icon: icons_1.IconSettings },

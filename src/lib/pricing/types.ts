@@ -438,6 +438,7 @@ export interface PricingProfileConfig {
   /** ---------- ۱۰) هوش مصنوعی مکمل ---------- */
   ai: {
     enabled: boolean;
+    torobMatchEnabled?: boolean;
     reviewBelowConfidence: number;
   };
   /** ---------- ۱۱) مسیر بی‌هزینه (بدون لیست همکار و بدون قیمت خرید) — Provisional ---------- */
@@ -618,7 +619,7 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
   },
   supervisor: {
     enabled: true,
-    mode: "hybrid_subq_and_local",
+    mode: "local_instant_only",
     baseUrl: "https://api.subq.ai/v1",
     model: "subq-snap-preview",
     rejectBelowPct: 45,
@@ -633,7 +634,8 @@ export const DEFAULT_PROFILE_CONFIG: PricingProfileConfig = {
     },
   },
   ai: {
-    enabled: true,
+    enabled: false,
+    torobMatchEnabled: false,
     reviewBelowConfidence: 0.72,
   },
   costless: {
@@ -695,6 +697,8 @@ export interface PricingContext {
   ownRecentPrices?: number[];
   category?: string | null;
   cardIndex?: number;
+  /** آیا لینک/شناسه ترب به‌صورت دستی توسط کاربر ثبت شده است؟ (در این صورت اختلاف جزئی عنوان رد قطعی نمی‌شود) */
+  torobUrlManual?: boolean;
   config: PricingProfileConfig;
   now?: Date;
   /** تاریخچه قیمت خودی محصولات (برای مرجع own_price_7d) — محاسبه در runner */

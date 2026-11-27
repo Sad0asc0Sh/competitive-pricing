@@ -781,7 +781,7 @@ async function priceOneProduct(
         approveAbovePct:
           config.supervisor?.gates?.identity_match?.approveAbovePct ?? config.supervisor?.approveAbovePct ?? 80,
         minSellerCount: config.filters.minSellerCount,
-        aiIdentityEnabled: config.ai.enabled,
+        aiIdentityEnabled: Boolean(config.ai.enabled && config.ai.torobMatchEnabled === true),
       },
     },
     manualOffers,
@@ -800,13 +800,14 @@ async function priceOneProduct(
     currentFinalPrice: product.currentFinalPrice,
     ownRecentPrices,
     category: product.category,
+    torobUrlManual: Boolean(product.torobUrl && product.torobUrl.trim()),
     config,
     discountContext,
   });
 
   const allowCostless = isMarketMakerWithoutCostEnabled(config);
 
-  // اگر PRK از قبل قفل بوده و گیت هویت در بازه مبهم (review) افتاده، از AI فقط برای تایید/رد تطابق پنل ترب استفاده کن (نه قیمت!)
+  // اگر PRK از قبل قفل بوده و گیت هویت در بازه مبهم (review) افتاده، فقط در صورت فعال‌بودن صریح در پروفایل از AI استفاده کن
   if (
     source.ok &&
     source.prk &&
@@ -814,6 +815,7 @@ async function priceOneProduct(
     !source.meta?.aiIdentityCheck &&
     result.supervisor.gates.identity_match?.verdict === "review" &&
     config.ai.enabled &&
+    config.ai.torobMatchEnabled === true &&
     (await aiEnabled())
   ) {
     const prices = source.offers.map((o) => o.price).filter((p) => Number.isFinite(p) && p > 0).sort((a, b) => a - b);

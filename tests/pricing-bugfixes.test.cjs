@@ -548,13 +548,24 @@ test('A1. verifyTorobMatchesWithAI محرمانگی و حذف PRK جعلی را 
     const sentStr = JSON.stringify(aiPayloads[0])
     assert.ok(!sentStr.includes('costPrice') && !sentStr.includes('hardFloor') && !sentStr.includes('marginPct'))
 
-    const mcpOut = await mcpClient.fetchViaTorobMcpServer({
+    const mcpDefaultNoAi = await mcpClient.fetchViaTorobMcpServer({
       mcpUrl: 'http://fake-torob',
       productName: 'دوربین هایک ویژن DS-2CD1023G0E-I',
       sku: 'DS-2CD1023G0E-I',
       now: NOW,
     })
+    assert.ok(mcpDefaultNoAi && mcpDefaultNoAi.ok)
+    assert.equal(aiPayloads.length, 1, 'به‌صورت پیش‌فرض بدون aiIdentityEnabled=true نباید روی MCP هوش مصنوعی صدا زده شود')
+
+    const mcpOut = await mcpClient.fetchViaTorobMcpServer({
+      mcpUrl: 'http://fake-torob',
+      productName: 'دوربین هایک ویژن DS-2CD1023G0E-I',
+      sku: 'DS-2CD1023G0E-I',
+      matchConfig: { aiIdentityEnabled: true },
+      now: NOW,
+    })
     assert.ok(mcpOut && mcpOut.ok)
+    assert.equal(aiPayloads.length, 2)
     assert.deepEqual(mcpOut.meta.mergedPanelPrks, ['p1', 'p2'])
     assert.equal(mcpOut.offers.length, 3, 'فروشگاه مشترک نباید تکراری ذخیره شود و ۲+۱=۳ فروشنده یکتا بماند')
     assert.equal(mcpOut.offers.find((o) => o.shopName === 'فروشگاه مشترک')?.price, 2530000)
@@ -741,4 +752,134 @@ test('T3. safeInt از سرریز عدد صحیح PostgreSQL (INT4) و NaN جل�
   assert.equal(safeInt(9_999_999_999), 2_147_483_647)
   assert.equal(safeInt(-9_999_999_999), -2_147_483_648)
   assert.equal(safeInt(2540000.6), 2540001)
+})
+
+test('P2. لاگ ۱: کالای بدون قیمت خرید (حتی با Market-Maker و کمبود فروشنده خوش‌امتیاز یا تک‌پیشنهادی) به پنل می‌رود و ۴۲٪ رد نمی‌شود', () => {
+  const cfg = makeConfig({
+    estimator: { mode: 'v2' },
+    sourcing: { ...DEFAULT_PROFILE_CONFIG.sourcing, allowAutoApplyWithoutCost: true },
+  })
+  // حالت الف: Market-Maker فعال است اما فقط ۲ فروشنده امتیاز ۴٫۰ (کمتر از ۳ خوش‌امتیاز)
+  const twoRegular = runPricingPipeline(
+    {
+      source: 'torob',
+      ok: true,
+      prk: 'mm-fallback',
+      productTitle: 'دوربین مداربسته بولت هایک ویژن مدل DS-2CD1023G0E-I',
+      totalSellerCount: 2,
+      fetchedAt: NOW,
+      offers: [
+        makeRawOffer({ shop: 'ف۱', price: 2400000, score: 4.0 }),
+        makeRawOffer({ shop: 'ف۲', price: 2500000, score: 4.0 }),
+      ],
+    },
+    {
+      productName: 'دوربین مداربسته بولت هایک ویژن مدل DS-2CD1023G0E-I',
+      sku: 'DS-2CD1023G0E-I',
+      costPrice: 0,
+      supplierQuotes: [],
+      config: cfg,
+      now: NOW,
+    },
+  )
+  assert.equal(twoRegular.rejectedBySupervisor, false)
+  assert.equal(twoRegular.strategy, 'provisional_market_percentile')
+  assert.ok(twoRegular.finalPrice != null && twoRegular.finalPrice >= 2400000)
+
+  // حالت ب: تک‌پیشنهادی معتبر در ترب
+  const singleOffer = runPricingPipeline(
+    {
+      source: 'torob',
+      ok: true,
+      prk: 'single-valid',
+      productTitle: 'دوربین مداربسته بولت هایک ویژن مدل DS-2CD1023G0E-I',
+      totalSellerCount: 1,
+      fetchedAt: NOW,
+      offers: [makeRawOffer({ shop: 'تک‌فروشنده', price: 3100000, score: 4.1 })],
+    },
+    {
+      productName: 'دوربین مداربسته بولت هایک ویژن مدل DS-2CD1023G0E-I',
+      sku: 'DS-2CD1023G0E-I',
+      costPrice: 0,
+      supplierQuotes: [],
+      config: cfg,
+      now: NOW,
+    },
+  )
+  assert.equal(singleOffer.rejectedBySupervisor, false)
+  assert.equal(singleOffer.finalPrice, 3100000)
+})
+
+test('P3. لاگ ۲: با ثبت دستی لینک ترب (torobUrlManual=true)، اختلاف عنوان کارت را به پنل می‌فرستد و با گیت ۱ وتو/رد نمی‌کند', () => {
+  const cfg = makeConfig({ estimator: { mode: 'v2' } })
+  const res = runPricingPipeline(
+    {
+      source: 'torob',
+      ok: true,
+      prk: 'manual-link-1',
+      productTitle: 'پکیج کامل لوازم جانبی و پایه دوربین مدل متفرقه X900',
+      totalSellerCount: 5,
+      fetchedAt: NOW,
+      offers: [
+        makeRawOffer({ shop: 'ف۱', price: 2500000 }),
+        makeRawOffer({ shop: 'ف۲', price: 2550000 }),
+        makeRawOffer({ shop: 'ف۳', price: 2600000 }),
+        makeRawOffer({ shop: 'ف۴', price: 2650000 }),
+      ],
+    },
+    {
+      productName: 'دوربین مداربسته داهوا مدل DH-HAC-HFW1200T',
+      sku: 'DH-HAC-HFW1200T',
+      costPrice: 2000000,
+      torobUrlManual: true,
+      supplierQuotes: [],
+      config: cfg,
+      now: NOW,
+    },
+  )
+  assert.equal(res.rejectedBySupervisor, false, 'لینک دستی نباید در گیت ۱ رد قطعی شود')
+  assert.ok(res.supervisor.gates.identity_match.scorePct >= 45)
+  assert.equal(res.supervisor.gates.identity_match.verdict, 'review')
+  assert.ok(res.reviewReasons.some((r) => r.includes('لینک دستی ترب')))
+})
+
+test('P4. لاگ ۳: در حالت نرم v2، تازگی وزنی جلوی هشدار کاذب «۱۷٪ < ۳۰٪» را وقتی پیشنهادهای تازه وزن بالایی دارند می‌گیرد', () => {
+  const cfg = makeConfig({ estimator: { mode: 'v2', softStaleness: true } })
+  const res = runPricingPipeline(
+    {
+      source: 'torob',
+      ok: true,
+      prk: 'weighted-fresh',
+      productTitle: 'دوربین مداربسته بولت هایک ویژن مدل DS-2CD1023G0E-I',
+      totalSellerCount: 6,
+      fetchedAt: NOW,
+      offers: [
+        makeRawOffer({ shop: 'فروشنده تازه ۱', price: 21100000, ageDays: 0.1, score: 4.9 }),
+        makeRawOffer({ shop: 'قدیمی ۱', price: 21200000, ageDays: 25, score: 4.2 }),
+        makeRawOffer({ shop: 'قدیمی ۲', price: 21300000, ageDays: 28, score: 4.2 }),
+        makeRawOffer({ shop: 'قدیمی ۳', price: 21400000, ageDays: 30, score: 4.2 }),
+        makeRawOffer({ shop: 'قدیمی ۴', price: 21500000, ageDays: 35, score: 4.2 }),
+        makeRawOffer({ shop: 'قدیمی ۵', price: 21600000, ageDays: 40, score: 4.2 }),
+      ],
+    },
+    {
+      productName: 'دوربین مداربسته بولت هایک ویژن مدل DS-2CD1023G0E-I',
+      sku: 'DS-2CD1023G0E-I',
+      costPrice: 18500000,
+      supplierQuotes: [],
+      config: cfg,
+      now: NOW,
+    },
+  )
+  assert.equal(
+    res.reviewReasons.some((r) => r.includes('پیشنهادهای به‌روز')),
+    false,
+    `با وزن غالب فروشنده تازه نباید هشدار کمبود تازگی ثبت شود: ${JSON.stringify(res.reviewReasons)}`,
+  )
+})
+
+test('P5. پیش‌فرض‌ها روی حالت آماری/محلی بدون AI خارجی روی MCP تنظیم شده‌اند', () => {
+  assert.equal(DEFAULT_PROFILE_CONFIG.ai.enabled, false)
+  assert.equal(DEFAULT_PROFILE_CONFIG.ai.torobMatchEnabled, false)
+  assert.equal(DEFAULT_PROFILE_CONFIG.supervisor.mode, 'local_instant_only')
 })
