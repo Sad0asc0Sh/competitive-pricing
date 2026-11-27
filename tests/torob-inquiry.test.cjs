@@ -187,6 +187,29 @@ test('codeless discovery finds and merges both HSP sellers without AI', async (t
   assert.ok(sibling.reasons.some((reason) => reason.includes('عنوان فروشندگان')))
 })
 
+test('codeless search keeps looking after a multi-seller match and inspects an unbranded card', async (t) => {
+  const queries = buildSearchQueries(remoteTarget.productName, remoteTarget.sku)
+  const unbranded = { prk: 'hsp-unbranded', name_fa: 'ریموت بنزی ۵ عددی', name_en: '', price_toman: 750000, shop_count: 1 }
+  const established = { ...bazarCard, shop_count: 3 }
+  const fake = installFakeTorob({
+    search: (query) => query === queries[0] ? [established]
+      : query === 'ریموت بنزی' ? [unbranded] : [],
+    details: {
+      [established.prk]: { ...established, offers: [
+        rawOffer('بازار قفل', 580000),
+        rawOffer('بازار قفل دو', 590000),
+        rawOffer('بازار قفل سه', 600000),
+      ] },
+      [unbranded.prk]: { ...unbranded, offers: [jahanOffer] },
+    },
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget, matchConfig: { aiIdentityEnabled: false } })
+  assert.ok(fake.calls.some(({ name, args }) => name === 'search_products' && args.query === 'ریموت بنزی'))
+  assert.ok(fake.calls.some(({ name, args }) => name === 'product_details' && args.prk === unbranded.prk))
+  assert.ok(source.torob.search.candidates.some(({ prk, extraction }) => prk === unbranded.prk && extraction === 'extracted'))
+})
+
 test('a seller-corroborated card preserves its original Persian and English titles', async (t) => {
   const card = { ...jahanCard, name_fa: 'ریموت بنزی پنج تایی' }
   const fake = installFakeTorob({
