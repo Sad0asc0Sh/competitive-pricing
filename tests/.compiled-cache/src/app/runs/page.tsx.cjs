@@ -4,6 +4,7 @@ exports.dynamic = void 0;
 exports.default = RunsPage;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const listing_1 = require("../../lib/pricing/listing");
+const format_1 = require("../../lib/format");
 const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
 const runs_client_1 = require("@/components/runs-client");
@@ -31,7 +32,7 @@ function extractErrorSummary(status, pushError, steps) {
 async function RunsPage({ searchParams }) {
     const { run } = await searchParams;
     const runs = await index_ts_1.db.select().from(schema_1.priceRuns).orderBy((0, drizzle_orm_1.desc)(schema_1.priceRuns.startedAt)).limit(50);
-    const selected = run ? Number(run) : runs[0]?.id ?? null;
+    const selected = (run ? (0, format_1.parsePositiveInt)(run) : null) ?? runs[0]?.id ?? null;
     const [decisions, rawRunLogs] = await Promise.all([
         selected
             ? index_ts_1.db
@@ -60,8 +61,8 @@ async function RunsPage({ searchParams }) {
         pendingReview: r.pendingReview,
         failed: r.failed,
         error: r.error ?? null,
-        startedAt: r.startedAt.toISOString(),
-        finishedAt: r.finishedAt ? r.finishedAt.toISOString() : null,
+        startedAt: (0, format_1.toIsoString)(r.startedAt),
+        finishedAt: r.finishedAt ? (0, format_1.toIsoString)(r.finishedAt) || null : null,
     }));
     const serializedDecisions = decisions.map(({ d, name, sku }) => {
         const rawSteps = Array.isArray(d.steps) ? d.steps : [];
@@ -100,7 +101,7 @@ async function RunsPage({ searchParams }) {
         scope: l.scope,
         level: l.level,
         message: l.message,
-        createdAt: l.createdAt.toISOString(),
+        createdAt: (0, format_1.toIsoString)(l.createdAt),
     }));
     return ((0, jsx_runtime_1.jsx)(runs_client_1.RunsClient, { runs: serializedRuns, selectedRunId: selected, decisions: serializedDecisions, runLogs: serializedRunLogs }));
 }

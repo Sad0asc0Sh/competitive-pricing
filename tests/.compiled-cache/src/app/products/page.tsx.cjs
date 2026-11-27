@@ -6,6 +6,7 @@ const jsx_runtime_1 = require("react/jsx-runtime");
 const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
 const products_client_1 = require("@/components/products-client");
+const format_1 = require("../../lib/format");
 const drizzle_orm_1 = require("drizzle-orm");
 exports.dynamic = "force-dynamic";
 async function ProductsPage() {
@@ -26,7 +27,7 @@ async function ProductsPage() {
         currentCampaignName: p.currentCampaignName,
         currentShowInFeatured: p.currentShowInFeatured,
         status: p.status,
-        lastCheckedAt: p.lastCheckedAt ? p.lastCheckedAt.toISOString() : null,
+        lastCheckedAt: p.lastCheckedAt ? (0, format_1.toIsoString)(p.lastCheckedAt) || null : null,
     }));
     return (0, jsx_runtime_1.jsx)(products_client_1.ProductsClient, { products: serialized });
 }

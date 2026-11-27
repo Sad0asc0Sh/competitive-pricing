@@ -28,7 +28,7 @@ export default async function SettingsPage({
   const masked = conns.map((c) => ({
     ...c,
     config: Object.fromEntries(
-      Object.entries(c.config).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v]),
+      Object.entries(c.config ?? {}).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v]),
     ),
   }));
 

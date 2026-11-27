@@ -1,11 +1,18 @@
 import { db } from "@/db";
 import { storeConnectors } from "@/db/schema";
 import { requireAdminAuth } from "@/lib/auth";
+import { parsePositiveInt } from "@/lib/format";
 import { ensureDefaults } from "@/lib/services/bootstrap";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+
+function maskConnectorConfig(config: Record<string, string> | null | undefined): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(config ?? {}).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v]),
+  );
+}
 
 export async function GET(req: Request) {
   const denied = await requireAdminAuth(req);
@@ -17,9 +24,7 @@ export async function GET(req: Request) {
   return NextResponse.json(
     rows.map((r) => ({
       ...r,
-      config: Object.fromEntries(
-        Object.entries(r.config).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v])
-      ),
+      config: maskConnectorConfig(r.config),
     })),
   );
 }
@@ -34,23 +39,22 @@ export async function POST(req: Request) {
     active?: boolean;
     config?: Record<string, string>;
   } | null;
-  if (!b?.id) return NextResponse.json({ error: "id لازم است" }, { status: 400 });
-  const [existing] = await db.select().from(storeConnectors).where(eq(storeConnectors.id, b.id)).limit(1);
+  const connectorId = parsePositiveInt(b?.id);
+  if (connectorId == null) return NextResponse.json({ error: "id معتبر لازم است" }, { status: 400 });
+  const [existing] = await db.select().from(storeConnectors).where(eq(storeConnectors.id, connectorId)).limit(1);
   if (!existing) return NextResponse.json({ error: "یافت نشد" }, { status: 404 });
-  const config = { ...existing.config };
-  for (const [k, v] of Object.entries(b.config ?? {})) {
+  const config = { ...(existing.config ?? {}) };
+  for (const [k, v] of Object.entries(b?.config ?? {})) {
     if (v !== "••••••" && v !== "••••••••") config[k] = v;
   }
-  if (b.active) await db.update(storeConnectors).set({ active: false });
+  if (b?.active) await db.update(storeConnectors).set({ active: false });
   const [row] = await db
     .update(storeConnectors)
-    .set({ config, ...(b.active != null ? { active: b.active } : {}) })
-    .where(eq(storeConnectors.id, b.id))
+    .set({ config, ...(b?.active != null ? { active: b.active } : {}) })
+    .where(eq(storeConnectors.id, connectorId))
     .returning();
   return NextResponse.json({
     ...row,
-    config: Object.fromEntries(
-      Object.entries(row.config).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v])
-    ),
+    config: maskConnectorConfig(row.config),
   });
 }

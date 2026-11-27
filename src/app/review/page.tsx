@@ -1,4 +1,5 @@
 import { decisionPanels } from "@/lib/pricing/listing";
+import { toIsoString } from "@/lib/format";
 import { db } from "@/db";
 import { competitorOffers, priceDecisions, products } from "@/db/schema";
 import type { TorobCandidateTrace, TorobInquiryReport } from "@/lib/pricing/types";
@@ -202,7 +203,7 @@ export default async function ReviewPage() {
         name,
         sku,
         status: d.status,
-        createdAt: d.createdAt.toISOString(),
+        createdAt: toIsoString(d.createdAt),
         cost,
         effectiveCost,
         current,
@@ -261,7 +262,7 @@ export default async function ReviewPage() {
       productId: d.productId,
       name,
       sku,
-      createdAt: d.createdAt.toISOString(),
+      createdAt: toIsoString(d.createdAt),
       finalPrice: d.finalPrice,
       basePrice: d.basePrice,
       offersUsed: d.offersUsed,

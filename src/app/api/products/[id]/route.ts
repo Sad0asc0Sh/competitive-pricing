@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { products } from "@/db/schema";
 import { requireAdminAuth } from "@/lib/auth";
+import { parsePositiveInt } from "@/lib/format";
 import { parseColleaguePriceListText, resolveSupplyCost } from "@/lib/pricing/sourcing";
 import type { SupplierQuote } from "@/lib/pricing/types";
 import { getProfileConfig } from "@/lib/services/bootstrap";
@@ -19,7 +20,9 @@ export async function GET(req: Request, { params }: Ctx) {
   if (denied) return denied;
 
   const { id } = await params;
-  const [row] = await db.select().from(products).where(eq(products.id, Number(id))).limit(1);
+  const productId = parsePositiveInt(id);
+  if (productId == null) return NextResponse.json({ error: "شناسه محصول نامعتبر است" }, { status: 400 });
+  const [row] = await db.select().from(products).where(eq(products.id, productId)).limit(1);
   if (!row) return NextResponse.json({ error: "یافت نشد" }, { status: 404 });
   return NextResponse.json(row);
 }
@@ -29,8 +32,10 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (denied) return denied;
 
   const { id } = await params;
+  const productId = parsePositiveInt(id);
+  if (productId == null) return NextResponse.json({ error: "شناسه محصول نامعتبر است" }, { status: 400 });
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const [existing] = await db.select().from(products).where(eq(products.id, Number(id))).limit(1);
+  const [existing] = await db.select().from(products).where(eq(products.id, productId)).limit(1);
   if (!existing) return NextResponse.json({ error: "یافت نشد" }, { status: 404 });
 
   const allowed = [
@@ -129,7 +134,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   patch.autoApply = false;
   patch.updatedAt = new Date();
   try {
-    const [row] = await db.update(products).set(patch).where(eq(products.id, Number(id))).returning();
+    const [row] = await db.update(products).set(patch).where(eq(products.id, productId)).returning();
     return NextResponse.json(row);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "خطا" }, { status: 400 });
@@ -141,6 +146,8 @@ export async function DELETE(req: Request, { params }: Ctx) {
   if (denied) return denied;
 
   const { id } = await params;
-  await db.delete(products).where(eq(products.id, Number(id)));
+  const productId = parsePositiveInt(id);
+  if (productId == null) return NextResponse.json({ error: "شناسه محصول نامعتبر است" }, { status: 400 });
+  await db.delete(products).where(eq(products.id, productId));
   return NextResponse.json({ ok: true });
 }

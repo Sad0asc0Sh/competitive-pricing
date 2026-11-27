@@ -4,6 +4,7 @@ exports.dynamic = void 0;
 exports.default = ReviewPage;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const listing_1 = require("../../lib/pricing/listing");
+const format_1 = require("../../lib/format");
 const index_ts_1 = require("../../db/index.ts");
 const schema_1 = require("../../db/schema");
 const review_client_1 = require("@/components/review-client");
@@ -178,7 +179,7 @@ async function ReviewPage() {
             name,
             sku,
             status: d.status,
-            createdAt: d.createdAt.toISOString(),
+            createdAt: (0, format_1.toIsoString)(d.createdAt),
             cost,
             effectiveCost,
             current,
@@ -234,7 +235,7 @@ async function ReviewPage() {
             productId: d.productId,
             name,
             sku,
-            createdAt: d.createdAt.toISOString(),
+            createdAt: (0, format_1.toIsoString)(d.createdAt),
             finalPrice: d.finalPrice,
             basePrice: d.basePrice,
             offersUsed: d.offersUsed,

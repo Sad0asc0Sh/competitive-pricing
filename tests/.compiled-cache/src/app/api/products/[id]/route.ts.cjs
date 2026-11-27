@@ -7,6 +7,7 @@ exports.DELETE = DELETE;
 const index_ts_1 = require("../../../../db/index.ts");
 const schema_1 = require("../../../../db/schema");
 const auth_1 = require("../../../../lib/auth");
+const format_1 = require("../../../../lib/format");
 const sourcing_1 = require("../../../../lib/pricing/sourcing");
 const bootstrap_1 = require("../../../../lib/services/bootstrap");
 const registry_1 = require("../../../../lib/sources/registry");
@@ -20,7 +21,10 @@ async function GET(req, { params }) {
     if (denied)
         return denied;
     const { id } = await params;
-    const [row] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).limit(1);
+    const productId = (0, format_1.parsePositiveInt)(id);
+    if (productId == null)
+        return server_1.NextResponse.json({ error: "شناسه محصول نامعتبر است" }, { status: 400 });
+    const [row] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, productId)).limit(1);
     if (!row)
         return server_1.NextResponse.json({ error: "یافت نشد" }, { status: 404 });
     return server_1.NextResponse.json(row);
@@ -30,8 +34,11 @@ async function PATCH(req, { params }) {
     if (denied)
         return denied;
     const { id } = await params;
+    const productId = (0, format_1.parsePositiveInt)(id);
+    if (productId == null)
+        return server_1.NextResponse.json({ error: "شناسه محصول نامعتبر است" }, { status: 400 });
     const body = (await req.json().catch(() => ({})));
-    const [existing] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).limit(1);
+    const [existing] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, productId)).limit(1);
     if (!existing)
         return server_1.NextResponse.json({ error: "یافت نشد" }, { status: 404 });
     const allowed = [
@@ -128,7 +135,7 @@ async function PATCH(req, { params }) {
     patch.autoApply = false;
     patch.updatedAt = new Date();
     try {
-        const [row] = await index_ts_1.db.update(schema_1.products).set(patch).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).returning();
+        const [row] = await index_ts_1.db.update(schema_1.products).set(patch).where((0, drizzle_orm_1.eq)(schema_1.products.id, productId)).returning();
         return server_1.NextResponse.json(row);
     }
     catch (e) {
@@ -140,6 +147,9 @@ async function DELETE(req, { params }) {
     if (denied)
         return denied;
     const { id } = await params;
-    await index_ts_1.db.delete(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id)));
+    const productId = (0, format_1.parsePositiveInt)(id);
+    if (productId == null)
+        return server_1.NextResponse.json({ error: "شناسه محصول نامعتبر است" }, { status: 400 });
+    await index_ts_1.db.delete(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, productId));
     return server_1.NextResponse.json({ ok: true });
 }

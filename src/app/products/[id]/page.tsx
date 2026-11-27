@@ -6,19 +6,23 @@ import {
   type SerializedOffer,
   type SerializedProductDetail,
 } from "@/components/product-detail-client";
+import { parsePositiveInt, toIsoString } from "@/lib/format";
 import { desc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
 /** فاصله روز از آخرین تغییر قیمت — محاسبه‌شده در سرور برای پایداری رندر کلاینت */
-function daysAgo(date: Date | string): number {
-  return Math.round((Date.now() - new Date(date).getTime()) / 86400000);
+function daysAgo(date: Date | string): number | null {
+  const ms = new Date(date).getTime();
+  return Number.isFinite(ms) ? Math.round((Date.now() - ms) / 86400000) : null;
 }
 
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [p] = await db.select().from(products).where(eq(products.id, Number(id))).limit(1);
+  const productId = parsePositiveInt(id);
+  if (productId == null) notFound();
+  const [p] = await db.select().from(products).where(eq(products.id, productId)).limit(1);
   if (!p) notFound();
 
   const decisions = await db
@@ -66,7 +70,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const serializedDecisions: SerializedDecision[] = decisions.map((d) => ({
     id: d.id,
     status: d.status,
-    createdAt: d.createdAt.toISOString(),
+    createdAt: toIsoString(d.createdAt),
     offersUsed: d.offersUsed,
     offersTotal: d.offersTotal,
     effectiveCostPrice: d.effectiveCostPrice,

@@ -24,7 +24,7 @@ async function SettingsPage({ searchParams, }) {
     ]);
     const masked = conns.map((c) => ({
         ...c,
-        config: Object.fromEntries(Object.entries(c.config).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v])),
+        config: Object.fromEntries(Object.entries(c.config ?? {}).map(([k, v]) => [k, /secret|key/i.test(k) && v ? "••••••" : v])),
     }));
     return ((0, jsx_runtime_1.jsx)(settings_client_1.SettingsClient, { aiStatus: aiStatus, torobRelayStatus: torobRelayStatus, initialTab: initialTab, profiles: profiles.map((p) => ({ ...p, config: (0, bootstrap_1.mergeConfig)(p.config) })), schedules: sch, connectors: masked }));
 }

@@ -6,16 +6,21 @@ const jsx_runtime_1 = require("react/jsx-runtime");
 const index_ts_1 = require("../../../db/index.ts");
 const schema_1 = require("../../../db/schema");
 const product_detail_client_1 = require("@/components/product-detail-client");
+const format_1 = require("../../../lib/format");
 const drizzle_orm_1 = require("drizzle-orm");
 const navigation_1 = require("next/navigation");
 exports.dynamic = "force-dynamic";
 /** فاصله روز از آخرین تغییر قیمت — محاسبه‌شده در سرور برای پایداری رندر کلاینت */
 function daysAgo(date) {
-    return Math.round((Date.now() - new Date(date).getTime()) / 86400000);
+    const ms = new Date(date).getTime();
+    return Number.isFinite(ms) ? Math.round((Date.now() - ms) / 86400000) : null;
 }
 async function ProductDetailPage({ params }) {
     const { id } = await params;
-    const [p] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, Number(id))).limit(1);
+    const productId = (0, format_1.parsePositiveInt)(id);
+    if (productId == null)
+        (0, navigation_1.notFound)();
+    const [p] = await index_ts_1.db.select().from(schema_1.products).where((0, drizzle_orm_1.eq)(schema_1.products.id, productId)).limit(1);
     if (!p)
         (0, navigation_1.notFound)();
     const decisions = await index_ts_1.db
@@ -61,7 +66,7 @@ async function ProductDetailPage({ params }) {
     const serializedDecisions = decisions.map((d) => ({
         id: d.id,
         status: d.status,
-        createdAt: d.createdAt.toISOString(),
+        createdAt: (0, format_1.toIsoString)(d.createdAt),
         offersUsed: d.offersUsed,
         offersTotal: d.offersTotal,
         effectiveCostPrice: d.effectiveCostPrice,

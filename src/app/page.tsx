@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { activityLogs, priceDecisions, priceRuns, products, schedules } from "@/db/schema";
 import { CardRangeRunner, RunButton } from "@/components/actions";
 import { DashboardDecisionsSection, type DashboardDecisionItem } from "@/components/dashboard-client";
-import { campaignColor, campaignLabel, faDate, faNum, pct, statusColor, statusLabel } from "@/lib/format";
+import { campaignColor, campaignLabel, faDate, faNum, pct, statusColor, statusLabel, toIsoString } from "@/lib/format";
 import { ensureDefaults } from "@/lib/services/bootstrap";
 import { getAIStatus } from "@/lib/ai/config";
 import { getStoreStatus } from "@/lib/store/connectors";
@@ -34,7 +34,10 @@ export default async function DashboardPage() {
         .groupBy(products.currentCampaign),
     ]);
 
-  const nextRun = sch.map((s) => s.nextRunAt).filter(Boolean).sort((a, b) => a!.getTime() - b!.getTime())[0];
+  const nextRun = sch
+    .map((s) => s.nextRunAt)
+    .filter((d): d is Date => Boolean(d))
+    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
   const [aiStatus, torobRelayStatus] = await Promise.all([getAIStatus(), getTorobRelayStatus()]);
   let storeStatus = null;
   try {
@@ -63,7 +66,7 @@ export default async function DashboardPage() {
     projectedNationalRank: d.projectedNationalRank,
     netProfitToman: d.netProfitToman,
     netMarginPct: d.netMarginPct,
-    createdAt: d.createdAt.toISOString(),
+    createdAt: toIsoString(d.createdAt),
   }));
 
   const storeConnected = Boolean(storeStatus?.activeType || storeStatus?.envFallback);

@@ -38,7 +38,10 @@ async function DashboardPage() {
             .from(schema_1.products)
             .groupBy(schema_1.products.currentCampaign),
     ]);
-    const nextRun = sch.map((s) => s.nextRunAt).filter(Boolean).sort((a, b) => a.getTime() - b.getTime())[0];
+    const nextRun = sch
+        .map((s) => s.nextRunAt)
+        .filter((d) => Boolean(d))
+        .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
     const [aiStatus, torobRelayStatus] = await Promise.all([(0, config_1.getAIStatus)(), (0, config_2.getTorobRelayStatus)()]);
     let storeStatus = null;
     try {
@@ -67,7 +70,7 @@ async function DashboardPage() {
         projectedNationalRank: d.projectedNationalRank,
         netProfitToman: d.netProfitToman,
         netMarginPct: d.netMarginPct,
-        createdAt: d.createdAt.toISOString(),
+        createdAt: (0, format_1.toIsoString)(d.createdAt),
     }));
     const storeConnected = Boolean(storeStatus?.activeType || storeStatus?.envFallback);
     return ((0, jsx_runtime_1.jsxs)("div", { className: "space-y-5 sm:space-y-6", children: [(0, jsx_runtime_1.jsxs)("div", { className: "flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between", children: [(0, jsx_runtime_1.jsxs)("div", { className: "min-w-0 space-y-2.5", children: [(0, jsx_runtime_1.jsx)("h1", { className: "text-lg font-extrabold leading-snug text-slate-900 sm:text-xl lg:text-2xl", children: "\u0645\u062F\u06CC\u0631\u06CC\u062A \u0642\u06CC\u0645\u062A \u0641\u0631\u0648\u0634" }), (0, jsx_runtime_1.jsxs)("p", { className: "text-sm text-slate-600", children: ["\u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0628\u0639\u062F\u06CC ", (0, format_1.faDate)(nextRun)] }), (0, jsx_runtime_1.jsxs)("details", { children: [(0, jsx_runtime_1.jsx)("summary", { className: "cursor-pointer text-xs text-slate-600", children: "\u0648\u0636\u0639\u06CC\u062A \u0627\u062A\u0635\u0627\u0644 \u0633\u0631\u0648\u06CC\u0633\u200C\u0647\u0627" }), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-center gap-2 text-xs", children: [(0, jsx_runtime_1.jsxs)(link_1.default, { href: "/settings", className: `inline-flex items-center gap-1.5 rounded-full border px-3 py-1 transition ${aiStatus.ai.configured

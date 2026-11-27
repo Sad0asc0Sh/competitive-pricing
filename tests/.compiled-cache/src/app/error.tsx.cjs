@@ -1,0 +1,16 @@
+"use client";
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.default = AppError;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const link_1 = __importDefault(require("next/link"));
+const react_1 = require("react");
+function AppError({ error, reset, }) {
+    (0, react_1.useEffect)(() => {
+        console.error("[panel] route error:", error);
+    }, [error]);
+    return ((0, jsx_runtime_1.jsx)("div", { className: "mx-auto my-8 max-w-xl", children: (0, jsx_runtime_1.jsxs)("div", { className: "card space-y-4 border-rose-200 bg-white", children: [(0, jsx_runtime_1.jsxs)("div", { className: "space-y-1.5", children: [(0, jsx_runtime_1.jsx)("span", { className: "badge bg-rose-100 text-rose-800", children: "\u062E\u0637\u0627\u06CC \u0633\u0631\u0648\u0631" }), (0, jsx_runtime_1.jsx)("h1", { className: "text-lg font-extrabold text-slate-900", children: "\u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u0628\u0627 \u062E\u0637\u0627 \u0645\u062A\u0648\u0642\u0641 \u0634\u062F" }), (0, jsx_runtime_1.jsxs)("p", { className: "text-sm leading-6 text-slate-600", children: ["\u062E\u0637\u0627\u06CC\u06CC \u0647\u0646\u06AF\u0627\u0645 \u067E\u0631\u062F\u0627\u0632\u0634 \u0627\u0637\u0644\u0627\u0639\u0627\u062A \u062F\u0631 \u0633\u0631\u0648\u0631 \u0631\u062E \u062F\u0627\u062F. \u062F\u0631 \u0635\u0648\u0631\u062A \u062A\u06A9\u0631\u0627\u0631 \u067E\u0633 \u0627\u0632 \u0628\u0647\u200C\u0631\u0648\u0632\u0631\u0633\u0627\u0646\u06CC \u0633\u0627\u0645\u0627\u0646\u0647\u060C \u0627\u062A\u0635\u0627\u0644 \u067E\u0627\u06CC\u06AF\u0627\u0647\u200C\u062F\u0627\u062F\u0647\u060C \u0627\u062C\u0631\u0627\u06CC \u0645\u0647\u0627\u062C\u0631\u062A\u200C\u0647\u0627\u06CC \u062F\u06CC\u062A\u0627\u0628\u06CC\u0633 (", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", children: "npm run db:migrate" }), ") \u0648 \u0644\u0627\u06AF \u0633\u0631\u0648\u0631 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F."] })] }), error?.digest && ((0, jsx_runtime_1.jsxs)("div", { className: "rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600", children: ["\u06A9\u062F \u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0633\u0631\u0648\u0631: ", (0, jsx_runtime_1.jsx)("code", { dir: "ltr", className: "font-mono font-semibold text-slate-800", children: error.digest })] })), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-wrap items-center gap-2.5", children: [(0, jsx_runtime_1.jsx)("button", { type: "button", onClick: () => reset(), className: "btn-primary", children: "\u062A\u0644\u0627\u0634 \u0645\u062C\u062F\u062F" }), (0, jsx_runtime_1.jsx)("button", { type: "button", onClick: () => window.location.reload(), className: "btn-secondary", children: "\u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u06A9\u0627\u0645\u0644 \u0635\u0641\u062D\u0647" }), (0, jsx_runtime_1.jsx)(link_1.default, { href: "/", className: "btn-secondary", children: "\u0628\u0627\u0632\u06AF\u0634\u062A \u0628\u0647 \u062F\u0627\u0634\u0628\u0648\u0631\u062F" })] })] }) }));
+}

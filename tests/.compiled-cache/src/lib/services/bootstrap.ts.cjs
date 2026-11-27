@@ -10,8 +10,19 @@ const schema_1 = require("../../db/schema");
 const types_1 = require("../pricing/types");
 const drizzle_orm_1 = require("drizzle-orm");
 let bootstrapped = false;
+let bootstrapPromise = null;
 /** ایجاد داده‌های پیش‌فرض (پروفایل، ۳ سیستم کمپین، زمان‌بندی، کانکتور sgeooole) — idempotent */
 async function ensureDefaults() {
+    if (bootstrapped)
+        return;
+    if (bootstrapPromise)
+        return bootstrapPromise;
+    bootstrapPromise = runEnsureDefaults().finally(() => {
+        bootstrapPromise = null;
+    });
+    return bootstrapPromise;
+}
+async function runEnsureDefaults() {
     if (bootstrapped)
         return;
     const profiles = await index_ts_1.db.select().from(schema_1.pricingProfiles).limit(1);

@@ -1,4 +1,5 @@
 import { decisionPanels } from "@/lib/pricing/listing";
+import { parsePositiveInt, toIsoString } from "@/lib/format";
 import { db } from "@/db";
 import { activityLogs, priceDecisions, priceRuns, products } from "@/db/schema";
 import {
@@ -40,7 +41,7 @@ function extractErrorSummary(
 export default async function RunsPage({ searchParams }: { searchParams: Promise<{ run?: string }> }) {
   const { run } = await searchParams;
   const runs = await db.select().from(priceRuns).orderBy(desc(priceRuns.startedAt)).limit(50);
-  const selected = run ? Number(run) : runs[0]?.id ?? null;
+  const selected = (run ? parsePositiveInt(run) : null) ?? runs[0]?.id ?? null;
 
   const [decisions, rawRunLogs] = await Promise.all([
     selected
@@ -71,8 +72,8 @@ export default async function RunsPage({ searchParams }: { searchParams: Promise
     pendingReview: r.pendingReview,
     failed: r.failed,
     error: r.error ?? null,
-    startedAt: r.startedAt.toISOString(),
-    finishedAt: r.finishedAt ? r.finishedAt.toISOString() : null,
+    startedAt: toIsoString(r.startedAt),
+    finishedAt: r.finishedAt ? toIsoString(r.finishedAt) || null : null,
   }));
 
   const serializedDecisions: SerializedRunDecision[] = decisions.map(({ d, name, sku }) => {
@@ -113,7 +114,7 @@ export default async function RunsPage({ searchParams }: { searchParams: Promise
     scope: l.scope,
     level: l.level,
     message: l.message,
-    createdAt: l.createdAt.toISOString(),
+    createdAt: toIsoString(l.createdAt),
   }));
 
   return (

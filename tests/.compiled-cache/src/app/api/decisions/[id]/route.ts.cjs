@@ -39,6 +39,7 @@ exports.POST = POST;
 const index_ts_1 = require("../../../../db/index.ts");
 const schema_1 = require("../../../../db/schema");
 const auth_1 = require("../../../../lib/auth");
+const format_1 = require("../../../../lib/format");
 const runnerService = __importStar(require("../../../../lib/services/runner"));
 const torob_1 = require("../../../../lib/sources/torob");
 const torob_payload_1 = require("../../../../lib/sources/torob-payload");
@@ -50,7 +51,11 @@ async function GET(req, { params }) {
     if (denied)
         return denied;
     const { id } = await params;
-    const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, Number(id))).limit(1);
+    const decisionId = (0, format_1.parsePositiveInt)(id);
+    if (decisionId == null) {
+        return server_1.NextResponse.json({ ok: false, error: "شناسه تصمیم نامعتبر است" }, { status: 400 });
+    }
+    const [d] = await index_ts_1.db.select().from(schema_1.priceDecisions).where((0, drizzle_orm_1.eq)(schema_1.priceDecisions.id, decisionId)).limit(1);
     if (!d)
         return server_1.NextResponse.json({ error: "یافت نشد" }, { status: 404 });
     const offers = await index_ts_1.db.select().from(schema_1.competitorOffers).where((0, drizzle_orm_1.eq)(schema_1.competitorOffers.decisionId, d.id));
@@ -75,8 +80,8 @@ async function POST(req, { params }) {
     if (denied)
         return denied;
     const { id } = await params;
-    const decisionId = Number(id);
-    if (!Number.isFinite(decisionId) || decisionId <= 0) {
+    const decisionId = (0, format_1.parsePositiveInt)(id);
+    if (decisionId == null) {
         return server_1.NextResponse.json({ ok: false, error: "شناسه تصمیم نامعتبر است" }, { status: 400 });
     }
     const body = (await req.json().catch(() => ({})));

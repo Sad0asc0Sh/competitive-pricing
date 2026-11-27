@@ -1,14 +1,40 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.strategyLabel = exports.badgeThemeLabel = exports.campaignColor = exports.campaignShortLabel = exports.campaignLabel = exports.statusColor = exports.torobStatusLabel = exports.statusLabel = exports.faDate = exports.pct = exports.faNum = exports.toman = void 0;
+exports.parsePositiveInt = parsePositiveInt;
+exports.toIsoString = toIsoString;
 const toman = (n) => (n == null ? "—" : `${Math.round(n).toLocaleString("fa-IR")} تومان`);
 exports.toman = toman;
 const faNum = (n, digits = 0) => (n == null ? "—" : Number(n).toLocaleString("fa-IR", { maximumFractionDigits: digits }));
 exports.faNum = faNum;
 const pct = (n, digits = 1) => (n == null ? "—" : `${Number(n).toLocaleString("fa-IR", { maximumFractionDigits: digits })}٪`);
 exports.pct = pct;
-const faDate = (d) => d ? new Date(d).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" }) : "—";
+const faDate = (d) => {
+    if (!d)
+        return "—";
+    const dt = d instanceof Date ? d : new Date(d);
+    return Number.isNaN(dt.getTime()) ? "—" : dt.toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
+};
 exports.faDate = faDate;
+const PG_INT4_MAX = 2_147_483_647;
+function parsePositiveInt(raw) {
+    if (typeof raw === "number") {
+        return Number.isSafeInteger(raw) && raw > 0 && raw <= PG_INT4_MAX ? raw : null;
+    }
+    if (typeof raw !== "string")
+        return null;
+    const trimmed = raw.trim();
+    if (!/^\d+$/.test(trimmed))
+        return null;
+    const n = Number(trimmed);
+    return Number.isSafeInteger(n) && n > 0 && n <= PG_INT4_MAX ? n : null;
+}
+function toIsoString(d, fallback = "") {
+    if (!d)
+        return fallback;
+    const dt = d instanceof Date ? d : new Date(d);
+    return Number.isNaN(dt.getTime()) ? fallback : dt.toISOString();
+}
 exports.statusLabel = {
     applied: "اعمال شد",
     pending_review: "در انتظار بازبینی",

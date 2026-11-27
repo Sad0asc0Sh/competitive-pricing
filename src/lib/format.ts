@@ -3,8 +3,30 @@ import type { TorobInquiryStatus } from "./pricing/types";
 export const toman = (n: number | null | undefined) => (n == null ? "—" : `${Math.round(n).toLocaleString("fa-IR")} تومان`);
 export const faNum = (n: number | null | undefined, digits = 0) => (n == null ? "—" : Number(n).toLocaleString("fa-IR", { maximumFractionDigits: digits }));
 export const pct = (n: number | null | undefined, digits = 1) => (n == null ? "—" : `${Number(n).toLocaleString("fa-IR", { maximumFractionDigits: digits })}٪`);
-export const faDate = (d: Date | string | null | undefined) =>
-  d ? new Date(d).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" }) : "—";
+export const faDate = (d: Date | string | null | undefined) => {
+  if (!d) return "—";
+  const dt = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(dt.getTime()) ? "—" : dt.toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
+};
+
+const PG_INT4_MAX = 2_147_483_647;
+
+export function parsePositiveInt(raw: string | number | null | undefined): number | null {
+  if (typeof raw === "number") {
+    return Number.isSafeInteger(raw) && raw > 0 && raw <= PG_INT4_MAX ? raw : null;
+  }
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const n = Number(trimmed);
+  return Number.isSafeInteger(n) && n > 0 && n <= PG_INT4_MAX ? n : null;
+}
+
+export function toIsoString(d: Date | string | null | undefined, fallback = ""): string {
+  if (!d) return fallback;
+  const dt = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(dt.getTime()) ? fallback : dt.toISOString();
+}
 
 export const statusLabel: Record<string, string> = {
   applied: "اعمال شد",

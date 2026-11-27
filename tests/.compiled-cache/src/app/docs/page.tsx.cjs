@@ -30,7 +30,13 @@ async function renderPricingDocs(md) {
     return { html, toc };
 }
 async function DocsPage() {
-    const md = await (0, promises_1.readFile)(node_path_1.default.join(process.cwd(), "docs", "PRICING_LOGIC.md"), "utf8");
+    let md;
+    try {
+        md = await (0, promises_1.readFile)(node_path_1.default.join(process.cwd(), "docs", "PRICING_LOGIC.md"), "utf8");
+    }
+    catch {
+        md = "## مستندات منطق قیمت‌گذاری\n\nفایل مستندات (`docs/PRICING_LOGIC.md`) در محیط فعلی در دسترس نیست.";
+    }
     const { html, toc } = await renderPricingDocs(md);
     return (0, jsx_runtime_1.jsx)(docs_client_1.DocsClient, { html: html, toc: toc });
 }

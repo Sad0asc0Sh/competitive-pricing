@@ -4,9 +4,19 @@ import { DEFAULT_PROFILE_CONFIG, type PricingProfileConfig } from "@/lib/pricing
 import { eq } from "drizzle-orm";
 
 let bootstrapped = false;
+let bootstrapPromise: Promise<void> | null = null;
 
 /** ایجاد داده‌های پیش‌فرض (پروفایل، ۳ سیستم کمپین، زمان‌بندی، کانکتور sgeooole) — idempotent */
 export async function ensureDefaults(): Promise<void> {
+  if (bootstrapped) return;
+  if (bootstrapPromise) return bootstrapPromise;
+  bootstrapPromise = runEnsureDefaults().finally(() => {
+    bootstrapPromise = null;
+  });
+  return bootstrapPromise;
+}
+
+async function runEnsureDefaults(): Promise<void> {
   if (bootstrapped) return;
   const profiles = await db.select().from(pricingProfiles).limit(1);
   if (!profiles.length) {

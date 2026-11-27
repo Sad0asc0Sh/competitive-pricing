@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { products } from "@/db/schema";
 import { ProductsClient, type ProductListItem } from "@/components/products-client";
+import { toIsoString } from "@/lib/format";
 import { asc } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ export default async function ProductsPage() {
     currentCampaignName: p.currentCampaignName,
     currentShowInFeatured: p.currentShowInFeatured,
     status: p.status,
-    lastCheckedAt: p.lastCheckedAt ? p.lastCheckedAt.toISOString() : null,
+    lastCheckedAt: p.lastCheckedAt ? toIsoString(p.lastCheckedAt) || null : null,
   }));
 
   return <ProductsClient products={serialized} />;

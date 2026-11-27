@@ -27,7 +27,12 @@ async function renderPricingDocs(md: string): Promise<{ html: string; toc: DocsT
 }
 
 export default async function DocsPage() {
-  const md = await readFile(path.join(process.cwd(), "docs", "PRICING_LOGIC.md"), "utf8");
+  let md: string;
+  try {
+    md = await readFile(path.join(process.cwd(), "docs", "PRICING_LOGIC.md"), "utf8");
+  } catch {
+    md = "## مستندات منطق قیمت‌گذاری\n\nفایل مستندات (`docs/PRICING_LOGIC.md`) در محیط فعلی در دسترس نیست.";
+  }
   const { html, toc } = await renderPricingDocs(md);
 
   return <DocsClient html={html} toc={toc} />;
