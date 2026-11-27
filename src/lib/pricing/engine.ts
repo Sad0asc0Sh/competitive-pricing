@@ -154,7 +154,14 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   });
 
   // ۴.۲.۱: همان تشخیص‌دهندهٔ فیلتر (کلید فشرده) — قبلاً اینجا مقایسهٔ خام و در فیلتر مقایسهٔ نرمال‌شده بود و ناهم‌خوان بودند
-  const selfShopInListing = source.offers.some((o) => ownShopMatcher({ shopName: o.shopName, shopId: o.shopId }));
+  const identityAssessed = source.torob?.offerIdentityEvaluated === true;
+  const identityConfirmed = source.offers.filter((offer) => offer.torobIdentity
+    ? offer.torobIdentity.status === "MATCH_CONFIRMED" : !identityAssessed);
+  const confirmedSet = new Set(identityConfirmed);
+  const marketSource = identityAssessed
+    ? { ...source, offers: identityConfirmed, totalSellerCount: distinctSellerCount(identityConfirmed) }
+    : source;
+  const selfShopInListing = identityConfirmed.some((o) => ownShopMatcher({ shopName: o.shopName, shopId: o.shopId }));
   let identityMatchScorePct = 92;
   // آیا حضور فروشگاه خودمان به‌عنوان «تأیید متقاطع هویت» پذیرفته می‌شود؟ (پیش‌فرض بله؛ تضاد هویتی آن را باطل می‌کند)
   let selfConfirmsIdentity = selfShopInListing;
@@ -323,7 +330,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   const ownOnly = source.ok && !isSourceChallenged && !isSourceDegraded &&
     source.sourceStatus !== "truncated" && sellerCount === 1 && selfShopInListing &&
     source.offers.every(ownShopMatcher) &&
-    source.offers.some(o => o.price > 0 && o.inStock !== false && !o.isAd && !o.priceUnreliable) &&
+    identityConfirmed.some(o => o.price > 0 && o.inStock !== false && !o.isAd && !o.priceUnreliable) &&
     !source.isTruncated && !source.meta?.isTruncated && !source.meta?.offersTruncated;
   log({
     step: "listing",
@@ -336,13 +343,18 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
 
   // ---------- 2) فیلترهای اعتبار داده + تفکیک شهر پیش‌فرض (مشهد)
   const canValidateOffers = !source.torob || source.torob.status === "MATCH_CONFIRMED" || source.torob.status === "NO_VALID_OFFERS";
-  const offers: OfferEvaluation[] = canValidateOffers ? applyValidityFilters(
+  const offers: OfferEvaluation[] = (canValidateOffers ? applyValidityFilters(
     source.offers,
     cfg.filters,
     now,
     cfg.rank1,
     softStaleness ? { softStaleness: true, hardMaxAgeDays: est.hardMaxOfferAgeDays } : undefined,
-  ) : source.offers.map((offer) => ({ ...offer, included: false, weight: 0, excludeReason: source.torob?.reason }));
+  ) : source.offers.map((offer) => ({ ...offer, included: false, weight: 0, excludeReason: source.torob?.reason })))
+    .map((offer, index) => confirmedSet.has(source.offers[index]) ? offer : {
+      ...offer, included: false, weight: 0,
+      excludeReason: offer.torobIdentity?.reason ?? "هویت مستقل پیشنهاد فروشنده احراز نشده است",
+    });
+  const marketOffers = identityAssessed ? offers.filter((_, index) => confirmedSet.has(source.offers[index])) : offers;
   const excludedByFilter = offers.filter((o) => !o.included);
   const localValidBeforeOutlier = offers.filter((o) => o.included && o.isLocalCity).length;
   const reasonCounts: Record<string, number> = {};
@@ -379,7 +391,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
     });
   }
 
-  const positiveRawPrices = source.offers
+  const positiveRawPrices = identityConfirmed
     .map((o) => o.price)
     .filter((p) => Number.isFinite(p) && p > 0);
   const lowestRaw = positiveRawPrices.length ? Math.min(...positiveRawPrices) : null;
@@ -511,6 +523,11 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       validLocalInPersonOffers: canValidateOffers ? offers.filter((o) => o.included && o.sellerType === "in_person" && o.isLocalCity).length : null,
       sellerRows: source.torob.sellerRows,
       reportedSellers: source.torob.reportedSellers,
+      ...(identityAssessed ? { offerIdentityCounts: {
+        MATCH_CONFIRMED: identityConfirmed.length,
+        REVIEW_REQUIRED: source.offers.filter((offer) => !offer.torobIdentity || offer.torobIdentity.status === "REVIEW_REQUIRED").length,
+        IDENTITY_MISMATCH: source.offers.filter((offer) => offer.torobIdentity?.status === "IDENTITY_MISMATCH").length,
+      } } : {}),
     };
     log({
       step: "torob_inquiry",
@@ -539,7 +556,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
       explanation: "بدون داده کافی برای کشف کف و سقف بازار",
     };
     const supervisor = evaluateSystemOneSupervisorSync({
-      productName: ctx.productName, source, offers, supply, position: emptyPosition, floorCeiling: emptyFloorCeiling,
+      productName: ctx.productName, source: marketSource, offers: marketOffers, supply, position: emptyPosition, floorCeiling: emptyFloorCeiling,
       identityMatchScorePct, selfShopInListing: selfConfirmsIdentity, finalPrice: null, basePrice: null,
       discountPct: null, dispersion: market.dispersion, config: cfg, torobInquiryStatus: torobInquiry?.status,
     });
@@ -1003,7 +1020,7 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   // ---------- 8.۵) امتیاز اعتماد (v2: کالیبره از تحلیل سناریوها | legacy: ترکیب ساده)
   const conf = computeConfidence(
     market,
-    { totalSellerCount: source.totalSellerCount, offersTotal: source.offers.length },
+    { totalSellerCount: marketSource.totalSellerCount, offersTotal: marketOffers.length },
     cfg,
   );
   let confidenceScore = conf.score;
@@ -1047,8 +1064,8 @@ export function runPricingPipeline(source: SourceResult, ctx: PricingContext): P
   // ---------- 9) ناظر بالاسر SubQ SystemOne (تصمیم‌گیری ۴ مقیاسی با قانون ۳ بازه‌ای 0..45..80..100%)
   const supervisor = evaluateSystemOneSupervisorSync({
     productName: ctx.productName,
-    source,
-    offers,
+    source: marketSource,
+    offers: marketOffers,
     supply,
     position,
     floorCeiling: disc.floorCeiling,

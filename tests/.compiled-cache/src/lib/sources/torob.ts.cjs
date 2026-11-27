@@ -9,6 +9,7 @@ exports.normalizeTorobInPersonSeller = normalizeTorobInPersonSeller;
 exports.parseTorobJson = parseTorobJson;
 exports.fetchTorobPriceTrendV4 = fetchTorobPriceTrendV4;
 const filters_1 = require("../pricing/filters");
+const parse_1 = require("../pricing/match/parse");
 const text_1 = require("../pricing/match/text");
 const config_1 = require("../torob-relay/config");
 const crypto_1 = require("../torob-relay/crypto");
@@ -103,6 +104,8 @@ function normalizeSeller(s, now, sellerType) {
         shopId: shopId ?? undefined,
         shopCity: (0, torob_payload_1.firstText)(s.shop_city, s.city, s.shop_name2),
         listingTitle: (0, torob_payload_1.firstText)(s.product_title, s.listing_title, s.product_name, sellerType === "online" ? s.name1 : undefined),
+        listingSpecs: (0, torob_payload_1.readTorobSpecs)(s),
+        imageUrls: (0, torob_payload_1.readTorobImages)(s),
         currency: "toman",
         observedAt: now,
         sellerType,
@@ -121,7 +124,7 @@ function normalizeSeller(s, now, sellerType) {
         lastChangedText,
         isAd: (s.is_adv ?? s.is_ad ?? s.sponsored) === true,
         inStock: (0, torob_payload_1.torobStock)(s.availability ?? s.available ?? s.stock_status),
-        url: (0, torob_payload_1.offerSourceUrl)(s.page_url, s.url, s.shop_url, shopUrl),
+        url: (0, torob_payload_1.offerSourceUrl)(s.product_url, s.page_url, s.url, s.shop_url, shopUrl),
     };
 }
 function normalizeTorobSeller(s, now = new Date()) {
@@ -150,7 +153,7 @@ function decodeTorobDetails(value, now) {
         const offer = seller ? normalizeSeller(seller, now, type) : null;
         return offer ? [offer] : [];
     });
-    const faultyRows = Boolean(sellerRows) && [...onlineRows, ...storeRows].every((item) => {
+    const faultyRows = [...onlineRows, ...storeRows].some((item) => {
         const seller = (0, torob_payload_1.record)(item);
         return !(0, torob_payload_1.firstText)(seller?.shop_name, seller?.seller_name, (0, torob_payload_1.record)(seller?.shop)?.name);
     });
@@ -163,6 +166,7 @@ function decodeTorobDetails(value, now) {
             ...(0, torob_payload_1.readTorobTitles)(row),
             prk: (0, torob_payload_1.cleanPrk)(row.random_key ?? row.prk) ?? (0, torob_payload_1.prkFromTorobUrl)(row.web_client_absolute_url ?? row.url),
             specs: (0, torob_payload_1.readTorobSpecs)(row),
+            imageUrls: (0, torob_payload_1.readTorobImages)(row),
             offers,
             sellerRows,
             totalSellerCount: sellerRows != null || onlineOfferCount + inPersonSellerCount > 0 ? onlineOfferCount + inPersonSellerCount : null,
@@ -188,7 +192,7 @@ async function searchTorobProductV4(query, limit, timeoutMs) {
     if (response.data === undefined)
         return response;
     const data = jsonValue(response.data);
-    return data === undefined ? { issue: "search_schema" } : { data };
+    return { origin: "torob_api", ...(data === undefined ? { issue: "search_schema" } : { data }) };
 }
 function findDetailsInNextData(html, prk) {
     const script = html.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
@@ -237,7 +241,7 @@ async function fetchTorobDetails(card, now, timeoutMs) {
         (0, text_1.normalizeText)(card.titleFa) || (0, text_1.normalizeText)(card.titleEn);
     const remaining = deadline - Date.now();
     if ((parsed.data && !parsed.issue && title) || remaining < 250) {
-        return { ...parsed, issue: parsed.issue === "transport_timeout" ? "details_timeout" : parsed.issue };
+        return { ...parsed, origin: "torob_api", issue: parsed.issue === "transport_timeout" ? "details_timeout" : parsed.issue };
     }
     const page = await torobTransportGet("site", `/p/${encodeURIComponent(card.prk)}/`, remaining);
     if (page.blocked)
@@ -248,9 +252,9 @@ async function fetchTorobDetails(card, now, timeoutMs) {
         if (fromPage.data)
             fromPage.data.detailsUrl = detailsUrl;
         if (!fromPage.issue || !parsed.data)
-            return fromPage;
+            return { ...fromPage, origin: "torob_page" };
     }
-    return parsed.data ? parsed : {
+    return parsed.data ? { ...parsed, origin: "torob_api" } : {
         unavailable: parsed.unavailable && page.unavailable,
         issue: [parsed.issue, page.issue].includes("transport_timeout") ? "details_timeout" : parsed.issue ?? page.issue ?? "details_schema",
     };
@@ -281,11 +285,14 @@ exports.torobAdapter = {
     async fetchOffers(product) {
         const now = new Date();
         const prk = extractPrk(product.torobUrl, product.torobPrk);
+        const cachedPrk = prk && !product.torobUrl && !product.torobLinkConfirmation &&
+            !(0, parse_1.parseTitle)(product.name, { sku: product.sku }).codes.some((code) => !code.inCompat) ? prk : null;
         const options = {
             productName: product.name,
             sku: product.sku,
             category: product.category,
-            prk,
+            prk: cachedPrk ? null : prk,
+            cachedPrk,
             detailsUrl: prk ? (0, torob_payload_1.safeTorobDetailsUrl)(product.torobDetailsUrl, prk, true) : null,
             confirmation: product.torobLinkConfirmation,
             anchorPriceToman: product.currentFinalPrice && product.currentFinalPrice > 0 ? product.currentFinalPrice

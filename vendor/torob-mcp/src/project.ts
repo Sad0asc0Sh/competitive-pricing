@@ -34,7 +34,7 @@ import {
 } from "./normalize.js";
 
 /** One seller offer for a product. */
-export interface Offer {
+export interface Offer extends SellerEvidence {
   shop_name: string;
   product_title?: string;
   shop_city: string | null;
@@ -108,6 +108,7 @@ export interface ProductCard {
 }
 
 export interface ProductDetails extends ProductCard {
+  image_urls?: string[];
   offers: Offer[];
   offer_count: number;
   seller_rows_seen?: number;
@@ -144,10 +145,24 @@ export interface ProductDetails extends ProductCard {
 // Only the fields actually read are typed. The upstream payload is large and
 // loosely shaped; typing the whole thing would be a lie that breaks silently.
 
-interface RawOffer {
+interface RawMedia {
+  image_url?: unknown;
+  image_urls?: unknown;
+  images?: unknown;
+}
+
+interface SellerEvidence {
+  image_urls?: string[];
+  specs?: SpecItem[];
+}
+
+interface RawOffer extends RawMedia {
   shop_name?: unknown;
   product_title?: unknown;
   product_name?: unknown;
+  specs?: unknown;
+  key_specs?: unknown;
+  structural_specs?: unknown;
   listing_title?: unknown;
   name1?: unknown;
   shop_name2?: unknown;
@@ -164,6 +179,7 @@ interface RawOffer {
   availability?: unknown;
   is_price_unreliable?: unknown;
   page_url?: unknown;
+  product_url?: unknown;
   is_adv?: unknown;
   postage_fee?: unknown;
   guarantee_info?: unknown;
@@ -178,7 +194,7 @@ interface RawOffer {
   };
 }
 
-interface RawProduct {
+interface RawProduct extends RawMedia {
   random_key?: unknown;
   prk?: unknown;
   name1?: unknown;
@@ -197,7 +213,6 @@ interface RawProduct {
   stock_status?: unknown;
   availability?: unknown;
   is_accessible?: unknown;
-  image_url?: unknown;
   image_count?: unknown;
   web_client_absolute_url?: unknown;
   more_info_url?: unknown;
@@ -505,6 +520,32 @@ function installmentProvidersOf(raw: RawOffer): string[] {
   return out.slice(0, 5);
 }
 
+function imageUrlsOf(raw: RawMedia): string[] {
+  const urls = [raw.image_url];
+  for (const pictures of [raw.image_urls, raw.images]) {
+    if (Array.isArray(pictures)) {
+      urls.push(...pictures.slice(0, 4).map((picture) => picture?.url ?? picture?.image_url ?? picture));
+    }
+  }
+  return [...new Set(urls.flatMap((value) => {
+    const url = short(value, 320);
+    return url?.startsWith("https://") ? [url] : [];
+  }))].slice(0, 4);
+}
+
+function sellerEvidenceOf(raw: RawOffer): SellerEvidence {
+  const image_urls = imageUrlsOf(raw);
+  const specs = specsOf(raw).items;
+  if (Array.isArray(raw.specs)) {
+    for (const item of raw.specs.slice(0, 12)) {
+      const key = short(item?.key ?? item?.title, 80);
+      const value = specValue(item?.value);
+      if (key && value) specs.push({ group: null, key, value });
+    }
+  }
+  return { ...(image_urls.length ? { image_urls } : {}), ...(specs.length ? { specs: specs.slice(0, 30) } : {}) };
+}
+
 function toOffer(raw: RawOffer): Offer | null {
   const shop = short(raw?.shop_name, 80);
   if (!shop) return null;
@@ -521,6 +562,7 @@ function toOffer(raw: RawOffer): Offer | null {
   return {
     shop_name: shop,
     ...(title ? { product_title: title } : {}),
+    ...sellerEvidenceOf(raw),
     shop_city: short(raw.shop_name2, 60),
     shop_id: shopId || null,
     shop_score: shopScore(raw.shop_score, raw.shop_votes_count),
@@ -538,7 +580,7 @@ function toOffer(raw: RawOffer): Offer | null {
     // around its session id, so it travels as `buy_url` and never as the shop's
     // address.
     url: shopId ? `https://torob.com/shop/${shopId}/` : (str(raw.page_url).startsWith("http") ? str(raw.page_url) : null),
-    buy_url: str(raw.page_url).startsWith("http") ? str(raw.page_url) : null,
+    buy_url: [raw.product_url, raw.page_url].map((value) => str(value)).find((url) => /^https?:\/\//i.test(url)) ?? null,
     shop_note: scoreNoteOf(raw),
     is_adv: raw.is_adv === true,
     postage_text: postage.text,
@@ -577,7 +619,7 @@ export function offersOf(row: RawProduct): Offer[] {
 // --------------------------------------------------- in-person (حضوری) shops
 
 /** One shop that sells this product in person, as Torob lists it. */
-export interface InPersonSeller {
+export interface InPersonSeller extends SellerEvidence {
   shop_name: string;
   product_title?: string;
   available?: boolean;
@@ -625,6 +667,7 @@ function toInPersonSeller(raw: any): InPersonSeller | null {
   return {
     shop_name,
     ...(title ? { product_title: title } : {}),
+    ...sellerEvidenceOf(raw),
     ...(typeof raw?.availability === "boolean" ? { available: raw.availability } : {}),
     shop_id: shopId || null,
     city: short(raw?.shop_name2, 60),
@@ -1629,16 +1672,18 @@ export async function productDetails(
   const sellerRowsSeen = (Array.isArray(onlineRows) ? onlineRows.length : 0) + (Array.isArray(storeRows) ? storeRows.length : 0);
   const sellerSchemaIncomplete = (!Array.isArray(onlineRows) && !Array.isArray(storeRows)) ||
     (onlineRows != null && !Array.isArray(onlineRows)) || (storeRows != null && !Array.isArray(storeRows)) ||
-    (sellerRowsSeen > 0 && offers.length + inPerson.sellers.length === 0);
+    (sellerRowsSeen > offers.length + inPerson.sellers.length);
   const titles = cardTitles(raw);
   const specs = specsOf(raw);
   const priceWindow = priceWindowOf(raw);
   const variants = variantsOf(raw);
   const categoryPath = categoryPathOf(raw);
   const purchaseOptions = purchaseOptionsOf(raw);
+  const image_urls = imageUrlsOf(raw);
 
   return {
     ...base,
+    ...(image_urls.length ? { image_urls } : {}),
     name_fa: titles.name_fa ?? base.name_fa,
     name_en: titles.name_en ?? base.name_en,
     title_source_fields: [...new Set([...(titles.title_source_fields ?? []), ...(base.title_source_fields ?? [])])],

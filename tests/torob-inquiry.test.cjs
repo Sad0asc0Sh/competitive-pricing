@@ -28,6 +28,8 @@ const remoteTarget = { productName: 'ریموت بلوتوثی 315 بنزی 5 د
 const bazarCard = { prk: 'hsp-bazar', name_fa: '613 ریموت بلوتوثی 315 بنزی 5 دکمه اچ اس پی', price_toman: 580000, shop_count: 1 }
 const jahanCard = { prk: 'hsp-jahan', name_fa: 'ریموت بنزی ۵ عددی', name_en: 'Hsp', price_toman: 750000, shop_count: 1 }
 const jahanOffer = { ...rawOffer('جهان ریموت', 750000), product_title: 'ریموت بنزی بلوتوث بنزی فرکانس 315 | Hsp' }
+const verifiedJahanOffer = { ...jahanOffer, specs: [{ key: 'تعداد دکمه', value: 'پنج' }, { key: 'تعداد در بسته', value: '۱' }] }
+const bazarOffer = { ...rawOffer('بازار قفل', 580000), product_title: bazarCard.name_fa }
 
 function withConfig(overrides = {}) {
   return { ...context, config: structuredClone(DEFAULT_PROFILE_CONFIG), ...overrides }
@@ -52,7 +54,8 @@ function rawOffer(shop, price, extras = {}) {
   return mcpOffer({ shop, price, city: 'مشهد', ...extras })
 }
 
-function mcpDetails(name = title, offers = [rawOffer('fixture-a', 1360000), rawOffer('fixture-b', 1390000)]) {
+function mcpDetails(name = title, offers = [rawOffer('fixture-a', 1360000), rawOffer('fixture-b', 1390000)]
+  .map((offer) => ({ ...offer, product_title: name }))) {
   return { prk: fixture.prk, name_fa: name, offers, in_person_sellers: [] }
 }
 
@@ -116,7 +119,8 @@ test('HSP aliases and structured remote specifications confirm the exact Torob c
   assert.deepEqual(result.parsed.brands, ['hsp'])
   assert.deepEqual(result.parsed.attrs.frequency, [315000000])
   assert.deepEqual(result.parsed.attrs.buttons, [5])
-  assert.deepEqual(result.parsed.words, ['بلوتوثی', 'بنزی'])
+  assert.deepEqual(result.parsed.attrs.bluetooth, ['yes'])
+  assert.deepEqual(result.parsed.words, ['بنزی'])
 
   for (const titleFa of [
     'ریموت بلوتوثی بنزی 315mhz پنج دکمه‌ای اچاسپی',
@@ -142,6 +146,7 @@ test('wrong remote frequencies, button counts and counterfeit markers remain har
     ['ریموت بلوتوثی بنزی ۴۳۳٫۹۲ مگاهرتز ۵ دکمه Hsp', /فرکانس/],
     ['ریموت بلوتوثی بنزی 125khz 5 دکمه Hsp', /فرکانس/],
     ['ریموت بلوتوثی 315 بنزی 4 دکمه Hsp', /تعداد دکمه/],
+    ['ریموت بدون بلوتوث 315 بنزی 5 دکمه Hsp', /بلوتوث/],
     ['ریموت بلوتوثی 315 بنزی شانزده کلید Hsp', /تعداد دکمه/],
     ['ریموت بلوتوثی 315 بنزی 5 دکمه Hsp کپی خور های کپی', /غیراصل/],
     ['ریموت بلوتوثی 315 بنزی 5 دکمه Hsp کپی خور طرح اصل', /غیراصل/],
@@ -160,16 +165,19 @@ test('wrong remote frequencies, button counts and counterfeit markers remain har
   assert.equal(configured.status, 'IDENTITY_MISMATCH')
 })
 
-test('codeless discovery finds and merges both HSP sellers without AI', async (t) => {
+test('codeless discovery merges verified sellers with independent button and single-unit evidence', async (t) => {
   const queries = buildSearchQueries(remoteTarget.productName, remoteTarget.sku)
-  assert.ok(queries.length <= 5)
+  assert.ok(queries.length <= 6)
+  assert.ok(queries.includes('ریموت بنزی 315 hsp'))
   assert.ok(queries.includes('ریموت 315 hsp'))
   assert.ok(queries.includes('ریموت بنزی hsp'))
+  assert.ok(queries.includes('ریموت بنزی'))
+  assert.ok(queries.includes('ریموت بنزی 5 دکمه'))
   const fake = installFakeTorob({
     search: (query) => query === queries[0] ? [bazarCard] : query === 'ریموت بنزی hsp' ? [jahanCard] : [],
     details: {
-      [bazarCard.prk]: { ...bazarCard, offers: [rawOffer('بازار قفل', 580000)] },
-      [jahanCard.prk]: { ...jahanCard, offers: [jahanOffer] },
+      [bazarCard.prk]: { ...bazarCard, offers: [bazarOffer] },
+      [jahanCard.prk]: { ...jahanCard, offers: [verifiedJahanOffer] },
     },
   })
   t.after(fake.restore)
@@ -184,7 +192,39 @@ test('codeless discovery finds and merges both HSP sellers without AI', async (t
   const sibling = source.torob.search.candidates.find(({ prk }) => prk === jahanCard.prk)
   assert.equal(sibling.titleFa, jahanCard.name_fa)
   assert.equal(sibling.extraction, 'extracted')
-  assert.ok(sibling.reasons.some((reason) => reason.includes('عنوان فروشندگان')))
+  assert.equal(sibling.inspection.status, 'MATCH_CONFIRMED')
+  assert.ok(sibling.inspection.reasons.some((reason) => reason.includes('فروشنده')))
+  assert.equal(source.offers[1].torobIdentity.packageUnits, 1)
+  assert.deepEqual(source.offers[1].torobIdentity.specs.buttons, [5])
+  assert.ok(source.offers.every(({ torobIdentity }) => torobIdentity.status === 'MATCH_CONFIRMED'))
+})
+
+test('the supplied Jahan Remote title is discoverable but cannot resolve the ambiguous ۵ عددی card', async (t) => {
+  const sharedImage = 'https://fixture.invalid/remote.jpg'
+  const fake = installFakeTorob({
+    search: (query) => query === 'ریموت بنزی' ? [jahanCard] : [bazarCard],
+    details: {
+      [bazarCard.prk]: { ...bazarCard, offers: [bazarOffer] },
+      [jahanCard.prk]: { ...jahanCard, image: sharedImage, offers: [{ ...jahanOffer, image_url: sharedImage }] },
+    },
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
+  const jahan = source.offers.find(({ shopName }) => shopName === 'جهان ریموت')
+  assert.equal(jahan.listingTitle, jahanOffer.product_title)
+  assert.equal(jahan.torobIdentity.status, 'REVIEW_REQUIRED')
+  assert.equal(jahan.torobIdentity.sharedImage, true)
+  assert.deepEqual(jahan.torobIdentity.specs.frequency, [315000000])
+  assert.match(jahan.torobIdentity.reason, /تعداد دکمه/)
+  assert.match(jahan.torobIdentity.reason, /عرضهٔ تکی/)
+  const candidate = source.torob.search.candidates.find(({ prk }) => prk === jahanCard.prk)
+  assert.equal(candidate.inspection.status, 'REVIEW_REQUIRED')
+  assert.equal(candidate.inspection.origin, 'torob_mcp')
+  assert.ok(candidate.queries.some((index) => source.torob.search.queries[index - 1].query === 'ریموت بنزی'))
+  assert.equal(source.meta.mergedPanelPrks, undefined)
+  const result = runPricingPipeline(source, withConfig({ ...remoteTarget, costPrice: 450000 }))
+  assert.equal(result.offers.find(({ shopName }) => shopName === 'جهان ریموت').included, false)
+  assert.equal(result.lowestValid, 580000)
 })
 
 test('codeless search keeps looking after a multi-seller match and inspects an unbranded card', async (t) => {
@@ -196,7 +236,7 @@ test('codeless search keeps looking after a multi-seller match and inspects an u
       : query === 'ریموت بنزی' ? [unbranded] : [],
     details: {
       [established.prk]: { ...established, offers: [
-        rawOffer('بازار قفل', 580000),
+        bazarOffer,
         rawOffer('بازار قفل دو', 590000),
         rawOffer('بازار قفل سه', 600000),
       ] },
@@ -214,7 +254,7 @@ test('a seller-corroborated card preserves its original Persian and English titl
   const card = { ...jahanCard, name_fa: 'ریموت بنزی پنج تایی' }
   const fake = installFakeTorob({
     search: () => [card],
-    details: { [card.prk]: { ...card, offers: [jahanOffer] } },
+    details: { [card.prk]: { ...card, offers: [verifiedJahanOffer] } },
   })
   t.after(fake.restore)
   const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
@@ -222,7 +262,7 @@ test('a seller-corroborated card preserves its original Persian and English titl
   assert.equal(source.torob.titleOrigin, 'product_details')
   assert.equal(source.productTitle, card.name_fa)
   assert.equal(source.productTitleEn, card.name_en)
-  assert.match(source.torob.reason, /عنوان فروشندگان/)
+  assert.match(source.torob.reason, /مستقل فروشنده/)
 })
 
 test('real multi-packs and conflicting remote cards are rejected without probing seller evidence', async (t) => {
@@ -247,21 +287,25 @@ test('real multi-packs and conflicting remote cards are rejected without probing
   assert.ok(source.torob.search.candidates.every(({ extraction }) => extraction === 'not_requested'))
 })
 
-test('mixed seller frequencies cannot auto-confirm a Torob card', async (t) => {
-  for (const [card, status] of [[jahanCard, 'IDENTITY_MISMATCH'], [bazarCard, 'REVIEW_REQUIRED']]) {
+test('a conflicting seller never enters pricing and cannot promote an ambiguous card', async (t) => {
+  for (const [card, status] of [[jahanCard, 'REVIEW_REQUIRED'], [bazarCard, 'MATCH_CONFIRMED']]) {
     await t.test(card.prk, async (t) => {
       const fake = installFakeTorob({
         search: () => [{ ...card, shop_count: 2 }],
         details: {
           [card.prk]: { ...card, offers: [
-            jahanOffer,
-            { ...rawOffer('فروشنده دیگر', 760000), product_title: jahanOffer.product_title.replace('315', '433') },
+            verifiedJahanOffer,
+            { ...rawOffer('فروشنده دیگر', 560000), product_title: jahanOffer.product_title.replace('315', '433') },
           ] },
         },
       })
       t.after(fake.restore)
       const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
       assert.equal(source.torob.status, status)
+      const wrong = source.offers.find(({ shopName }) => shopName === 'فروشنده دیگر')
+      assert.equal(wrong.torobIdentity.status, 'IDENTITY_MISMATCH')
+      const result = runPricingPipeline(source, withConfig({ ...remoteTarget, costPrice: 450000 }))
+      assert.equal(result.offers.find(({ shopName }) => shopName === wrong.shopName).included, false)
       assert.equal(source.torob.selected.extraction, 'extracted')
       assert.equal(source.meta.mergedPanelPrks, undefined)
       assert.equal(fake.calls.filter(({ name }) => name === 'product_details').length, 1)
@@ -273,7 +317,7 @@ test('a low-scoring incomplete codeless title can be corroborated without a pack
   const card = { ...jahanCard, name_fa: 'ریموت' }
   const fake = installFakeTorob({
     search: () => [card],
-    details: { [card.prk]: { ...card, offers: [jahanOffer] } },
+    details: { [card.prk]: { ...card, offers: [verifiedJahanOffer] } },
   })
   t.after(fake.restore)
   const source = await fetchViaTorobMcpServer({
@@ -298,6 +342,98 @@ test('separately corroborated cards with conflicting button counts require revie
   assert.equal(source.torob.status, 'REVIEW_REQUIRED', source.torob.reason)
   assert.match(source.torob.reason, /مشخصات متفاوت/)
   assert.equal(source.meta.mergedPanelPrks, undefined)
+})
+
+test('seller identity gates pricing before statistics, including prices below the valid market', async (t) => {
+  const valid = [580000, 590000, 600000].map((price, i) => ({
+    ...rawOffer(`valid-${i}`, price), product_title: bazarCard.name_fa,
+  }))
+  const unverified = [
+    { ...rawOffer('no-title', 450000) },
+    { ...rawOffer('no-buttons', 460000), product_title: jahanOffer.product_title },
+    { ...rawOffer('wrong-buttons', 470000), product_title: bazarCard.name_fa.replace('5 دکمه', '4 دکمه') },
+    { ...rawOffer('contradictory-spec', 480000), product_title: bazarCard.name_fa, specs: [{ key: 'تعداد دکمه', value: '۴' }] },
+    { ...rawOffer('shell', 490000), product_title: `قاب ${bazarCard.name_fa}` },
+    { ...rawOffer('pack', 500000), product_title: bazarCard.name_fa, specs: [{ key: 'تعداد در بسته', value: '۵' }] },
+  ]
+  const listingResults = async (offers) => {
+    const fake = installFakeTorob({ details: { [bazarCard.prk]: { ...bazarCard, offers } } })
+    try {
+      const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget, prk: bazarCard.prk })
+      return runPricingPipeline(source, withConfig({ ...remoteTarget, costPrice: 450000 }))
+    } finally {
+      fake.restore()
+    }
+  }
+  const before = await listingResults(valid)
+  const mixed = await listingResults([...unverified, ...valid])
+  assert.ok(before.finalPrice > 0)
+  for (const key of ['lowestValid', 'marketMedian', 'finalPrice', 'basePrice', 'confidence', 'offersUsed']) {
+    assert.equal(mixed[key], before[key], key)
+  }
+  assert.deepEqual(mixed.torobInquiry.offerIdentityCounts, { MATCH_CONFIRMED: 3, REVIEW_REQUIRED: 2, IDENTITY_MISMATCH: 4 })
+  for (const offer of mixed.offers.filter(({ shopName }) => !shopName.startsWith('valid'))) {
+    assert.equal(offer.included, false)
+    assert.equal(offer.weight, 0)
+  }
+})
+
+test('search and details stay bounded and reserve a probe in crowded results', async (t) => {
+  const crowded = Array.from({ length: 26 }, (_, i) => ({
+    ...bazarCard, prk: `crowded-${i}`, name_fa: 'ریموت بنزی Hsp',
+  }))
+  const fake = installFakeTorob({
+    search: (query) => query === 'ریموت بنزی' ? [jahanCard, ...crowded] : [bazarCard, ...crowded],
+    details: {
+      [bazarCard.prk]: { ...bazarCard, offers: [bazarOffer] },
+      [jahanCard.prk]: { ...jahanCard, offers: [verifiedJahanOffer] },
+    },
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
+  assert.equal(fake.calls.filter(({ name }) => name === 'search_products').length, 6)
+  assert.equal(fake.calls.filter(({ name }) => name === 'product_details').length, 4)
+  assert.ok(source.torob.search.queries.every(({ mapped }) => mapped === 24))
+  assert.ok(source.torob.search.candidates.every(({ prk }) => prk !== 'crowded-25'))
+  assert.deepEqual(source.meta.mergedPanelPrks, [bazarCard.prk, jahanCard.prk])
+})
+
+test('a cached codeless id is a discovery hint and duplicate confirmed sellers count once', async (t) => {
+  const fake = installFakeTorob({
+    search: () => [jahanCard],
+    details: {
+      [bazarCard.prk]: { ...bazarCard, offers: [bazarOffer] },
+      [jahanCard.prk]: { ...jahanCard, offers: [
+        verifiedJahanOffer,
+        { ...bazarOffer, product_title: `${bazarCard.name_fa} تکی` },
+      ] },
+    },
+  })
+  t.after(fake.restore)
+  const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget, cachedPrk: bazarCard.prk })
+  assert.ok(fake.calls.some(({ name }) => name === 'search_products'))
+  assert.deepEqual(new Set(source.meta.mergedPanelPrks), new Set([bazarCard.prk, jahanCard.prk]))
+  assert.equal(source.offers.filter(({ shopName }) => shopName === 'بازار قفل').length, 1)
+})
+
+test('missing seller rows and contradictory titles from repeated searches remain auditable', async (t) => {
+  const queries = buildSearchQueries(remoteTarget.productName, remoteTarget.sku)
+  const fake = installFakeTorob({
+    search: (query) => [query === queries[0] ? bazarCard : { ...bazarCard, name_fa: bazarCard.name_fa.replace('315', '433') }],
+    details: { [bazarCard.prk]: { ...bazarCard, offers: [bazarOffer] } },
+  })
+  t.after(fake.restore)
+  const conflict = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
+  assert.equal(conflict.torob.status, 'REVIEW_REQUIRED')
+  assert.match(conflict.torob.reason, /متناقض/)
+  assert.equal(conflict.torob.search.candidates[0].observations.length, 6)
+  fake.restore()
+  const partial = installFakeTorob({ details: { [bazarCard.prk]: { ...bazarCard, offers: [bazarOffer, {}] } } })
+  t.after(partial.restore)
+  const incomplete = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget, prk: bazarCard.prk })
+  assert.equal(incomplete.torob.status, 'EXTRACTION_INCOMPLETE')
+  assert.equal(incomplete.offers[0].torobIdentity.status, 'REVIEW_REQUIRED')
+  assert.equal(runPricingPipeline(incomplete, withConfig({ ...remoteTarget, costPrice: 450000 })).finalPrice, null)
 })
 
 test('raw title states distinguish source omission, parse failure, and mapping loss', () => {
@@ -399,7 +535,7 @@ test('an expansion can find an id absent from the first response and merge a lat
 test('a blank search card is hydrated from product details, including a Latin-only title', async (t) => {
   const fake = installFakeTorob({
     search: () => [{ prk: fixture.prk, name_fa: null }],
-    details: { [fixture.prk]: { ...mcpDetails(null), name_en: exactCard } },
+    details: { [fixture.prk]: { ...mcpDetails(exactCard), name_fa: null, name_en: exactCard } },
   })
   t.after(fake.restore)
   const source = await fetchViaTorobMcpServer({ ...opts, productName: exactProduct })
@@ -473,7 +609,8 @@ test('a saved human confirmation is scoped to its id and still checks later conf
   const linked = await fetchViaTorobMcpServer({ ...opts, prk: fixture.prk, confirmation })
   const other = await fetchViaTorobMcpServer({ ...opts, prk: fixture.prk, confirmation: { ...confirmation, prk: 'other-card' } })
   const wrong = await fetchViaTorobMcpServer({ ...opts, productName: 'ماژول ریموتگ بتا مدل ساده', prk: fixture.prk, confirmation })
-  assert.equal(linked.torob.status, 'MATCH_CONFIRMED')
+  assert.equal(linked.torob.identityStatus, 'MATCH_CONFIRMED')
+  assert.equal(linked.torob.status, 'REVIEW_REQUIRED')
   assert.equal(linked.torob.adminConfirmed, true)
   assert.equal(other.torob.status, 'REVIEW_REQUIRED')
   assert.equal(wrong.torob.status, 'IDENTITY_MISMATCH')
@@ -488,7 +625,8 @@ test('valid national offers, local in-person counts, stale data, shop trust and 
     rawOffer('outlier', 7000000),
     rawOffer('unreliable', 1300000, { unreliable: true }),
   ]
-  const fake = installFakeTorob({ details: { [fixture.prk]: mcpDetails(exactCard, [...fresh, ...noisy]) } })
+  const fake = installFakeTorob({ details: { [fixture.prk]: mcpDetails(exactCard,
+    [...fresh, ...noisy].map((offer) => ({ ...offer, product_title: exactCard }))) } })
   t.after(fake.restore)
   const source = await fetchViaTorobMcpServer({ ...opts, productName: exactProduct, prk: fixture.prk })
   const ctx = withConfig({ productName: exactProduct })

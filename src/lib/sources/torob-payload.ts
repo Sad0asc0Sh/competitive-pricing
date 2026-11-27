@@ -92,6 +92,24 @@ export function offerSourceUrl(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+export function readTorobImages(row: TorobRecord): string[] {
+  const values = [row.image, row.image_url, row.thumbnail, row.thumbnail_url];
+  for (const images of [row.image_urls, row.images, row.product_images]) {
+    if (Array.isArray(images)) {
+      values.push(...images.slice(0, 6).map((image) => record(image)?.url ?? record(image)?.image_url ?? image));
+    }
+  }
+  return [...new Set(values.flatMap((value) => {
+    if (typeof value !== "string" || value.length > 320) return [];
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash ? [url.href] : [];
+    } catch {
+      return [];
+    }
+  }))].slice(0, 4);
+}
+
 export function torobStock(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value;
   if (typeof value !== "string" && typeof value !== "number") return undefined;
@@ -159,6 +177,7 @@ export function decodeTorobSearch(payload: unknown, limit: number): {
       available: torobStock(r.available ?? r.availability ?? r.stock_status),
       detailsUrl: safeTorobDetailsUrl(r.details_url ?? r.more_info_url, prk, true),
       shopName,
+      imageUrls: readTorobImages(r),
     });
   }
   const upstreamRowCount = countOf(data?.page_count) ?? rows.length;
@@ -170,14 +189,20 @@ export function readTorobSpecs(row: TorobRecord): IdentitySpec[] {
   const specs: IdentitySpec[] = [];
   const add = (key: unknown, value: unknown) => {
     const label = firstText(key);
-    const text = typeof value === "number" ? String(value) : firstText(value);
+    const text = typeof value === "number" || typeof value === "boolean" ? String(value) : firstText(value);
     if (label && text && text.length <= 100 && specs.length < 80) specs.push({ key: label, value: text });
   };
   for (const collection of [row.specs, row.key_specs]) {
     if (!Array.isArray(collection)) continue;
     for (const item of collection.slice(0, 80)) {
       const spec = record(item);
-      if (spec) add(spec.key ?? spec.title ?? spec.name, spec.value ?? spec.text);
+      if (!spec) continue;
+      if (Array.isArray(spec.items)) {
+        for (const item of spec.items.slice(0, 80)) {
+          const nested = record(item);
+          if (nested) add(nested.key ?? nested.title, nested.value ?? nested.text);
+        }
+      } else add(spec.key ?? spec.title ?? spec.name, spec.value ?? spec.text);
     }
   }
   const headers = record(row.structural_specs)?.headers;
@@ -196,6 +221,7 @@ export interface TorobDetailsData {
   titleEn: string | null;
   titleEvidence: TorobCandidateCard["titleEvidence"];
   specs: IdentitySpec[];
+  imageUrls?: string[];
   offers: RawOffer[];
   sellerRows: number | null;
   totalSellerCount: number | null;

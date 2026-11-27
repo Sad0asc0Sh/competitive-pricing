@@ -5,7 +5,8 @@ import { decisionPanels } from "@/lib/pricing/listing";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { DecisionStep } from "@/db/schema";
-import type { SupplierQuote, TorobCandidateTrace, TorobInquiryReport, TorobLinkConfirmation, TorobOfferEvidence } from "@/lib/pricing/types";
+import type { SupplierQuote, TorobInquiryAudit, TorobLinkConfirmation, TorobOfferEvidence } from "@/lib/pricing/types";
+import { TorobOfferDetails, TorobSearchDetails } from "./torob-evidence";
 import {
   badgeThemeLabel,
   campaignLabel,
@@ -101,7 +102,7 @@ type OfferFilter = "all" | "included" | "excluded" | "local";
 
 function inquiryFor(decision?: SerializedDecision) {
   return decision?.steps.find((step) => step.step === "torob_inquiry")?.data as
-    (TorobInquiryReport & { candidate?: TorobCandidateTrace }) | undefined;
+    TorobInquiryAudit | undefined;
 }
 
 export function ProductDetailClient({
@@ -426,6 +427,7 @@ export function ProductDetailClient({
             ))}
           </div>
 
+          <TorobSearchDetails audit={latestInquiry} />
           {filteredOffers.length === 0 ? (
             <EmptyState title="پیشنهادی یافت نشد" description="فیلتر فعلی هیچ فروشنده‌ای را نشان نمی‌دهد." />
           ) : (
@@ -441,6 +443,7 @@ export function ProductDetailClient({
                           {o.url ? <a href={o.url} target="_blank" rel="noreferrer" className="hover:underline">{o.shopName}</a> : o.shopName}
                         </div>
                         {o.torobEvidence?.listingTitle && <div className="text-xs text-slate-600">{o.torobEvidence.listingTitle}</div>}
+                        {o.torobEvidence && <TorobOfferDetails evidence={o.torobEvidence} />}
                         <div className="mt-1 flex flex-wrap gap-1">
                           {o.shopCity && (
                             <span className={`badge text-[11px] ${o.isLocalCity ? "bg-indigo-100 text-indigo-800" : "bg-slate-100 text-slate-600"}`}>
@@ -508,6 +511,7 @@ export function ProductDetailClient({
                             {o.priceUnreliable && <span className="badge bg-rose-100 text-rose-700">غیرقابل اعتماد ترب</span>}
                           </div>
                           {o.torobEvidence?.listingTitle && <div className="text-xs text-slate-600">{o.torobEvidence.listingTitle}</div>}
+                          {o.torobEvidence && <TorobOfferDetails evidence={o.torobEvidence} />}
                         </td>
                         <td>
                           {o.shopCity ? (

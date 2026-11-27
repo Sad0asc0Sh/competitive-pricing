@@ -1,5 +1,6 @@
 import type { ValidityParams } from "./validity"
 import type { ConfidenceModel, ScenarioAnalysis, ScenarioOptions } from "./robustness";
+import type { IdentitySpec } from "./match/parse";
 /**
  * تایپ‌های مشترک موتور قیمت‌گذاری هوشمند (نسخه ۳.۶ — مجهز به ناظر بالاسر SubQ SystemOne،
  * کشف کف و سقف واقعی بازار، کالیبراسیون دقیق سقف به کف، مدیریت ۳ سیستم تخفیف sgeooole و اعمال روی رنج کارت‌ها)
@@ -67,6 +68,9 @@ export interface SupplyCostResolution {
 export interface RawOffer {
   shopName: string;
   listingTitle?: string | null;
+  listingSpecs?: IdentitySpec[];
+  imageUrls?: string[];
+  torobIdentity?: TorobOfferIdentity;
   currency?: "toman";
   observedAt?: Date;
   shopId?: string;
@@ -111,6 +115,21 @@ export type TorobIdentityStatus = "MATCH_CONFIRMED" | "REVIEW_REQUIRED" | "IDENT
 export type TorobInquiryStatus = TorobIdentityStatus | "SOURCE_UNAVAILABLE" | "NO_VALID_OFFERS";
 export type TorobTitleOrigin = "search_card" | "product_details" | "seller_listing";
 export type TorobTitleState = "present" | "source_missing" | "parser_missing" | "mapping_missing";
+export type TorobDataOrigin = "torob_mcp" | "torob_api" | "torob_page";
+
+export interface TorobOfferIdentity {
+  prk: string;
+  status: Exclude<TorobIdentityStatus, "EXTRACTION_INCOMPLETE">;
+  reason: string;
+  origin?: TorobDataOrigin;
+  sources: ("seller_listing" | "seller_specs" | "search_card" | "product_details")[];
+  specs?: Record<string, (string | number)[]>;
+  expectedSpecs?: Record<string, (string | number)[]>;
+  brands?: string[];
+  models?: string[];
+  packageUnits?: number;
+  sharedImage?: boolean;
+}
 
 export interface TorobCandidateTrace {
   prk: string;
@@ -132,10 +151,13 @@ export interface TorobCandidateTrace {
   status: TorobIdentityStatus;
   reasons: string[];
   extraction: "not_requested" | "extracted" | "empty" | "incomplete" | "unavailable";
+  origin?: TorobDataOrigin;
+  imageUrls?: string[];
+  inspection?: Pick<TorobCandidateTrace, "status" | "reasons" | "titleFa" | "titleEn" | "specs" | "imageUrls" | "origin">;
 }
 
 export interface TorobSearchTrace {
-  queries: { query: string; rows: number | null; mapped: number; issue?: string }[];
+  queries: { query: string; rows: number | null; mapped: number; issue?: string; origin?: TorobDataOrigin }[];
   candidates: TorobCandidateTrace[];
   accepted: number;
   eligible: number;
@@ -153,6 +175,7 @@ export interface TorobSourceAssessment {
   sellerRows: number | null;
   reportedSellers: number | null;
   adminConfirmed?: boolean;
+  offerIdentityEvaluated?: true;
 }
 
 export interface TorobInquiryReport {
@@ -166,6 +189,13 @@ export interface TorobInquiryReport {
   validLocalInPersonOffers: number | null;
   sellerRows: number | null;
   reportedSellers: number | null;
+  offerIdentityCounts?: Record<TorobOfferIdentity["status"], number>;
+}
+
+export interface TorobInquiryAudit extends TorobInquiryReport {
+  search?: TorobSearchTrace;
+  candidate?: TorobCandidateTrace;
+  titleOrigin?: TorobTitleOrigin;
 }
 
 export interface TorobLinkConfirmation {
@@ -180,6 +210,8 @@ export interface TorobOfferEvidence {
   currency: "toman";
   observedAt: string;
   inStock: boolean | null;
+  identity?: TorobOfferIdentity;
+  imageUrls?: string[];
 }
 
 export interface SourceResult {

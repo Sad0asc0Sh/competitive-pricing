@@ -1,5 +1,5 @@
 /** One seller offer for a product. */
-export interface Offer {
+export interface Offer extends SellerEvidence {
     shop_name: string;
     product_title?: string;
     shop_city: string | null;
@@ -71,6 +71,7 @@ export interface ProductCard {
     details_url: string | null;
 }
 export interface ProductDetails extends ProductCard {
+    image_urls?: string[];
     offers: Offer[];
     offer_count: number;
     seller_rows_seen?: number;
@@ -108,7 +109,16 @@ export interface ProductDetails extends ProductCard {
     availability_note?: string;
     attribution: string;
 }
-interface RawProduct {
+interface RawMedia {
+    image_url?: unknown;
+    image_urls?: unknown;
+    images?: unknown;
+}
+interface SellerEvidence {
+    image_urls?: string[];
+    specs?: SpecItem[];
+}
+interface RawProduct extends RawMedia {
     random_key?: unknown;
     prk?: unknown;
     name1?: unknown;
@@ -127,7 +137,6 @@ interface RawProduct {
     stock_status?: unknown;
     availability?: unknown;
     is_accessible?: unknown;
-    image_url?: unknown;
     image_count?: unknown;
     web_client_absolute_url?: unknown;
     more_info_url?: unknown;
@@ -187,7 +196,7 @@ export declare function setWaitUntilEnabled(value: boolean): void;
 export declare function takePendingWrites(): Promise<unknown>[];
 export declare function offersOf(row: RawProduct): Offer[];
 /** One shop that sells this product in person, as Torob lists it. */
-export interface InPersonSeller {
+export interface InPersonSeller extends SellerEvidence {
     shop_name: string;
     product_title?: string;
     available?: boolean;

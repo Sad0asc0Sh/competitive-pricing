@@ -3,7 +3,7 @@ import { normalizeText } from "@/lib/pricing/match/text";
 import type { TorobCandidateCard } from "@/lib/pricing/matcher";
 import type { MarketPriceTrend, RawOffer, SourceResult, TorobLinkConfirmation } from "@/lib/pricing/types";
 import { buildSearchQueries, resolveTorobSource, type TorobRead } from "./torob-discovery";
-import { cleanPrk, countOf, countSellerText, firstText, offerSourceUrl, readTorobSpecs, readTorobTitles, record, safeTorobDetailsUrl, torobPrice, torobStock, type TorobDetailsData } from "./torob-payload";
+import { cleanPrk, countOf, countSellerText, firstText, offerSourceUrl, readTorobImages, readTorobSpecs, readTorobTitles, record, safeTorobDetailsUrl, torobPrice, torobStock, type TorobDetailsData } from "./torob-payload";
 import type { SourceMatchConfig } from "./types";
 
 export { buildSearchQueries } from "./torob-discovery";
@@ -143,6 +143,8 @@ export function convertMcpDetailsToOffers(details: TorobMcpProductDetails, now =
     offers.push({
       shopName,
       listingTitle: firstText(o.product_title, record(o)?.listing_title, record(o)?.name1),
+      listingSpecs: readTorobSpecs(record(o) ?? {}),
+      imageUrls: readTorobImages(record(o) ?? {}),
       currency: "toman",
       observedAt: now,
       shopId: firstText(o.shop_id) ?? undefined,
@@ -174,6 +176,8 @@ export function convertMcpDetailsToOffers(details: TorobMcpProductDetails, now =
     offers.push({
       shopName,
       listingTitle: firstText(s.product_title, record(s)?.listing_title),
+      listingSpecs: readTorobSpecs(record(s) ?? {}),
+      imageUrls: readTorobImages(record(s) ?? {}),
       currency: "toman",
       observedAt: now,
       shopId: firstText(s.shop_id) ?? undefined,
@@ -278,17 +282,19 @@ function decodeMcpDetails(value: unknown, now: Date): TorobRead<TorobDetailsData
   const returnedRows = (online?.length ?? 0) + (inPerson?.length ?? 0);
   const sellerRows = online || inPerson ? Math.max(countOf(details.seller_rows_seen) ?? 0, returnedRows) : null;
   const { offers, ...counts } = convertMcpDetailsToOffers(details as unknown as TorobMcpProductDetails, now);
-  const faultyRows = returnedRows > 0 && [...(online ?? []), ...(inPerson ?? [])].every((row) => !firstText(record(row)?.shop_name));
+  const faultyRows = [...(online ?? []), ...(inPerson ?? [])].some((row) => !firstText(record(row)?.shop_name));
   const issue = sellerRows == null || faultyRows || details.seller_schema_incomplete === true ||
     (details.offers != null && online == null) || (details.in_person_sellers != null && inPerson == null) ||
     (counts.onlineOfferCount > 0 && !online?.length) || (counts.inPersonSellerCount > 0 && !inPerson?.length) ? "details_schema" : undefined;
   return {
     issue,
+    origin: "torob_mcp",
     data: {
       ...counts,
       ...readTorobTitles(details),
       prk: cleanPrk(details.prk ?? details.random_key),
       specs: readTorobSpecs(details),
+      imageUrls: readTorobImages(details),
       offers,
       sellerRows,
       totalSellerCount: sellerRows != null || counts.totalSellerCount > 0 ? counts.totalSellerCount : null,
@@ -299,6 +305,7 @@ function decodeMcpDetails(value: unknown, now: Date): TorobRead<TorobDetailsData
 export function fetchViaTorobMcpServer(opts: {
   mcpUrl: string;
   prk?: string | null;
+  cachedPrk?: string | null;
   detailsUrl?: string | null;
   confirmation?: TorobLinkConfirmation | null;
   productName: string;
@@ -323,7 +330,7 @@ export function fetchViaTorobMcpServer(opts: {
       endpointUnavailable ||= out.endpointUnavailable === true && !out.blocked;
       const remaining = timeoutMs - (Date.now() - started);
       if (endpointUnavailable && opts.fallbackSearch && remaining > 200) return opts.fallbackSearch(query, limit, remaining);
-      return { ...out, data: out.data ?? undefined };
+      return { ...out, origin: "torob_mcp", data: out.data ?? undefined };
     },
     details: async (card, timeoutMs) => {
       if (endpointUnavailable && opts.fallbackDetails) return opts.fallbackDetails(card, timeoutMs);
@@ -335,7 +342,7 @@ export function fetchViaTorobMcpServer(opts: {
         max_offers: 30, max_in_person: 30,
       }, timeoutMs);
       const remaining = timeoutMs - (Date.now() - started);
-      const decoded = out.data != null ? decodeMcpDetails(out.data, now) : {
+      const decoded: TorobRead<TorobDetailsData> = out.data != null ? decodeMcpDetails(out.data, now) : {
         ...out, issue: out.issue === "mcp_timeout" ? "details_timeout" : out.issue, data: undefined,
       };
       const hasTitle = normalizeText(decoded.data?.titleFa) || normalizeText(decoded.data?.titleEn) ||

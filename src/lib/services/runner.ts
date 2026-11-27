@@ -1126,6 +1126,7 @@ async function priceOneProduct(
           ...(observedAt ? { torobEvidence: {
             listingTitle: o.listingTitle ?? null, currency: o.currency ?? "toman",
             observedAt: observedAt.toISOString(), inStock: o.inStock ?? null,
+            identity: o.torobIdentity, imageUrls: o.imageUrls,
           } } : {}),
           isAd: !!o.isAd,
           inStock: o.inStock !== false,

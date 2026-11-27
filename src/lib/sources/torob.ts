@@ -1,4 +1,5 @@
 import { parsePersianRelativeDate } from "@/lib/pricing/filters";
+import { parseTitle } from "@/lib/pricing/match/parse";
 import { normalizeText } from "@/lib/pricing/match/text";
 import type { TorobCandidateCard } from "@/lib/pricing/matcher";
 import type { MarketPriceTrend, RawOffer } from "@/lib/pricing/types";
@@ -8,7 +9,7 @@ import { politeDelay } from "./humanize";
 import { resolveTorobSource, type TorobRead } from "./torob-discovery";
 import { analyzeMcpPriceHistory, fetchViaTorobMcpServer } from "./torob-mcp-client";
 import {
-  cleanPrk, countOf, firstText, offerSourceUrl, prkFromTorobUrl, readTorobSpecs, readTorobTitles, record,
+  cleanPrk, countOf, firstText, offerSourceUrl, prkFromTorobUrl, readTorobImages, readTorobSpecs, readTorobTitles, record,
   safeTorobDetailsUrl, torobPrice, torobStock, type TorobDetailsData, type TorobRecord,
 } from "./torob-payload";
 import type { PriceSourceAdapter, SourceProduct } from "./types";
@@ -96,6 +97,8 @@ function normalizeSeller(s: TorobRecord, now: Date, sellerType: "online" | "in_p
     shopId: shopId ?? undefined,
     shopCity: firstText(s.shop_city, s.city, s.shop_name2),
     listingTitle: firstText(s.product_title, s.listing_title, s.product_name, sellerType === "online" ? s.name1 : undefined),
+    listingSpecs: readTorobSpecs(s),
+    imageUrls: readTorobImages(s),
     currency: "toman",
     observedAt: now,
     sellerType,
@@ -114,7 +117,7 @@ function normalizeSeller(s: TorobRecord, now: Date, sellerType: "online" | "in_p
     lastChangedText,
     isAd: (s.is_adv ?? s.is_ad ?? s.sponsored) === true,
     inStock: torobStock(s.availability ?? s.available ?? s.stock_status),
-    url: offerSourceUrl(s.page_url, s.url, s.shop_url, shopUrl),
+    url: offerSourceUrl(s.product_url, s.page_url, s.url, s.shop_url, shopUrl),
   };
 }
 
@@ -145,7 +148,7 @@ function decodeTorobDetails(value: unknown, now: Date): TorobRead<TorobDetailsDa
       const offer = seller ? normalizeSeller(seller, now, type) : null;
       return offer ? [offer] : [];
     });
-  const faultyRows = Boolean(sellerRows) && [...onlineRows, ...storeRows].every((item) => {
+  const faultyRows = [...onlineRows, ...storeRows].some((item) => {
     const seller = record(item);
     return !firstText(seller?.shop_name, seller?.seller_name, record(seller?.shop)?.name);
   });
@@ -158,6 +161,7 @@ function decodeTorobDetails(value: unknown, now: Date): TorobRead<TorobDetailsDa
       ...readTorobTitles(row),
       prk: cleanPrk(row.random_key ?? row.prk) ?? prkFromTorobUrl(row.web_client_absolute_url ?? row.url),
       specs: readTorobSpecs(row),
+      imageUrls: readTorobImages(row),
       offers,
       sellerRows,
       totalSellerCount: sellerRows != null || onlineOfferCount + inPersonSellerCount > 0 ? onlineOfferCount + inPersonSellerCount : null,
@@ -184,7 +188,7 @@ async function searchTorobProductV4(query: string, limit: number, timeoutMs: num
   const response = await torobTransportGet("api", `/v4/base-product/search/?${params}`, timeoutMs);
   if (response.data === undefined) return response;
   const data = jsonValue(response.data);
-  return data === undefined ? { issue: "search_schema" } : { data };
+  return { origin: "torob_api", ...(data === undefined ? { issue: "search_schema" } : { data }) };
 }
 
 function findDetailsInNextData(html: string, prk: string): TorobRecord | null {
@@ -227,7 +231,7 @@ async function fetchTorobDetails(card: TorobCandidateCard, now: Date, timeoutMs:
     normalizeText(card.titleFa) || normalizeText(card.titleEn);
   const remaining = deadline - Date.now();
   if ((parsed.data && !parsed.issue && title) || remaining < 250) {
-    return { ...parsed, issue: parsed.issue === "transport_timeout" ? "details_timeout" : parsed.issue };
+    return { ...parsed, origin: "torob_api", issue: parsed.issue === "transport_timeout" ? "details_timeout" : parsed.issue };
   }
   const page = await torobTransportGet("site", `/p/${encodeURIComponent(card.prk)}/`, remaining);
   if (page.blocked) return { ...page, data: parsed.data };
@@ -235,9 +239,9 @@ async function fetchTorobDetails(card: TorobCandidateCard, now: Date, timeoutMs:
   if (embedded) {
     const fromPage = decodeTorobDetails(embedded, now);
     if (fromPage.data) fromPage.data.detailsUrl = detailsUrl;
-    if (!fromPage.issue || !parsed.data) return fromPage;
+    if (!fromPage.issue || !parsed.data) return { ...fromPage, origin: "torob_page" };
   }
-  return parsed.data ? parsed : {
+  return parsed.data ? { ...parsed, origin: "torob_api" } : {
     unavailable: parsed.unavailable && page.unavailable,
     issue: [parsed.issue, page.issue].includes("transport_timeout") ? "details_timeout" : parsed.issue ?? page.issue ?? "details_schema",
   };
@@ -267,11 +271,14 @@ export const torobAdapter: PriceSourceAdapter = {
   async fetchOffers(product: SourceProduct) {
     const now = new Date();
     const prk = extractPrk(product.torobUrl, product.torobPrk);
+    const cachedPrk = prk && !product.torobUrl && !product.torobLinkConfirmation &&
+      !parseTitle(product.name, { sku: product.sku }).codes.some((code) => !code.inCompat) ? prk : null;
     const options = {
       productName: product.name,
       sku: product.sku,
       category: product.category,
-      prk,
+      prk: cachedPrk ? null : prk,
+      cachedPrk,
       detailsUrl: prk ? safeTorobDetailsUrl(product.torobDetailsUrl, prk, true) : null,
       confirmation: product.torobLinkConfirmation,
       anchorPriceToman: product.currentFinalPrice && product.currentFinalPrice > 0 ? product.currentFinalPrice

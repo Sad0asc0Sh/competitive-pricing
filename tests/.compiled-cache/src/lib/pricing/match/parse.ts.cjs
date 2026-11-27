@@ -634,6 +634,7 @@ const FREQUENCY_UNITS = new Map([
 const FREQUENCY_LABELS = new Set(["فرکانس", "frequency"]);
 const REMOTE_RF_MHZ = new Set([315, 433, 433.92, 868]);
 const BUTTON_UNITS = new Set(["دکمه", "دکمهای", "کلید", "کلیده", "کلیدی", "شاسی", "button", "buttons", "key", "keys"]);
+const BLUETOOTH_WORDS = new Set(["بلوتوث", "بلوتوثی", "bluetooth", "non-bluetooth"]);
 const NON_RF_UNITS = new Set([
     ...UNIT_MAP.keys(), ...lexicon_1.QTY_UNIT_WORDS, ...BUTTON_UNITS, ...PART_COUNT_WORDS,
     "میلی", "کیلو", "مگا", "گیگا", "گرم", "کیلوگرم", "ماه", "روز", "سال", "ثانیه", "تومان", "ریال", "درصد", "percent",
@@ -691,6 +692,10 @@ function addRemoteButtons(tokens, attrs, consumed) {
         }
     }
 }
+const SINGLE_UNIT_PHRASES = [
+    ["تکی"], ["تک", "عددی"], ["1", "عددی"], ["یک", "عددی"],
+    ["single", "unit"], ["1", "pc"], ["1", "piece"],
+];
 const CACHE = new Map();
 const CACHE_MAX = 600;
 function parseTitle(text, opts = {}) {
@@ -742,8 +747,18 @@ function parseTitle(text, opts = {}) {
         addAccessControlModel(body, attrs, consumed);
     if (accessControl || remote)
         addFrequencyAttrs(body, attrs, consumed, remote);
-    if (remote)
+    if (remote) {
         addRemoteButtons(body, attrs, consumed);
+        body.forEach((word, i) => {
+            if (!BLUETOOTH_WORDS.has(word))
+                return;
+            const negated = word === "non-bluetooth" || ["بدون", "غیر", "فاقد", "no", "non"].includes(body[i - 1]);
+            addAttr(attrs, "bluetooth", negated ? "no" : "yes");
+            consumed.add(i);
+            if (negated && word !== "non-bluetooth")
+                consumed.add(i - 1);
+        });
+    }
     addGenerationAttrs(tokens, attrEnd, attrs, consumed);
     // نوع کابل (فقط برای رده کابل): شبکه/کواکسیال/HDMI/SATA/برق/…
     if (head?.cls === "cable") {
@@ -836,6 +851,12 @@ function parseTitle(text, opts = {}) {
             impliedBrands.add(c.brandHint);
     // پک/استوک/کپی/معیوب (پک فقط پیش از بند «همراه با» معنا دارد: «به همراه ۲ عدد پایه» پک نیست)
     const pack = detectPack(tokens.slice(0, companionStart >= 0 ? companionStart : tokens.length));
+    const singleUnit = findPhrase(body, SINGLE_UNIT_PHRASES);
+    if (singleUnit) {
+        const phrase = (0, text_1.tokenize)(singleUnit);
+        const start = firstMarker(body, [phrase]);
+        phrase.forEach((_, i) => consumed.add(start + i));
+    }
     const used = findPhrase(tokens, lexicon_1.USED_PHRASES);
     let counterfeit = findPhrase(tokens, lexicon_1.COUNTERFEIT_PHRASES);
     if (!counterfeit) {
@@ -926,6 +947,8 @@ function parseTitle(text, opts = {}) {
         features,
         attrs,
         pack,
+        packageUnits: singleUnit ? 1 : pack?.qty ?? undefined,
+        ...(singleUnit && pack ? { evidenceConflicts: ["واحد تکی و پک چندعددی هم‌زمان در عنوان ذکر شده‌اند"] } : {}),
         used,
         counterfeit,
         defective,
@@ -947,7 +970,9 @@ function parseIdentityTitle(text, specs) {
     const attrs = Object.fromEntries(Object.entries(title.attrs).map(([key, values]) => [key, [...values]]));
     const codes = [...title.codes];
     const brands = [...title.brands];
-    const evidenceConflicts = [];
+    const evidenceConflicts = [...(title.evidenceConflicts ?? [])];
+    let pack = title.pack;
+    let packageUnits = title.packageUnits;
     const titleCodes = title.codes.filter((code) => !code.inCompat);
     const mergeAttr = (key, values) => {
         if (attrs[key]?.length && values.some((v) => !attrs[key].includes(v))) {
@@ -986,6 +1011,32 @@ function parseIdentityTitle(text, specs) {
                 mergeAttr("access_model", [accessModelName(value)]);
             }
         }
+        else if (/^(?:تعداد در بسته|تعداد اقلام بسته|تعداد در پک|تعداد در بسته بندی|pack quantity|units per pack|items per pack|package quantity)$/.test(key)) {
+            const [num, unit, ...rest] = (0, text_1.tokenize)(value);
+            const count = (0, text_1.numberFromToken)(num);
+            if (!rest.length && (!unit || lexicon_1.QTY_UNIT_WORDS.has(unit) || /^(?:units?|pieces?)$/.test(unit)) &&
+                typeof count === "number" && Number.isSafeInteger(count) && count > 0) {
+                if ((packageUnits != null && packageUnits !== count) || (pack && count === 1)) {
+                    evidenceConflicts.push("تعداد اقلام در بسته در عنوان و مشخصات ترب متناقض است");
+                }
+                packageUnits = count;
+                if (count > 1)
+                    pack = { qty: count, word: key };
+            }
+        }
+        else if (title.head?.cls === "acc:remote" && /^(?:تعداد دکمه|تعداد دکمه ها|تعداد کلید|تعداد شاسی|button count|number of buttons|buttons|number of keys)$/.test(key)) {
+            const typed = {};
+            const tokens = (0, text_1.tokenize)(value);
+            addRemoteButtons(tokens.length === 1 ? [...tokens, "دکمه"] : tokens, typed, new Set());
+            if (typed.buttons?.length)
+                mergeAttr("buttons", typed.buttons);
+        }
+        else if (title.head?.cls === "acc:remote" && /^(?:بلوتوث|bluetooth)$/.test(key)) {
+            if (/^(?:دارد|بله|yes|true|supported)$/.test(value))
+                mergeAttr("bluetooth", ["yes"]);
+            if (/^(?:ندارد|خیر|no|false|unsupported)$/.test(value))
+                mergeAttr("bluetooth", ["no"]);
+        }
         else if (/^(?:ولتاژ|ولتاژ ورودی|ولتاژ تغذیه|input voltage|supply voltage|voltage)$/.test(key)) {
             const volts = parseTitle(/^\d+(?:\.\d+)?$/.test(value) ? `${value} v` : value).attrs.volt;
             if (volts?.length)
@@ -1000,5 +1051,5 @@ function parseIdentityTitle(text, specs) {
                 mergeAttr("frequency", frequency.frequency);
         }
     }
-    return { ...title, attrs, codes, brands, evidenceConflicts: [...new Set(evidenceConflicts)] };
+    return { ...title, attrs, codes, brands, pack, packageUnits, evidenceConflicts: [...new Set(evidenceConflicts)] };
 }

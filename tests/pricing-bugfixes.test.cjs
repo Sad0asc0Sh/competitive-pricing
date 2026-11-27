@@ -485,8 +485,8 @@ test('A1. verifyTorobMatchesWithAI محرمانگی و حذف PRK جعلی را 
         cheapest_price_toman: 2500000,
         available: true,
         offers: [
-          mcpOffer({ shop: 'فروشگاه اول', price: 2500000 }),
-          mcpOffer({ shop: 'فروشگاه مشترک', price: 2530000 }),
+          { ...mcpOffer({ shop: 'فروشگاه اول', price: 2500000 }), product_title: P1.name_fa },
+          { ...mcpOffer({ shop: 'فروشگاه مشترک', price: 2530000 }), product_title: P1.name_fa },
         ],
       },
       p2: {
@@ -496,8 +496,8 @@ test('A1. verifyTorobMatchesWithAI محرمانگی و حذف PRK جعلی را 
         cheapest_price_toman: 2520000,
         available: true,
         offers: [
-          mcpOffer({ shop: 'فروشگاه مشترک', price: 2540000 }),
-          mcpOffer({ shop: 'فروشگاه دوم پنل دو', price: 2560000 }),
+          { ...mcpOffer({ shop: 'فروشگاه مشترک', price: 2540000 }), product_title: P2.name_fa },
+          { ...mcpOffer({ shop: 'فروشگاه دوم پنل دو', price: 2560000 }), product_title: P2.name_fa },
         ],
       },
     },
@@ -568,6 +568,7 @@ test('A1. verifyTorobMatchesWithAI محرمانگی و حذف PRK جعلی را 
     assert.equal(aiPayloads.length, 2)
     assert.deepEqual(mcpOut.meta.mergedPanelPrks, ['p1', 'p2'])
     assert.equal(mcpOut.offers.length, 3, 'فروشگاه مشترک نباید تکراری ذخیره شود و ۲+۱=۳ فروشنده یکتا بماند')
+    assert.ok(mcpOut.offers.every((offer) => offer.torobIdentity.status === 'MATCH_CONFIRMED'))
     assert.equal(mcpOut.offers.find((o) => o.shopName === 'فروشگاه مشترک')?.price, 2530000)
   } finally {
     fakeTorob.restore()

@@ -61,6 +61,8 @@ function convertMcpDetailsToOffers(details, now = new Date()) {
         offers.push({
             shopName,
             listingTitle: (0, torob_payload_1.firstText)(o.product_title, (0, torob_payload_1.record)(o)?.listing_title, (0, torob_payload_1.record)(o)?.name1),
+            listingSpecs: (0, torob_payload_1.readTorobSpecs)((0, torob_payload_1.record)(o) ?? {}),
+            imageUrls: (0, torob_payload_1.readTorobImages)((0, torob_payload_1.record)(o) ?? {}),
             currency: "toman",
             observedAt: now,
             shopId: (0, torob_payload_1.firstText)(o.shop_id) ?? undefined,
@@ -94,6 +96,8 @@ function convertMcpDetailsToOffers(details, now = new Date()) {
         offers.push({
             shopName,
             listingTitle: (0, torob_payload_1.firstText)(s.product_title, (0, torob_payload_1.record)(s)?.listing_title),
+            listingSpecs: (0, torob_payload_1.readTorobSpecs)((0, torob_payload_1.record)(s) ?? {}),
+            imageUrls: (0, torob_payload_1.readTorobImages)((0, torob_payload_1.record)(s) ?? {}),
             currency: "toman",
             observedAt: now,
             shopId: (0, torob_payload_1.firstText)(s.shop_id) ?? undefined,
@@ -182,17 +186,19 @@ function decodeMcpDetails(value, now) {
     const returnedRows = (online?.length ?? 0) + (inPerson?.length ?? 0);
     const sellerRows = online || inPerson ? Math.max((0, torob_payload_1.countOf)(details.seller_rows_seen) ?? 0, returnedRows) : null;
     const { offers, ...counts } = convertMcpDetailsToOffers(details, now);
-    const faultyRows = returnedRows > 0 && [...(online ?? []), ...(inPerson ?? [])].every((row) => !(0, torob_payload_1.firstText)((0, torob_payload_1.record)(row)?.shop_name));
+    const faultyRows = [...(online ?? []), ...(inPerson ?? [])].some((row) => !(0, torob_payload_1.firstText)((0, torob_payload_1.record)(row)?.shop_name));
     const issue = sellerRows == null || faultyRows || details.seller_schema_incomplete === true ||
         (details.offers != null && online == null) || (details.in_person_sellers != null && inPerson == null) ||
         (counts.onlineOfferCount > 0 && !online?.length) || (counts.inPersonSellerCount > 0 && !inPerson?.length) ? "details_schema" : undefined;
     return {
         issue,
+        origin: "torob_mcp",
         data: {
             ...counts,
             ...(0, torob_payload_1.readTorobTitles)(details),
             prk: (0, torob_payload_1.cleanPrk)(details.prk ?? details.random_key),
             specs: (0, torob_payload_1.readTorobSpecs)(details),
+            imageUrls: (0, torob_payload_1.readTorobImages)(details),
             offers,
             sellerRows,
             totalSellerCount: sellerRows != null || counts.totalSellerCount > 0 ? counts.totalSellerCount : null,
@@ -215,7 +221,7 @@ function fetchViaTorobMcpServer(opts) {
             const remaining = timeoutMs - (Date.now() - started);
             if (endpointUnavailable && opts.fallbackSearch && remaining > 200)
                 return opts.fallbackSearch(query, limit, remaining);
-            return { ...out, data: out.data ?? undefined };
+            return { ...out, origin: "torob_mcp", data: out.data ?? undefined };
         },
         details: async (card, timeoutMs) => {
             if (endpointUnavailable && opts.fallbackDetails)
