@@ -669,9 +669,10 @@ test('Cases 22 & 23: high-volume 120-card search stays bounded and concurrent id
   assert.equal(r2.prk, 'best-card')
   assert.equal(r3.prk, 'best-card')
   assert.ok(r1.torob.search.candidates.length <= 120)
-  // Three concurrent identical inquiries share single-flight upstream calls (<= 6 search requests vs 18 without dedup)
+  // Three concurrent identical inquiries share single-flight upstream calls (one inquiry's full budget:
+  // base searches 6 + yield-continuation pool ≤ 4 = 10, vs 3x that without dedup)
   assert.ok(upstreamDetailCalls <= 2, `expected single-flight deduped details <= 2, got ${upstreamDetailCalls}`)
-  assert.ok(upstreamSearchCalls <= 6, `expected single-flight deduped search <= 6, got ${upstreamSearchCalls}`)
+  assert.ok(upstreamSearchCalls <= 10, `expected single-flight deduped search <= 10, got ${upstreamSearchCalls}`)
   assert.equal(cache.stats().inFlightCount, 0, 'in-flight map cleaned up after completion')
 })
 

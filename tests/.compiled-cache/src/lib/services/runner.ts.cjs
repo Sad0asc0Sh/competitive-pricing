@@ -969,8 +969,11 @@ async function priceOneProduct(product, runId, campaigns, cardIndex, opts) {
     const coverageInfo = source.torob?.coverage;
     const shouldScheduleExtended = Boolean(!isSimulated &&
         discoveryMode === "interactive" &&
-        coverageInfo?.status === "partial" &&
-        (coverageInfo.promisingUninspectedCount > 0 || coverageInfo.pagesRemaining > 0));
+        ((coverageInfo?.status === "partial" &&
+            (coverageInfo.promisingUninspectedCount > 0 || coverageInfo.pagesRemaining > 0)) ||
+            // کارت قفل‌شده روی PRK مستقیم در استعلام تعاملی هرگز جستجوی بازار انجام نمی‌دهد؛ گذر
+            // توسعه‌یافتهٔ زمان‌بندی‌شده (LIMIT 3 در هر tick) پوشش بازار را به‌صورت محدود تکمیل می‌کند.
+            (coverageInfo?.status === "uncertain" && coverageInfo.stoppingReason === "direct_prk_lookup")));
     const nextNeedsRefresh = shouldScheduleExtended
         ? true
         : (discoveryMode === "extended" || coverageInfo?.status === "complete_within_scope")

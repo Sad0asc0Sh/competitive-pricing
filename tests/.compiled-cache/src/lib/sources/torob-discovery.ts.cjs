@@ -18,7 +18,7 @@ var torob_query_2 = require("./torob-query");
 Object.defineProperty(exports, "buildSearchQueries", { enumerable: true, get: function () { return torob_query_2.buildSearchQueries; } });
 Object.defineProperty(exports, "buildSearchQueryPlan", { enumerable: true, get: function () { return torob_query_2.buildSearchQueryPlan; } });
 Object.defineProperty(exports, "decomposeTargetProduct", { enumerable: true, get: function () { return torob_query_2.decomposeTargetProduct; } });
-const ROW_LIMIT = 24;
+const ROW_LIMIT = 30;
 function resolveDiscoveryBudgets(mode, codeless, override) {
     const base = mode === "extended"
         ? {
@@ -32,6 +32,7 @@ function resolveDiscoveryBudgets(mode, codeless, override) {
             searchTimeoutMs: 4_500,
             detailsTimeoutMs: 7_000,
             maxPerTitleBucket: 2,
+            searchContinuationRequests: 8,
         }
         : {
             maxSearchRequests: codeless ? 10 : 6,
@@ -44,6 +45,7 @@ function resolveDiscoveryBudgets(mode, codeless, override) {
             searchTimeoutMs: 4_500,
             detailsTimeoutMs: 7_000,
             maxPerTitleBucket: 2,
+            searchContinuationRequests: 6,
         };
     return { ...base, ...override };
 }
@@ -742,6 +744,17 @@ async function resolveTorobSource(options) {
             sourceUnavailable: unavailable,
             accessRestricted,
             limitations,
+            // تشخیص‌های یادآور پوشش بازار — هرگز پوشش کامل ترب را بدون شواهد گزارش نمی‌کنیم.
+            searchStoppingReason: (searchPhaseStoppingReason ?? stoppingReason),
+            detailsStoppingReason: inspected.length > 0 ? stoppingReason : null,
+            knownPrksInspected: inspected.filter((i) => knownPrkSet.has(i.result.candidate.prk)).length,
+            newPrksInspected: inspected.filter((i) => !knownPrkSet.has(i.result.candidate.prk)).length,
+            singleSellerPrksDiscovered: [...candidates.values()].filter((c) => (c.card.sellerCount ?? 1) <= 1).length,
+            multiSellerPrksDiscovered: [...candidates.values()].filter((c) => (c.card.sellerCount ?? 1) > 1).length,
+            singleSellerPrksInspected: inspected.filter((i) => (i.result.candidate.sellerCount ?? 1) <= 1).length,
+            multiSellerPrksInspected: inspected.filter((i) => (i.result.candidate.sellerCount ?? 1) > 1).length,
+            estimatedRemainingDiscoveryOpportunity: promisingUninspectedCount + pagesRemaining * ROW_LIMIT,
+            yieldContinuationRequestsUsed: continuationRequestsUsed(),
         };
     };
     const fail = (status, reason, extraMeta = {}) => {
@@ -771,6 +784,12 @@ async function resolveTorobSource(options) {
     const queryPlan = options.prk ? [] : (0, torob_query_1.buildSearchQueryPlan)(options.productName, options.sku);
     let searchRequestsUsed = 0;
     let searchTimeLeft = budgets.searchBudgetMs;
+    // ادامهٔ واجدشرط: سهمیهٔ درخواست مازاد بر بودجهٔ پایه که فقط وقتی بازدهٔ PRK تازه ادامه دارد مصرف می‌شود.
+    // مصرف واقعیِ استخر همیشه از «searchRequestsUsed − maxSearchRequests» مشتق می‌شود (منبع واحد حقیقت).
+    let searchSoftAllowance = 0;
+    const continuationRequestsUsed = () => Math.max(0, searchRequestsUsed - budgets.maxSearchRequests);
+    const continuationLeft = () => Math.max(0, budgets.searchContinuationRequests - continuationRequestsUsed());
+    let searchPhaseStoppingReason = null;
     const isDuplicateSearchFailure = () => {
         if (search.queries.length < 2)
             return false;
@@ -817,10 +836,10 @@ async function resolveTorobSource(options) {
         return { newPrks, newPromising };
     };
     const executeSearchAction = async (action, deadline) => {
-        if (searchRequestsUsed >= budgets.maxSearchRequests) {
+        if (searchRequestsUsed >= budgets.maxSearchRequests + searchSoftAllowance) {
             budgetExhaustedReason = "search_requests";
             stoppingReason = "request_budget";
-            return { abortedBudget: true, newPromising: 0 };
+            return { abortedBudget: true, newPromising: 0, newPrks: 0 };
         }
         const remaining = deadline - Date.now();
         if (remaining <= 0) {
@@ -836,12 +855,12 @@ async function resolveTorobSource(options) {
                 ...(action.req.category ? { category: action.req.category } : {}),
                 strategy: action.strategy,
             });
-            return { abortedBudget: true, newPromising: 0 };
+            return { abortedBudget: true, newPromising: 0, newPrks: 0 };
         }
         const req = { sort: "popularity", page: 1, ...action.req };
         const key = (0, torob_cache_1.searchCacheKey)(req);
         if (executedKeys.has(key))
-            return { newPromising: 0 };
+            return { newPromising: 0, newPrks: 0 };
         executedKeys.add(key);
         executedNormalizedQueries.add((0, text_1.normalizeText)(req.query));
         sortModesUsed.add(req.sort ?? "popularity");
@@ -880,7 +899,7 @@ async function resolveTorobSource(options) {
                 strategy: action.strategy,
                 cached: isCached,
             });
-            return { blocked: true, challenged: read.challenged, newPromising: 0 };
+            return { blocked: true, challenged: read.challenged, newPromising: 0, newPrks: 0 };
         }
         unavailable ||= Boolean(read.unavailable);
         extractionIssue ||= Boolean(decoded?.issue || (issue && !read.unavailable));
@@ -923,7 +942,7 @@ async function resolveTorobSource(options) {
                 rows: decoded.rows ?? 0,
             });
         }
-        return { decoded: decoded ?? undefined, newPromising: yieldCounts.newPromising };
+        return { decoded: decoded ?? undefined, newPromising: yieldCounts.newPromising, newPrks: yieldCounts.newPrks };
     };
     const recomputeRanking = () => {
         const outcome = (0, matcher_1.selectBestTorobSearchMatch)(target, [...candidates.values()].map(({ card }) => card), options.matchConfig?.minSellerCount);
@@ -966,26 +985,22 @@ async function resolveTorobSource(options) {
             }
         }
         // 2. Vocabulary expansions from Torob suggestions and high-alignment observed titles + seller listings.
+        // واژگان فقط از کارت‌های هویت-سازگار گرفته می‌شود؛ لیستینگ‌های کارت ناسازگار/خانوادهٔ نام‌دارِ متضاد
+        // (مثل طرح پرلا) نباید واژگان جستجوی بازارِ هدف را بسازند.
+        const vocabEligibleInspected = inspected.filter((item) => !item.result.rejected &&
+            item.parentGate !== "PARENT_HARD_CONFLICT" &&
+            !(item.parentGate === "PARENT_AMBIGUOUS" && (item.familyMarkers?.length ?? 0) > 0));
         const highAlignTitles = [
             ...ranked
                 .filter((r) => isHighAlignmentReviewCandidate(target, targetTitle, r, candidates.get(r.candidate.prk)))
                 .slice(0, 6)
                 .map((r) => `${r.candidate.titleFa ?? ""} ${r.candidate.titleEn ?? ""}`.trim()),
-            ...inspected.flatMap((item) => item.offers.map((o) => o.listingTitle).filter((t) => Boolean(t))),
+            ...vocabEligibleInspected.flatMap((item) => item.offers.map((o) => o.listingTitle).filter((t) => Boolean(t))),
         ];
-        const stageAEligibleCount = ranked.filter((r) => {
-            if (!r.rejected)
-                return true;
-            const metaEntry = candidates.get(r.candidate.prk);
-            return (0, torob_identity_1.assessDiscoveryEligibility)(target, targetTitle, r, {
-                fromSimilarOrKnown: metaEntry?.retrievalOrigin === "similar_products" ||
-                    metaEntry?.retrievalOrigin === "known_prk" ||
-                    metaEntry?.retrievalOrigin === "hybrid_index",
-            }).eligible;
-        }).length;
-        const vocabExpansions = mode === "extended" || codeless || stageAEligibleCount <= 2
-            ? (0, torob_query_1.extractVocabularyExpansions)(profile, highAlignTitles, [...observedSuggestedQueries], executedNormalizedQueries, 3, options.matchConfig?.descriptorPolicy)
-            : [];
+        // واژگان بازار (عنوان‌های فروشنده/کارت‌های هم‌تراز) برای همهٔ محصولات استخراج می‌شود؛ شرط پیشین
+        // (stageAEligibleCount <= 2) مجرای «عبارت‌بندی واقعی بازار» را برای کالاهای کددارِ تأییدشده می‌بست.
+        // extractVocabularyExpansions خودش با executedNormalizedQueries تکرار را حذف می‌کند.
+        const vocabExpansions = (0, torob_query_1.extractVocabularyExpansions)(profile, highAlignTitles, [...observedSuggestedQueries], executedNormalizedQueries, 3, options.matchConfig?.descriptorPolicy);
         for (const planned of vocabExpansions) {
             actions.push(toAction(planned));
         }
@@ -993,7 +1008,8 @@ async function resolveTorobSource(options) {
         const paginatable = [...streamLastPage.entries()]
             .filter(([, stream]) => stream.hasNextPage && stream.page < budgets.maxPagesPerQuery)
             .sort((a, b) => b[1].promisingYield - a[1].promisingYield || (b[1].totalMatches ?? 0) - (a[1].totalMatches ?? 0));
-        paginatable.slice(0, 2).forEach(([streamKey, stream], idx) => {
+        // تا ۳ جریانِ صفحه‌بندی‌پذیر با بیشترین بازده در هر موج؛ انتخاب صفحات بازده‌محور است نه ترتیبی.
+        paginatable.slice(0, 3).forEach(([streamKey, stream], idx) => {
             const nextPage = stream.page + 1;
             const req = { query: stream.query, limit: ROW_LIMIT, page: nextPage, sort: stream.sort ?? "popularity", category: stream.category };
             if (!executedKeys.has((0, torob_cache_1.searchCacheKey)(req))) {
@@ -1066,7 +1082,11 @@ async function resolveTorobSource(options) {
                 const bestOutcome = recomputeRanking();
                 if (outcomes.some((o) => o.abortedBudget))
                     break;
-                if (allowEarlyConsolidationStop && mode === "interactive" && bestOutcome.confident && bestOutcome.best) {
+                // کف اکتشاف: توقف زودهنگام «confirmed_consolidated» فقط پس از اجرای حداقل ۳ کوئری سریع (یا همهٔ
+                // کوئری‌های سریعِ کوتاه) مجاز است؛ یافتن یک کارت تلفیقی معتبر، اثباتِ کامل بودن پوشش بازار نیست.
+                const minExecutedFastQueries = Math.min(3, fastQueries.length);
+                if (allowEarlyConsolidationStop && mode === "interactive" && bestOutcome.confident && bestOutcome.best &&
+                    fastIdx >= minExecutedFastQueries) {
                     const bestCard = bestOutcome.best.candidate;
                     const bestCodeRel = bestOutcome.best.codeRelation;
                     const bestHint = knownPrkHints.get(bestCard.prk);
@@ -1114,10 +1134,8 @@ async function resolveTorobSource(options) {
                     [...streamLastPage.values()].some((s) => s.hasNextPage));
             if (!needsExpansion)
                 return undefined;
-            if (bestOutcome.confident && candidates.size > 0 && fastQueries.length <= 3 && !codeless && !fragmentedConfirmed &&
-                ![...streamLastPage.values()].some((s) => s.hasNextPage)) {
-                return undefined;
-            }
+            // (حذف بازگشت زودهنگام پیشین) — ورود فاز ۲ فقط با گیت needsExpansion کنترل می‌شود؛ صف خالی خودش
+            // در گارد while تمام می‌شود، بنابراین بازار چند-لیستینگیِ کارهای کددار هم فرصت گسترش می‌یابد.
             let zeroGainStreak = 0;
             const triedStrategies = new Set();
             const noConfirmedYet = confirmedCards.length === 0;
@@ -1132,11 +1150,24 @@ async function resolveTorobSource(options) {
                 : 0;
             const reserveSimilarSearchSlot = similarSlotsWanted > 0;
             const loopSearchCap = Math.max(fastQueries.length, budgets.maxSearchRequests - similarSlotsWanted);
-            while (budgetExhaustedReason === "none" && searchRequestsUsed < loopSearchCap && deadline - Date.now() > 0) {
+            // ادامهٔ محدود واجدشرط: بودجهٔ پایه تمام شده ولی هنوز صفحهٔ کاوش‌نشده/کاندید امیدبخش مانده → تا سقف
+            // ۲/۳ استخر continuation ادامه می‌دهیم؛ نخستین موجِ بدون PRK تازه آن را می‌بندد. ۱/۳ باقی استخر
+            // برای پروب‌های similar و واژگان فروشنده محفوظ است (بدون خزندگی بی‌کران و بدون تغییر دروازه‌های هویت).
+            const continuationCapPhase2 = Math.max(1, Math.floor(budgets.searchContinuationRequests * 2 / 3));
+            const continuationEligible = () => ranked.some((r) => !inspectedPrks.has(r.candidate.prk) &&
+                (r.status === "REVIEW_REQUIRED" || (!r.rejected && (r.candidate.sellerCount ?? 1) <= 1))) ||
+                [...streamLastPage.values()].some((s) => s.hasNextPage);
+            const effectiveSearchCap = Math.max(loopSearchCap, budgets.maxSearchRequests + continuationCapPhase2);
+            searchSoftAllowance = budgets.searchContinuationRequests;
+            while (budgetExhaustedReason === "none" && searchRequestsUsed < effectiveSearchCap && deadline - Date.now() > 0) {
                 const queue = buildExpansionActions();
                 if (!queue.length)
                     break;
-                const batch = queue.slice(0, Math.min(budgets.searchConcurrency, loopSearchCap - searchRequestsUsed));
+                const inContinuationZone = searchRequestsUsed >= loopSearchCap;
+                if (inContinuationZone && !continuationEligible())
+                    break;
+                const capNow = inContinuationZone ? effectiveSearchCap : loopSearchCap;
+                const batch = queue.slice(0, Math.min(budgets.searchConcurrency, capNow - searchRequestsUsed));
                 const outcomes = await Promise.all(batch.map((action) => executeSearchAction(action, deadline)));
                 const blocked = outcomes.find((o) => o.blocked);
                 if (blocked)
@@ -1145,8 +1176,14 @@ async function resolveTorobSource(options) {
                 if (outcomes.some((o) => o.abortedBudget))
                     break;
                 batch.forEach((a) => triedStrategies.add(a.strategy));
+                // متریک plateau بر پایهٔ بازده واقعی: PRKهای یکتای تازه + کاندیدهای امیدبخش؛ کشف PRK تازهٔ
+                // کم‌اولویت، موج را «بی‌بازده» نمی‌شمارد و گسترشِ زنده را نمی‌کُشد. در ناحیهٔ continuation،
+                // نخستین موج بدون PRK تازه پایان ادامه است.
+                const gainedNewPrks = outcomes.reduce((sum, o) => sum + o.newPrks, 0);
                 const gainedPromising = outcomes.reduce((sum, o) => sum + o.newPromising, 0);
-                if (gainedPromising === 0) {
+                if (inContinuationZone && gainedNewPrks === 0)
+                    break;
+                if (gainedPromising === 0 && gainedNewPrks === 0) {
                     zeroGainStreak++;
                     const moreDiverseLeft = queue.slice(batch.length).some((a) => !triedStrategies.has(a.strategy));
                     if (zeroGainStreak >= 2 && !moreDiverseLeft) {
@@ -1170,6 +1207,8 @@ async function resolveTorobSource(options) {
             const elapsed = Date.now() - searchStart;
             searchDurationMs += elapsed;
             searchTimeLeft = Math.max(0, searchTimeLeft - elapsed);
+            // علت توقف فاز جستجو جدا از علت توقف بازرسی ثبت می‌شود (بازرسی علت را بازنویسی نمی‌کند).
+            searchPhaseStoppingReason = stoppingReason;
         }
         return undefined;
     };
@@ -1214,17 +1253,30 @@ async function resolveTorobSource(options) {
             }
             return true;
         };
-        // 1. Known PRKs (cached hints) first.
+        // انصاف بازرسی: بلوک‌های «شناخته‌شده» و «تأییدشده» در کل اجرا (نه فقط این shortlist) حداکثر نصف
+        // سهمیهٔ جزئیات را می‌گیرند تا کارت‌های تازهٔ کشف‌شده (تک‌فروشنده/عنوان متفاوت) گرسنه نشوند.
+        const capBase = detailCapOverride ?? budgets.maxDetails;
+        const preferenceSlotCap = Math.max(1, Math.ceil(capBase / 2));
+        const knownAlreadyInspected = [...inspectedPrks].filter((prk) => knownPrkSet.has(prk)).length;
+        const confirmedAlreadyInspected = inspected.filter((i) => i.result.status === "MATCH_CONFIRMED").length;
+        // 1. Known PRKs (cached hints) first — bounded so fresh discoveries keep inspection capacity.
+        let knownAdded = 0;
         for (const prk of knownPrkSet) {
+            if (knownAlreadyInspected + knownAdded >= preferenceSlotCap)
+                break;
             if (inspectedPrks.has(prk))
                 continue;
             const known = candidates.get(prk)?.card ?? { prk, titleFa: "", detailsUrl: options.detailsUrl };
-            addCard(known, false);
+            if (addCard(known, false))
+                knownAdded++;
         }
-        // 2. All MATCH_CONFIRMED candidates (never starved).
+        // 2. Top MATCH_CONFIRMED candidates (never starved, but sharing the quota fairly).
+        let confirmedAdded = 0;
         for (const item of scored) {
-            if (item.result.status === "MATCH_CONFIRMED")
-                addCard(item.result.candidate, false);
+            if (confirmedAlreadyInspected + confirmedAdded >= preferenceSlotCap)
+                break;
+            if (item.result.status === "MATCH_CONFIRMED" && addCard(item.result.candidate, false))
+                confirmedAdded++;
         }
         // 3. Reserve up to 2 probe slots for high-relevance quantity-label / seller-evidence probes.
         let probeCount = 0;
@@ -1362,10 +1414,11 @@ async function resolveTorobSource(options) {
     };
     await inspectShortlist(initialPlan);
     // Multi-seed similar-product discovery (within bounded search + detail budgets).
+    // «search_requests» تنها وقتی سهمیهٔ continuation باقی مانده باشد پروب را نمی‌بندد (مجرای محدود جدا از بودجهٔ پایه).
     if (!options.prk &&
         options.similar &&
         !accessRestricted &&
-        budgetExhaustedReason === "none" &&
+        (budgetExhaustedReason === "none" || budgetExhaustedReason === "search_requests") &&
         searchTimeLeft > 800) {
         const rankSimilarSeeds = () => {
             const extCount = (item) => buildItemPanelEvidence(item).uniqueExternalSellerCount;
@@ -1404,29 +1457,35 @@ async function resolveTorobSource(options) {
         const initialSeeds = rankSimilarSeeds();
         const topSeed = initialSeeds[0];
         const topSeedExtCount = topSeed ? buildItemPanelEvidence(topSeed).uniqueExternalSellerCount : 0;
+        // شمار فروشندگانِ تأییدشده هرگز سیگنال «پوشش کامل بازار» نیست (سند recall)؛ بودجه و تنوع بذر، پروب را می‌بندد.
         const fragmentedReviewSeed = Boolean(topSeed &&
-            topSeed.result.status === "REVIEW_REQUIRED" &&
-            totalExternalCount <= 2);
+            topSeed.result.status === "REVIEW_REQUIRED");
+        const fragmentedInspectedMarket = inspected.some((item) => (item.result.candidate.sellerCount ?? 1) <= 2);
+        // پروب‌های similar از باقیماندهٔ بودجهٔ پایه + سهمیهٔ continuation واجدشرط استفاده می‌کنند (یک بودجهٔ محدود مشترک).
+        searchSoftAllowance = budgets.searchContinuationRequests;
+        const similarBudgetRoom = () => Math.max(0, budgets.maxSearchRequests - searchRequestsUsed) + continuationLeft();
         const shouldProbeSimilar = Boolean(topSeed &&
-            searchRequestsUsed < budgets.maxSearchRequests &&
+            similarBudgetRoom() > 0 &&
             (mode === "extended" ||
-                (codeless && verifiedOffers(topSeed).length > 0 && topSeedExtCount <= 3) ||
-                (codeless && fragmentedReviewSeed && (fastQueries.length <= 4 || totalExternalCount <= 1)) ||
+                (codeless && verifiedOffers(topSeed).length > 0) ||
+                (codeless && fragmentedReviewSeed) ||
+                // بازار چند-لیستینگیِ تک‌فروشنده برای کالاهای کددار هم مجرای similar_products را باز می‌کند.
+                (!codeless && fragmentedInspectedMarket && verifiedOffers(topSeed).length > 0) ||
                 onlySelfStoreForSimilar() ||
                 (topSeedExtCount <= 2 && verifiedOffers(topSeed).length > 0 && (candidates.size <= 4 || codeless))));
         const maxSimilarProbes = !shouldProbeSimilar
             ? 0
             : mode === "extended"
-                ? Math.min(3, budgets.maxSearchRequests - searchRequestsUsed)
-                : (codeless && (fastQueries.length <= 4 || totalExternalCount <= 1) && topSeedExtCount <= 2)
-                    ? Math.min(2, budgets.maxSearchRequests - searchRequestsUsed)
-                    : 1;
+                ? Math.min(3, similarBudgetRoom())
+                : ((codeless || fragmentedInspectedMarket) && (fastQueries.length <= 4 || totalExternalCount <= 1 || fragmentedInspectedMarket))
+                    ? Math.min(2, similarBudgetRoom())
+                    : Math.min(1, similarBudgetRoom());
         const probedSeedPrks = new Set();
         while (probedSeedPrks.size < maxSimilarProbes &&
-            searchRequestsUsed < budgets.maxSearchRequests &&
+            similarBudgetRoom() > 0 &&
             searchTimeLeft > 800 &&
             !accessRestricted &&
-            budgetExhaustedReason === "none") {
+            (budgetExhaustedReason === "none" || budgetExhaustedReason === "search_requests")) {
             const nextSeed = rankSimilarSeeds().find((s) => !probedSeedPrks.has(s.result.candidate.prk));
             if (!nextSeed)
                 break;
@@ -1468,7 +1527,9 @@ async function resolveTorobSource(options) {
                     await inspectShortlist(buildInspectionOrder());
                 }
                 // If this probe yielded useful candidates in interactive mode and 1 search slot remains, preserve it for seller-vocab search.
-                if (mode !== "extended" && simGain.newPromising > 0 && budgets.maxSearchRequests - searchRequestsUsed <= 1) {
+                // حفظ اسلات برای واژگان فقط در ناحیهٔ بودجهٔ پایه معنا دارد؛ در ناحیهٔ continuation پروب‌ها ادامه می‌یابند.
+                if (mode !== "extended" && simGain.newPromising > 0 && searchRequestsUsed < budgets.maxSearchRequests &&
+                    budgets.maxSearchRequests - searchRequestsUsed <= 1) {
                     break;
                 }
             }
@@ -1485,32 +1546,49 @@ async function resolveTorobSource(options) {
         inspected.some((item) => verifiedOwnOffers(item).length > 0 || buildItemPanelEvidence(item).ownStoreOfferCount > 0);
     const noExternalOffersYet = !hasExternalVerifiedOffersYet();
     const fragmentedCodelessMarket = codeless && totalConfirmedExternalSellers() <= 2;
+    // واژگان بازاریِ دیده‌نشده از عنوان لیستینگ فروشندگانِ بازرسی‌شده — برای کالاهای کددارِ تأییدشده هم
+    // مجرای کشف «عبارت‌بندی واقعی بازار» را باز می‌کند (دورهای اضافی با سهمیهٔ continuation محدود می‌مانند).
+    const hasUnseenSellerVocabulary = () => {
+        const observedTitles = [
+            ...inspected.flatMap((i) => i.offers.map((o) => o.listingTitle).filter((t) => Boolean(t))),
+            ...inspected.map((i) => i.result.candidate.titleFa).filter((t) => Boolean(t)),
+        ];
+        return (0, torob_query_1.extractVocabularyExpansions)(profile, observedTitles, [...observedSuggestedQueries], executedNormalizedQueries, 1, options.matchConfig?.descriptorPolicy).length > 0;
+    };
+    const codedConfirmedVocabMarket = !codeless && !noExternalOffersYet && hasUnseenSellerVocabulary();
+    const canSpendContinuation = budgetExhaustedReason === "none" || (budgetExhaustedReason === "search_requests" && continuationLeft() > 0);
     if (fastIdx < fastQueries.length && searchTimeLeft > 0 && inspected.length < budgets.maxDetails && noExternalOffersYet) {
         const resumedFailure = await runSearchPhase(false);
         if (resumedFailure)
             return resumedFailure;
         await inspectShortlist(buildInspectionOrder());
     }
-    else if (!options.prk && !accessRestricted && searchTimeLeft > 800 && searchRequestsUsed < budgets.maxSearchRequests &&
-        budgetExhaustedReason === "none" && (fragmentedCodelessMarket || mode === "extended" || noExternalOffersYet || onlySelfStoreVerifiedSoFar())) {
+    else if (!options.prk && !accessRestricted && searchTimeLeft > 800 &&
+        searchRequestsUsed < budgets.maxSearchRequests + continuationLeft() &&
+        canSpendContinuation &&
+        (fragmentedCodelessMarket || mode === "extended" || noExternalOffersYet || onlySelfStoreVerifiedSoFar() || codedConfirmedVocabMarket)) {
         const extraExpansionRounds = onlySelfStoreVerifiedSoFar() ? 2 : fragmentedCodelessMarket ? 2 : 1;
         for (let round = 0; round < extraExpansionRounds; round++) {
-            if (accessRestricted || searchTimeLeft <= 800 || searchRequestsUsed >= budgets.maxSearchRequests || budgetExhaustedReason !== "none")
+            if (accessRestricted || searchTimeLeft <= 800 || searchRequestsUsed >= budgets.maxSearchRequests + continuationLeft() || !canSpendContinuation)
                 break;
             if (round > 0 && hasExternalVerifiedOffersYet() && !fragmentedCodelessMarket)
                 break;
+            // واژگان حلقهٔ بسته هم فقط از کارت‌های هویت-سازگار (بازرسی‌شدهٔ بدون تعارض خانواده) تغذیه می‌شود.
+            const vocabSafeInspected = inspected.filter((i) => !i.result.rejected &&
+                i.parentGate !== "PARENT_HARD_CONFLICT" &&
+                !(i.parentGate === "PARENT_AMBIGUOUS" && (i.familyMarkers?.length ?? 0) > 0));
             const observedTitles = [
-                ...inspected.flatMap((i) => i.offers.map((o) => o.listingTitle).filter((t) => Boolean(t))),
-                ...inspected.map((i) => i.result.candidate.titleFa).filter((t) => Boolean(t)),
+                ...vocabSafeInspected.flatMap((i) => i.offers.map((o) => o.listingTitle).filter((t) => Boolean(t))),
+                ...vocabSafeInspected.map((i) => i.result.candidate.titleFa).filter((t) => Boolean(t)),
             ];
-            const sellerVocab = ((codeless || onlySelfStoreVerifiedSoFar()) && (!hasExternalVerifiedOffersYet() || fragmentedCodelessMarket || mode === "extended"))
-                ? (0, torob_query_1.extractVocabularyExpansions)(profile, observedTitles, [...observedSuggestedQueries], executedNormalizedQueries, 3, options.matchConfig?.descriptorPolicy)
-                : [];
+            const sellerVocab = (0, torob_query_1.extractVocabularyExpansions)(profile, observedTitles, [...observedSuggestedQueries], executedNormalizedQueries, 3, options.matchConfig?.descriptorPolicy);
             const fallbackAction = sellerVocab.length
                 ? toAction(sellerVocab[0])
                 : buildExpansionActions()[0];
             if (!fallbackAction || !(sellerVocab.length > 0 || noExternalOffersYet || mode === "extended"))
                 break;
+            if (searchRequestsUsed >= budgets.maxSearchRequests)
+                searchSoftAllowance = budgets.searchContinuationRequests;
             const searchStart = Date.now();
             const outcome = await executeSearchAction(fallbackAction, searchStart + searchTimeLeft);
             searchDurationMs += Date.now() - searchStart;
@@ -1518,7 +1596,7 @@ async function resolveTorobSource(options) {
             if (outcome.blocked)
                 return fail("SOURCE_UNAVAILABLE", "ترب دسترسی جستجو را محدود کرده است", { challenged: outcome.challenged, accessRestricted: true });
             recomputeRanking();
-            if (outcome.newPromising > 0 && inspected.length < budgets.maxDetails) {
+            if ((outcome.newPromising > 0 || outcome.newPrks > 0) && inspected.length < budgets.maxDetails) {
                 await inspectShortlist(buildInspectionOrder());
             }
             else if (sellerVocab.length === 0 && !onlySelfStoreVerifiedSoFar()) {

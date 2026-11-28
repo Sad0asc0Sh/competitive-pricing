@@ -328,7 +328,10 @@ exports.torobAdapter = {
         const prk = extractPrk(product.torobUrl, product.torobPrk);
         const preferBroadDiscovery = Boolean(product.matchConfig?.preferBroadDiscovery);
         const directConfirmedLock = Boolean(product.torobLinkConfirmation);
-        const cachedPrk = prk && (preferBroadDiscovery || (!product.torobUrl && !directConfirmedLock)) ? prk : null;
+        const discoveryMode = product.matchConfig?.discoveryMode ?? "interactive";
+        // گذر توسعه‌یافتهٔ پوشش‌محور (زمان‌بند) حتی برای کارت‌های قفل‌شده روی PRK مستقیم، جستجوی بازار را
+        // باز می‌کند؛ PRK ذخیره‌شده به‌صورت hint شناخته‌شده می‌ماند و اولویت پنل اصلی حفظ می‌شود.
+        const cachedPrk = prk && (preferBroadDiscovery || discoveryMode === "extended" || (!product.torobUrl && !directConfirmedLock)) ? prk : null;
         const cache = (0, torob_cache_1.isNativeFetchActive)() && process.env.TOROB_DISABLE_CACHE !== "1" ? torob_cache_1.defaultTorobCache : undefined;
         const options = {
             productName: product.name,
@@ -343,7 +346,7 @@ exports.torobAdapter = {
             anchorPriceToman: product.currentFinalPrice && product.currentFinalPrice > 0 ? product.currentFinalPrice
                 : product.costPrice > 0 ? product.costPrice : null,
             matchConfig: product.matchConfig,
-            mode: product.matchConfig?.discoveryMode ?? "interactive",
+            mode: discoveryMode,
             cache,
             now,
         };

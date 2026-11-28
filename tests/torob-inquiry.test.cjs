@@ -379,7 +379,7 @@ test('seller identity gates pricing before statistics, including prices below th
 })
 
 test('search and details stay bounded and reserve a probe in crowded results', async (t) => {
-  const crowded = Array.from({ length: 26 }, (_, i) => ({
+  const crowded = Array.from({ length: 32 }, (_, i) => ({
     ...bazarCard, prk: `crowded-${i}`, name_fa: 'ریموت بنزی Hsp',
   }))
   const fake = installFakeTorob({
@@ -391,10 +391,11 @@ test('search and details stay bounded and reserve a probe in crowded results', a
   })
   t.after(fake.restore)
   const source = await fetchViaTorobMcpServer({ ...opts, ...remoteTarget })
-  assert.ok(fake.calls.filter(({ name }) => name === 'search_products').length <= 10)
+  // کف بودجهٔ به‌روزشده: پایهٔ بی‌کد (۱۰) + استخر continuation (≤۶)؛ همچنان محدود و بدون خزندگی
+  assert.ok(fake.calls.filter(({ name }) => name === 'search_products').length <= 16)
   assert.ok(fake.calls.filter(({ name }) => name === 'product_details').length <= 8)
-  assert.ok(source.torob.search.queries.every(({ mapped }) => mapped === 24))
-  assert.ok(source.torob.search.candidates.every(({ prk }) => prk !== 'crowded-25'))
+  assert.ok(source.torob.search.queries.every(({ mapped }) => mapped === 30))
+  assert.ok(source.torob.search.candidates.every(({ prk }) => prk !== 'crowded-31'))
   assert.deepEqual(source.meta.mergedPanelPrks, [bazarCard.prk, jahanCard.prk])
   assert.equal(source.torob.coverage.status, 'partial')
 })
@@ -476,6 +477,10 @@ test('direct API replays 22 rows with a full audit and extracts offers for the r
       assert.equal(request.searchParams.get('search_id'), 'fixture-context')
       return Response.json(fixture.details)
     }
+    if (request.pathname.endsWith('/similar-base-product/')) {
+      // کالای کدلس با آفر تأییدشدهٔ فروشنده‌عنوانی، مجرای similar_products را باز می‌کند (سند recall)
+      return Response.json({ results: [] })
+    }
     assert.fail(`Unexpected Torob request ${request.pathname}`)
   })
   const source = await torobAdapter.fetchOffers({ ...fixture.product, sourceType: 'torob' })
@@ -488,7 +493,8 @@ test('direct API replays 22 rows with a full audit and extracts offers for the r
   assert.equal(source.productTitle, title)
   assert.equal(source.torob.titleOrigin, 'search_card')
   assert.equal(new URL(source.detailsUrl).searchParams.has('search_id'), false)
-  assert.equal(calls.mock.callCount(), 6)
+  // ۵ جستجو + ۱ جزئیات + ۱ پروب similar (کالای کدلس با آفر تأییدشده؛ bounded با استخر continuation)
+  assert.equal(calls.mock.callCount(), 7)
   const candidate = source.torob.search.candidates.find(({ prk }) => prk === fixture.prk)
   assert.equal(candidate.observations[0].titleFa, title)
   assert.equal(candidate.extraction, 'extracted')

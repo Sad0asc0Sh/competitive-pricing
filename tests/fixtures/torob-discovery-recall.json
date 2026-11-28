@@ -1,0 +1,75 @@
+{
+  "observedAt": "2026-11-28T10:00:00.000Z",
+  "scenario": "بازار چند-لیستینگی: یک کارت تلفیقی درست + ده کارت مستقل تک‌فروشنده با عناوین کانونی متفاوت، نگاتیوهای پرلا/315/پک، PRKهای شناخته‌شدهٔ مصرف‌کنندهٔ اولویت، PRK کهنه، پاسخ ناقص MCP و نامزدهای similar",
+  "target": {
+    "productName": "ریموت بلوتوثی رنگی فرکانس 433 لوکس",
+    "sku": null,
+    "anchorPriceToman": 360000
+  },
+  "ownStoreNames": ["فروشگاه خودمان"],
+  "relevantPrks": [
+    "cons-lux-433-0",
+    "ss-lux-1", "ss-fancy-2", "ss-silicone-3", "ss-simple-4", "ss-cube-5",
+    "ss-plus-6", "ss-luxury-7", "ss-mini-8", "ss-light-9", "ss-original-10"
+  ],
+  "singleSellerCards": [
+    { "prk": "ss-lux-1", "name_fa": "ریموت بلوتوثی رنگی فرکانس 433 لوکس", "price_toman": 365000, "shop_count": 1, "seller": "باسلام", "listingTitle": "ریموت بلوتوثی رنگی فرکانس 433 لوکس" },
+    { "prk": "ss-fancy-2", "name_fa": "ریموت بلوتوثی فانتزی ۴۳۳ رنگی", "price_toman": 340000, "shop_count": 1, "seller": "بست کنترل", "listingTitle": "ریموت بلوتوثی فرکانس 433 سیلیکونی رنگی" },
+    { "prk": "ss-silicone-3", "name_fa": "ریموت بلوتوثی سیلیکونی رنگی 433", "price_toman": 330000, "shop_count": 1, "seller": "فروشگاه سیلیکون", "listingTitle": "ریموت بلوتوثی سیلیکونی فرکانس 433 رنگی" },
+    { "prk": "ss-simple-4", "name_fa": "ریموت بلوتوث فرکانس 433 مگاهرتز مدل رنگی طرح ساده", "price_toman": 345000, "shop_count": 1, "seller": "فروشگاه طرح ساده", "listingTitle": "ریموت بلوتوثی 433 طرح ساده رنگی" },
+    { "prk": "ss-cube-5", "name_fa": "ریموت بلوتوثی 433 مکعبی رنگی", "price_toman": 352000, "shop_count": 1, "seller": "مکعب استور", "listingTitle": "ریموت بلوتوثی مکعبی رنگی 433" },
+    { "prk": "ss-plus-6", "name_fa": "ریموت بلوتوثی رنگی 433 مدل استیل", "price_toman": 348000, "shop_count": 1, "seller": "استیل شاپ", "listingTitle": "ریموت بلوتوثی رنگی 433 استیل" },
+    { "prk": "ss-luxury-7", "name_fa": "ریموت بلوتوثی رنگی 433 مگاهرتز لاکچری", "price_toman": 358000, "shop_count": 1, "seller": "لوکس شاپ", "listingTitle": "ریموت بلوتوثی رنگی لاکچری 433 مگاهرتز" },
+    { "prk": "ss-mini-8", "name_fa": "ریموت بلوتوثی رنگی 433 شیک", "price_toman": 336000, "shop_count": 1, "seller": "شیک مارکت", "listingTitle": "ریموت بلوتوثی رنگی شیک 433 مگاهرتز" },
+    { "prk": "ss-light-9", "name_fa": "ریموت بلوتوثی رنگی 433 با چراغ", "price_toman": 342000, "shop_count": 1, "seller": "چراغ‌فروش", "listingTitle": "ریموت بلوتوثی رنگی 433 داراي چراغ" },
+    { "prk": "ss-original-10", "name_fa": "ریموت بلوتوثی رنگی 433 اورجینال", "price_toman": 355000, "shop_count": 1, "seller": "مارکت اورجینال", "listingTitle": "ریموت بلوتوثی رنگی فرکانس 433 اورجینال" }
+  ],
+  "consolidatedCard": {
+    "prk": "cons-lux-433-0",
+    "name_fa": "ریموت بلوتوثی رنگی فرکانس 433 لوکس",
+    "price_toman": 350000,
+    "shop_count": 5,
+    "offers": [
+      { "shop_name": "فروشگاه خودمان", "shop_id": "own-1", "price_toman": 360000, "product_title": "ریموت بلوتوثی رنگی فرکانس 433 لوکس", "available": true },
+      { "shop_name": "ترب استور", "shop_id": "torob-store", "price_toman": 350000, "product_title": "ریموت بلوتوثی رنگی فرکانس 433 لوکس", "available": true },
+      { "shop_name": "دیجی ریموت", "shop_id": "digi-remote", "price_toman": 355000, "product_title": "ریموت بلوتوثی رنگی فرکانس 433 لوکس مدل اصلی", "available": true },
+      { "shop_name": "پارس ریموت", "shop_id": "pars-remote", "price_toman": 358000, "product_title": "ریموت بلوتوثی 433 رنگی لوکس", "available": true },
+      { "shop_name": "ریموت لند", "shop_id": "remote-land", "price_toman": 349000, "product_title": "ریموت بلوتوثی رنگی فرکانس 433", "available": true }
+    ]
+  },
+  "negativeCards": {
+    "perla": {
+      "prk": "perla-recall-9",
+      "name_fa": "ریموت بلوتوثی ۴۳۳ رنگی طرح پرلا",
+      "price_toman": 149000,
+      "shop_count": 3,
+      "specs": [
+        { "key": "فرکانس", "value": "433 مگاهرتز" },
+        { "key": "نوع ریموت", "value": "بلوتوثی" },
+        { "key": "طرح", "value": "پرلا" }
+      ],
+      "offers": [
+        { "shop_name": "فروشنده پرلا ۱", "shop_id": "perla-1", "price_toman": 149000, "product_title": "ریموت بلوتوثی 433 طرح پرلا رنگی", "available": true },
+        { "shop_name": "فروشنده پرلا ۲", "shop_id": "perla-2", "price_toman": 152000, "product_title": "ریموت بلوتوثی طرح پرلا 433 رنگی", "available": true },
+        { "shop_name": "فروشنده پرلا ۳", "shop_id": "perla-3", "price_toman": 155000, "product_title": "ریموت بلوتوثی پرلا فرکانس 433", "available": true }
+      ]
+    },
+    "titles": ["ریموت بلوتوثی رنگی فرکانس 315 لوکس", "پک ۲ عددی ریموت بلوتوثی رنگی فرکانس 433 لوکس"]
+  },
+  "knownPrks": [
+    { "prk": "k-lux-a", "title": "ریموت بلوتوثی رنگی فرکانس 433 لوکس", "identityStatus": "MATCH_CONFIRMED", "externalCompetitorCount": 2, "lastVerifiedAt": "2026-11-20T10:00:00.000Z" },
+    { "prk": "k-lux-b", "title": "ریموت بلوتوثی رنگی 433 لوکس تکی", "identityStatus": "MATCH_CONFIRMED", "externalCompetitorCount": 1, "lastVerifiedAt": "2026-11-22T10:00:00.000Z" },
+    { "prk": "k-lux-c", "title": "ریموت بلوتوثی رنگی 433 لوکس مدل پایه", "identityStatus": "REVIEW_REQUIRED", "externalCompetitorCount": 0, "lastVerifiedAt": "2026-11-10T10:00:00.000Z" },
+    { "prk": "k-lux-d", "title": "ریموت بلوتوثی رنگی فرکانس 433 لوکس دکمه‌دار", "identityStatus": "REVIEW_REQUIRED", "externalCompetitorCount": 1, "lastVerifiedAt": "2026-11-15T10:00:00.000Z" },
+    { "prk": "k-lux-e", "title": "ریموت بلوتوثی رنگی 433 لوکس قدیمی", "identityStatus": "REVIEW_REQUIRED", "externalCompetitorCount": 0, "lastVerifiedAt": "2026-09-01T10:00:00.000Z" }
+  ],
+  "knownPrkDetails": {
+    "k-lux-a": { "offers": [{ "shop_name": "کالای آبی", "shop_id": "blue-1", "price_toman": 362000, "product_title": "ریموت بلوتوثی رنگی فرکانس 433 لوکس", "available": true }, { "shop_name": "ریموت‌سیتی", "shop_id": "remote-city", "price_toman": 364000, "product_title": "ریموت بلوتوثی 433 رنگی لوکس", "available": true }] },
+    "k-lux-b": { "offers": [{ "shop_name": "تک‌فروش آبی", "shop_id": "single-blue", "price_toman": 366000, "product_title": "ریموت بلوتوثی رنگی 433 لوکس تکی", "available": true }] },
+    "k-lux-c": { "offers": [{ "shop_name": "پایه‌فروش", "shop_id": "base-1", "price_toman": 340000, "product_title": "ریموت بلوتوثی رنگی 433 لوکس مدل پایه", "available": true }] },
+    "k-lux-d": { "offers": [{ "shop_name": "دکمه‌فروش", "shop_id": "btn-1", "price_toman": 368000, "product_title": "ریموت بلوتوثی رنگی فرکانس 433 لوکس دکمه‌دار", "available": true }] },
+    "k-lux-e": { "offers": [{ "shop_name": "قدیمی‌فروش", "shop_id": "old-1", "price_toman": 310000, "product_title": "ریموت بلوتوثی رنگی 433 لوکس قدیمی", "available": true }] }
+  },
+  "incompleteResponsePrk": "ss-market-10-broken",
+  "notes": "کارت ناقص پاسخ (ss-market-10-broken) فقط در دنیای تستِ «پاسخ ناقص» استفاده می‌شود؛ در سناریوی اصلی داخل نتایج نیست."
+}

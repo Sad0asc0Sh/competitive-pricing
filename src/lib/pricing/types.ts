@@ -243,6 +243,24 @@ export interface TorobCoverageDiagnostics {
   sourceUnavailable: boolean;
   accessRestricted: boolean;
   limitations: string[];
+  /** علت توقف فاز جستجو، جدا از علت توقف بازرسی (بازرسی علت فاز جستجو را بازنویسی نمی‌کند). */
+  searchStoppingReason?: TorobStoppingReason;
+  /** علت توقف فاز بازرسی جزئیات؛ وقتی هیچ بازرسی اجرا نشده null. */
+  detailsStoppingReason?: TorobStoppingReason | null;
+  /** PRKهای بازرسی‌شده که از قبل شناخته‌شده بودند (hint/کش/تأیید اداری). */
+  knownPrksInspected?: number;
+  /** PRKهای بازرسی‌شده که در همین استعلام تازه کشف شدند. */
+  newPrksInspected?: number;
+  /** کارت‌های کشف‌شدهٔ تک‌فروشنده (بازار چند-لیستینگیfragmented). */
+  singleSellerPrksDiscovered?: number;
+  /** کارت‌های کشف‌شدهٔ چندفروشنده (تلفیقی). */
+  multiSellerPrksDiscovered?: number;
+  singleSellerPrksInspected?: number;
+  multiSellerPrksInspected?: number;
+  /** برآورد محافظه‌کارانهٔ فرصت کشف باقی‌مانده: کاندید امیدبخشِ بازرسی‌نشده + سطرهای صفحات کاوش‌نشده. */
+  estimatedRemainingDiscoveryOpportunity?: number;
+  /** تعداد درخواست‌های جستجوی مازاد مصرف‌شده از سهمیهٔ ادامهٔ واجدشرط. */
+  yieldContinuationRequestsUsed?: number;
 }
 
 export type PanelCoverageStatus = "complete_within_scope" | "partial" | "uncertain" | "unavailable";

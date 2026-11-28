@@ -41,7 +41,8 @@ test('جستجوی چندمرحله‌ای: مرحلهٔ اول فقط کارت�
     assert.ok(r && r.ok, 'باید نتیجه بدهد')
     assert.equal(r.prk, 'good')
     assert.equal(r.productTitleEn, 'Hikvision DS-2CD1023G0E-I IP Camera')
-    assert.equal(r.meta.searchQueries.length, 2, 'دو پرس‌وجو انجام شده')
+    // کف اکتشاف: توقف consolidated پس از حداقل ۳ کوئری سریع (یافتن کارت تلفیقی، اثبات پوشش کامل نیست)
+    assert.equal(r.meta.searchQueries.length, 3, 'سه پرس‌وجوی سریع کف اکتشاف را می‌سازند و توقف پس از آن است')
     assert.equal(r.offers.length, 5)
     assert.equal(r.meta.offersTruncated, false)
   } finally {
@@ -49,15 +50,16 @@ test('جستجوی چندمرحله‌ای: مرحلهٔ اول فقط کارت�
   }
 })
 
-test('جستجو به محض «تایید خودکار» متوقف می‌شود (بدون پرس‌وجوی اضافه)', async () => {
+test('جستجو پس از «تایید خودکار» با کف اکتشاف متوقف می‌شود (بدون گسترش اضافه)', async () => {
   const fake = installFakeTorob({
     search: () => [GOOD, MOUNT],
     details: { good: { prk: 'good', name_fa: GOOD.name_fa, name_en: GOOD.name_en, cheapest_price_toman: 2380000, available: true, offers: market([2380000, 2400000, 2410000]) } },
   })
   try {
     const r = await client.fetchViaTorobMcpServer({ mcpUrl: 'http://fake', productName: NAME, now: NOW })
-    assert.equal(r.meta.searchQueries.length, 1)
-    assert.equal(fake.calls.filter((c) => c.name === 'search_products').length, 1)
+    // قرارداد تأخیر به‌روزشده: توقف consolidated فقط پس از کف ۳ کوئری سریع؛ فاز ۲ و continuation اجرا نمی‌شوند
+    assert.equal(r.meta.searchQueries.length, 3)
+    assert.equal(fake.calls.filter((c) => c.name === 'search_products').length, 3)
   } finally {
     fake.restore()
   }

@@ -256,7 +256,9 @@ function rrfRankScore(cards, targetInput, limit) {
             0.75 / (RRF_K + rt) +
             1.35 / (RRF_K + rs) +
             (item.entry.reportedSellerCount && item.entry.reportedSellerCount >= 3 ? 0.008 : 0) -
-            (item.hardRejected ? 0.015 : 0);
+            // جریمهٔ رد فقط برای ناسازگاری ساختاری (IDENTITY_MISMATCH)؛ ردّ قیمت-محورِ غیرساختاری نباید
+            // کاندید هویت-سازگار را از پنجرهٔ hint خارج کند (recall، بدون عبور از گیت تعارض سخت).
+            (item.hardRejected && item.matcherStatus === "IDENTITY_MISMATCH" ? 0.015 : 0);
         return {
             prk: item.entry.prk,
             titleFa: item.entry.titleFa ?? null,
@@ -414,6 +416,42 @@ function buildLinkRecordsFromSource(opts) {
  */
 /** §12 سند رخداد — تأیید ذخیره‌شدهٔ قدیمی‌تر از این پنجره، هنگام hintشدن ارتقای MATCH_CONFIRMED نمی‌گیرد (کهنه، نه معتبر). */
 exports.CONFIRMED_HINT_FRESHNESS_DAYS = 30;
+const CATALOG_CARD_COLUMNS = `prk, title_fa, title_en, normalized_title, search_document, brands, models, specs, canonical_attrs,
+                category, seller_names, seller_titles, last_price_toman, reported_seller_count, last_seen_at, last_verified_at`;
+const HYBRID_CARD_WHERE = `WHERE
+           ($1 <> '' AND to_tsvector('simple', COALESCE("search_document", '')) @@ websearch_to_tsquery('simple', $1))
+           OR ($2 <> '' AND to_tsvector('simple', COALESCE("search_document", '')) @@ websearch_to_tsquery('simple', $2))
+           OR ($3 <> '' AND "normalized_title" ILIKE '%' || $3 || '%')
+           OR ($4 <> '' AND "normalized_title" % $4)`;
+function rowsToIndexedCards(rows) {
+    const byPrk = new Map();
+    for (const r of rows) {
+        if (!r?.prk || byPrk.has(r.prk))
+            continue;
+        byPrk.set(r.prk, {
+            prk: r.prk,
+            titleFa: r.title_fa,
+            titleEn: r.title_en,
+            category: r.category,
+            specs: r.specs ?? [],
+            sellerNames: r.seller_names ?? [],
+            sellerTitles: r.seller_titles ?? [],
+            lastPriceToman: r.last_price_toman,
+            reportedSellerCount: r.reported_seller_count,
+            lastSeenAt: r.last_seen_at,
+            lastVerifiedAt: r.last_verified_at,
+            doc: canonicalizeCatalogEntry({
+                titleFa: r.title_fa,
+                titleEn: r.title_en,
+                category: r.category,
+                specs: r.specs ?? [],
+                sellerNames: r.seller_names ?? [],
+                sellerTitles: r.seller_titles ?? [],
+            }),
+        });
+    }
+    return [...byPrk.values()];
+}
 async function loadProductDiscoveryHints(opts) {
     const hintsMap = new Map();
     if (opts.torobPrk) {
@@ -429,9 +467,10 @@ async function loadProductDiscoveryHints(opts) {
          WHERE l.product_id = $1 AND l.relation_status <> 'rejected'
          ORDER BY
            CASE l.relation_status WHEN 'confirmed' THEN 3 WHEN 'review_required' THEN 2 WHEN 'self_only' THEN 1 ELSE 0 END DESC,
+           l.last_verified_at DESC NULLS LAST,
            l.external_competitor_count DESC,
            COALESCE(l.confidence, 0) DESC
-         LIMIT 8`, [opts.productId]);
+         LIMIT 16`, [opts.productId]);
             for (const row of linkRes.rows) {
                 const confirmedFresh = row.relation_status === "confirmed" &&
                     row.last_verified_at != null &&
@@ -448,45 +487,45 @@ async function loadProductDiscoveryHints(opts) {
             }
         }
         if (opts.hybridIndexEnabled !== false) {
+            // Recall هیبرید: پنجرهٔ دو-بودجه‌ای (نیمی بر اساس شباهت واژگانی/سه‌گرامی برای کارت‌های تک‌فروشنده با عنوان
+            // کانونی متفاوت، نیمی بر اساس شمار فروشنده/تازگی) + شاخهٔ OR-FTS و سه‌گرام تا AND-only بودن FTS روی
+            // عنوان کامل، کارتِ دارای یک واژهٔ غایب را صفر نکند. گیت‌های هویت در rrfRankScore دست‌نخورده می‌مانند.
             const { doc, queryTerms } = buildTargetQuerySignals(opts.productName, opts.sku, opts.category);
-            const tokenFilter = [...queryTerms].filter((t) => !t.includes(":") && t.length >= 2).slice(0, 6);
+            const tokenFilter = [...queryTerms].filter((t) => !t.includes(":") && t.length >= 2).slice(0, 8);
             const ftsQuery = [doc.normalizedTitle, ...tokenFilter].filter(Boolean).join(" ").trim();
-            const cardRows = await index_ts_1.pool.query(`SELECT prk, title_fa, title_en, normalized_title, search_document, brands, models, specs, canonical_attrs,
-                category, seller_names, seller_titles, last_price_toman, reported_seller_count, last_seen_at, last_verified_at
-         FROM "torob_catalog_cards"
-         WHERE
-           ($1 <> '' AND to_tsvector('simple', COALESCE("search_document", '')) @@ websearch_to_tsquery('simple', $1))
-           OR ($2 <> '' AND "normalized_title" ILIKE '%' || $2 || '%')
-         ORDER BY COALESCE("reported_seller_count", 0) DESC, "last_seen_at" DESC
-         LIMIT 40`, [ftsQuery, tokenFilter[0] ?? ""]);
-            if (cardRows.rows.length > 0) {
-                const indexed = cardRows.rows.map((r) => ({
-                    prk: r.prk,
-                    titleFa: r.title_fa,
-                    titleEn: r.title_en,
-                    category: r.category,
-                    specs: r.specs ?? [],
-                    sellerNames: r.seller_names ?? [],
-                    sellerTitles: r.seller_titles ?? [],
-                    lastPriceToman: r.last_price_toman,
-                    reportedSellerCount: r.reported_seller_count,
-                    lastSeenAt: r.last_seen_at,
-                    lastVerifiedAt: r.last_verified_at,
-                    doc: canonicalizeCatalogEntry({
-                        titleFa: r.title_fa,
-                        titleEn: r.title_en,
-                        category: r.category,
-                        specs: r.specs ?? [],
-                        sellerNames: r.seller_names ?? [],
-                        sellerTitles: r.seller_titles ?? [],
-                    }),
-                }));
+            const orFtsQuery = tokenFilter.join(" or ").trim();
+            const likeToken = tokenFilter[0] ?? "";
+            const trigramTarget = doc.normalizedTitle;
+            let cardRows = [];
+            try {
+                const wide = await index_ts_1.pool.query(`SELECT * FROM (
+             (SELECT ${CATALOG_CARD_COLUMNS} FROM "torob_catalog_cards" ${HYBRID_CARD_WHERE}
+              ORDER BY CASE WHEN $4 <> '' THEN similarity("normalized_title", $4) ELSE 0 END DESC, COALESCE("reported_seller_count", 0) DESC, "last_seen_at" DESC
+              LIMIT 30)
+             UNION ALL
+             (SELECT ${CATALOG_CARD_COLUMNS} FROM "torob_catalog_cards" ${HYBRID_CARD_WHERE}
+              ORDER BY COALESCE("reported_seller_count", 0) DESC, "last_seen_at" DESC
+              LIMIT 30)
+           ) AS hybrid_window`, [ftsQuery, orFtsQuery, likeToken, trigramTarget]);
+                cardRows = wide.rows;
+            }
+            catch {
+                // پسوند pg_trgm شاید روی پایگاه‌های قدیمی موجود نباشد → پنجرهٔ باریک قدیمی.
+                cardRows = (await index_ts_1.pool.query(`SELECT ${CATALOG_CARD_COLUMNS} FROM "torob_catalog_cards"
+             WHERE
+               ($1 <> '' AND to_tsvector('simple', COALESCE("search_document", '')) @@ websearch_to_tsquery('simple', $1))
+               OR ($2 <> '' AND "normalized_title" ILIKE '%' || $2 || '%')
+             ORDER BY COALESCE("reported_seller_count", 0) DESC, "last_seen_at" DESC
+             LIMIT 40`, [ftsQuery, likeToken])).rows;
+            }
+            const indexed = rowsToIndexedCards(cardRows);
+            if (indexed.length > 0) {
                 const rankedHits = rrfRankScore(indexed, {
                     productName: opts.productName,
                     sku: opts.sku,
                     category: opts.category,
                     anchorPriceToman: opts.anchorPriceToman,
-                }, 5);
+                }, 12);
                 for (const hit of rankedHits) {
                     if (!hintsMap.has(hit.prk)) {
                         hintsMap.set(hit.prk, hit.hint);
@@ -579,12 +618,36 @@ async function persistDiscoveryGraphAndCatalog(opts) {
             "title_fa" = COALESCE(EXCLUDED."title_fa", "torob_catalog_cards"."title_fa"),
             "title_en" = COALESCE(EXCLUDED."title_en", "torob_catalog_cards"."title_en"),
             "normalized_title" = CASE WHEN EXCLUDED."normalized_title" <> '' THEN EXCLUDED."normalized_title" ELSE "torob_catalog_cards"."normalized_title" END,
-            "search_document" = EXCLUDED."search_document",
+            "search_document" = CASE
+              WHEN COALESCE("torob_catalog_cards"."search_document", '') = '' THEN EXCLUDED."search_document"
+              WHEN EXCLUDED."search_document" = '' THEN "torob_catalog_cards"."search_document"
+              ELSE left("torob_catalog_cards"."search_document" || ' ' || EXCLUDED."search_document", 4000)
+            END,
             "brands" = EXCLUDED."brands",
             "models" = EXCLUDED."models",
             "canonical_attrs" = EXCLUDED."canonical_attrs",
-            "seller_names" = EXCLUDED."seller_names",
-            "seller_titles" = EXCLUDED."seller_titles",
+            "seller_names" = (
+              SELECT COALESCE(jsonb_agg(v), '[]'::jsonb)
+              FROM (
+                SELECT DISTINCT v
+                FROM jsonb_array_elements(
+                  CASE WHEN jsonb_typeof("torob_catalog_cards"."seller_names") = 'array' THEN "torob_catalog_cards"."seller_names" ELSE '[]'::jsonb END
+                  || EXCLUDED."seller_names"
+                ) AS t(v)
+                LIMIT 30
+              ) merged_names
+            ),
+            "seller_titles" = (
+              SELECT COALESCE(jsonb_agg(v), '[]'::jsonb)
+              FROM (
+                SELECT DISTINCT v
+                FROM jsonb_array_elements(
+                  CASE WHEN jsonb_typeof("torob_catalog_cards"."seller_titles") = 'array' THEN "torob_catalog_cards"."seller_titles" ELSE '[]'::jsonb END
+                  || EXCLUDED."seller_titles"
+                ) AS t(v)
+                LIMIT 20
+              ) merged_titles
+            ),
             "last_price_toman" = COALESCE(EXCLUDED."last_price_toman", "torob_catalog_cards"."last_price_toman"),
             "reported_seller_count" = COALESCE(EXCLUDED."reported_seller_count", "torob_catalog_cards"."reported_seller_count"),
             "last_seen_at" = EXCLUDED."last_seen_at",

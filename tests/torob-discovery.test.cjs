@@ -421,8 +421,9 @@ test('20. Large result sets (200+ unique cards) stay bounded and complete quickl
   const elapsed = Date.now() - t0
   assert.ok(elapsed < 1000, `expected <1000ms, got ${elapsed}ms`)
   assert.ok(res.torob.coverage.uniquePrksDiscovered >= 150)
-  // Upper bound for interactive codeless mode: maxSearchRequests (10) + maxDetails (8) + 1 price_history = 19.
-  assert.ok(res.torob.coverage.apiRequestsMade <= 19, `expected <= 19 API requests, got ${res.torob.coverage.apiRequestsMade}`)
+  // Upper bound for interactive codeless mode: base searches (10) + phase-2 continuation (≤4) +
+  // similar/vocab share of the continuation pool (≤2) + maxDetails (8) + 1 price_history = 25.
+  assert.ok(res.torob.coverage.apiRequestsMade <= 25, `expected <= 25 API requests, got ${res.torob.coverage.apiRequestsMade}`)
 })
 
 test('Cache effectiveness: second call reuses clean search/detail results without repeating API calls', async (t) => {
@@ -497,6 +498,6 @@ test('21. Live-like interactive density: diversity balances pagination/alt-wordi
   assert.ok(!source.offers.some((o) => o.shopName === 'کد 114'), 'low-score off-price probe must not starve Card C')
   assert.ok(source.torob.coverage.sortModesUsed.includes('sellers'), 'Phase 2 must diversify to sellers sort instead of pure pagination')
   assert.ok(source.torob.coverage.categoriesUsed.includes('991'), 'numeric category id must be decoded and queried when noisy')
-  assert.equal(source.torob.coverage.similarProbesExecuted, 1, 'similar_products probe must execute for fragmented primary')
+  assert.ok(source.torob.coverage.similarProbesExecuted >= 1, 'similar_products probe must execute for fragmented primary (bounded ≤2 در تعاملی)')
   assert.ok(source.torob.search.queries.some((q) => q.query.includes('طرح بنزی')), 'alternative wording query must execute in Phase 2')
 })
