@@ -14,6 +14,7 @@ const torob_cache_1 = require("./torob-cache");
 const torob_identity_1 = require("./torob-identity");
 const torob_payload_1 = require("./torob-payload");
 const torob_query_1 = require("./torob-query");
+const torob_details_resilience_1 = require("./torob-details-resilience");
 var torob_query_2 = require("./torob-query");
 Object.defineProperty(exports, "buildSearchQueries", { enumerable: true, get: function () { return torob_query_2.buildSearchQueries; } });
 Object.defineProperty(exports, "buildSearchQueryPlan", { enumerable: true, get: function () { return torob_query_2.buildSearchQueryPlan; } });
@@ -1366,9 +1367,12 @@ async function resolveTorobSource(options) {
         }
         else {
             apiRequestsMade++;
+            const readStartedAt = Date.now();
             read = await singleFlight("details", cacheKey, () => options.details(card, Math.min(remaining, budgets.detailsTimeoutMs)));
             if (options.cache && !read.blocked && !read.unavailable && !read.issue && read.data) {
-                options.cache.setDetails(cacheKey, read, options.now.getTime());
+                // سند P0 resilience — مهر زمانی کش، زمانِ تکمیلِ واقعی دریافت است (شروع استعلام + مدت دریافت)؛
+                // با ساعتِ مرجع استعلام ناسگار نمی‌شود تا تست‌های قطعی هم معتبر بمانند
+                options.cache.setDetails(cacheKey, read, options.now.getTime() + Math.max(0, Date.now() - readStartedAt));
             }
         }
         const item = inspectDetails(target, targetTitle, card, read, options.confirmation, candidates.get(card.prk)?.observations);
@@ -1666,6 +1670,11 @@ async function resolveTorobSource(options) {
             return 3;
         return 2;
     };
+    // سند P0 resilience — سلامت استخراج بعد از زیرکلاس هویتی و قبل از utility: کارت سالمِ هم‌رده بر کارتِ
+    // time-out-خورده برتری می‌گیرد؛ شکست یک کارت، پنل‌های سازگارِ مستقل را باطل نمی‌کند.
+    const extractionHealth = (item) => item.extraction === "extracted" || item.extraction === "empty" ? 2
+        : item.extraction === "incomplete" ? 1
+            : 0;
     const inspectedRanked = [...inspected].sort((a, b) => {
         const ra = rankPanelEntry(a);
         const rb = rankPanelEntry(b);
@@ -1675,6 +1684,10 @@ async function resolveTorobSource(options) {
         const sb = parentSubclass(b);
         if (sb !== sa)
             return sb - sa;
+        const ha = extractionHealth(a);
+        const hb = extractionHealth(b);
+        if (hb !== ha)
+            return hb - ha;
         if (rb.utility !== ra.utility)
             return rb.utility - ra.utility;
         if (rb.confirmedExt !== ra.confirmedExt)
@@ -1682,8 +1695,17 @@ async function resolveTorobSource(options) {
         return rb.score - ra.score;
     });
     const primary = inspectedRanked[0];
-    if (!primary)
-        return fail("EXTRACTION_INCOMPLETE", "مهلت دریافت جزئیات کارت ترب پایان یافت");
+    if (!primary) {
+        // سند P0 resilience — «کارت جزئیات ندارد» با «بودجه پیش از هر درخواست جزئیات تمام شد» فرق دارد.
+        // budgetExhaustedReason در inspectOne/inspectShortlist (closure) تنظیم می‌شود؛ snapshot با type کامل.
+        const budgetReason = budgetExhaustedReason;
+        const budgetBlockedBeforeAnyDetails = inspected.length === 0 &&
+            (budgetReason === "details_requests" || budgetReason === "details_time");
+        const kind = budgetBlockedBeforeAnyDetails ? "DETAILS_GLOBAL_DEADLINE_EXCEEDED" : "DETAILS_NOT_ATTEMPTED";
+        return fail("EXTRACTION_INCOMPLETE", torob_details_resilience_1.TOROB_DETAILS_FAILURE_MESSAGES[kind], {
+            detailsFailure: { kind, message: torob_details_resilience_1.TOROB_DETAILS_FAILURE_MESSAGES[kind], code: budgetReason === "none" ? null : budgetReason },
+        });
+    }
     const { candidate } = primary.result;
     const data = primary.read.data;
     const panels = data ? [data] : [];
@@ -1779,19 +1801,30 @@ async function resolveTorobSource(options) {
         return Boolean(ev);
     }
     let status = identityStatus;
+    let metaDetailsFailure = null;
     if (restriction) {
         status = "SOURCE_UNAVAILABLE";
         reason = "ترب دسترسی دریافت جزئیات را محدود کرده است";
     }
     else if (primary.extraction === "unavailable" || primary.extraction === "incomplete") {
         status = "EXTRACTION_INCOMPLETE";
-        reason = {
-            details_prk_mismatch: "شناسهٔ پاسخ جزئیات با کارت درخواست‌شده متفاوت است",
-            details_timeout: "مهلت دریافت جزئیات کارت ترب پایان یافت",
-        }[primary.read.issue ?? ""] ?? "کارت ترب مشخص است ولی دریافت یا استخراج جزئیات کامل نشد";
-        const http = /^(mcp|torob)_http_(\d{3})$/.exec(primary.read.issue ?? "");
+        // سند P0 resilience — طبقه‌بندی دقیق: timeout مال کدام مسیر بود؟ بودجه؟ دسترسی؟ شِما؟
+        const legacyKind = primary.read.issue === "details_prk_mismatch" ? "WRONG_PRK"
+            : primary.read.issue === "details_schema" || primary.read.issue === "mcp_response_schema" ? "DETAILS_EXTRACTION_INCOMPLETE"
+                : primary.read.issue === "details_timeout" ? "MCP_DETAILS_TIMEOUT"
+                    : primary.read.issue === "access_rate_limited" || /http_429$/.test(primary.read.issue ?? "") ? "RATE_LIMITED"
+                        : /^(mcp|torob)_http_(?:401|403)$/.test(primary.read.issue ?? "") ? "ACCESS_RESTRICTED"
+                            : primary.read.challenged ? "ACCESS_CHALLENGE"
+                                : primary.read.issue?.includes("connection") ? "CONNECTION_FAILURE"
+                                    : /^(mcp|torob)_http_\d{3}$/.test(primary.read.issue ?? "") ? "UPSTREAM_ERROR"
+                                        : "DETAILS_EXTRACTION_INCOMPLETE";
+        const failure = primary.read.detailsFailure ?? (0, torob_details_resilience_1.detailsFailureOf)(legacyKind, primary.read.issue ?? null);
+        reason = failure.message;
+        // جزئیات HTTP (مثل MCP HTTP 502) همیشه از کد خام حفظ می‌شود — حتی وقتی wrapper پیام خودش را گذاشته
+        const http = /^(mcp|torob)_http_(\d{3})$/.exec(failure.code ?? primary.read.issue ?? "");
         if (http)
             reason += ` (${http[1] === "mcp" ? "MCP" : "Torob"} HTTP ${http[2]})`;
+        metaDetailsFailure = failure;
     }
     else if (identityStatus === "EXTRACTION_INCOMPLETE") {
         reason = primary.sellerTitle
@@ -1942,6 +1975,7 @@ async function resolveTorobSource(options) {
             ...(restriction ? { challenged: restriction.read.challenged, accessRestricted: true } : {}),
             extractionIssue: primary.read.issue,
             ...(primary.read.issue ? { diagnostics: [primary.read.issue] } : {}),
+            ...(metaDetailsFailure ? { detailsFailure: metaDetailsFailure } : {}),
             sellerTitle: primary.sellerTitle,
             matchScore: selected.score,
             matchExplanation: reason,

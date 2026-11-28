@@ -10,6 +10,7 @@ exports.fetchViaTorobMcpServer = fetchViaTorobMcpServer;
 const filters_1 = require("../pricing/filters");
 const text_1 = require("../pricing/match/text");
 const torob_discovery_1 = require("./torob-discovery");
+const torob_details_resilience_1 = require("./torob-details-resilience");
 const torob_payload_1 = require("./torob-payload");
 var torob_discovery_2 = require("./torob-discovery");
 Object.defineProperty(exports, "buildSearchQueries", { enumerable: true, get: function () { return torob_discovery_2.buildSearchQueries; } });
@@ -130,22 +131,39 @@ function mcpFailure(code, message, status) {
         /\b(?:HTTP\s*)?(?:429|403|401)\b|rate limit|access denied/i.test(message);
     const schema = code === "mcp_response_schema" || /response schema|API shape may have changed/i.test(message);
     const wrongId = /different product id in the details response/i.test(message);
-    return { data: null, issue: challenged ? "access_challenge" : blocked ? "access_restricted" : wrongId ? "details_prk_mismatch" : schema ? "mcp_response_schema" : code,
-        unavailable: blocked || (!schema && !wrongId), blocked, challenged };
+    // سند P0 resilience — «not found» گذرا نیست؛ کد اختصاصی می‌گیرد تا retry/fallback نشود
+    const notFound = code === "mcp_tool_error" && /not found/i.test(message);
+    const rateLimited = status === 429 || /(?:^|\s)429(?:\s|$)/.test(message);
+    return { data: null,
+        issue: challenged ? "access_challenge"
+            : rateLimited ? "access_rate_limited"
+                : blocked ? "access_restricted"
+                    : wrongId ? "details_prk_mismatch"
+                        : notFound ? "not_found"
+                            : schema ? "mcp_response_schema"
+                                : code,
+        unavailable: blocked || (!schema && !wrongId && !notFound), blocked, challenged };
 }
 async function callTorobMcpToolWithDiag(mcpEndpointUrl, toolName, args, timeoutMs = 8000) {
     try {
+        const signal = AbortSignal.timeout(timeoutMs);
+        // سند P0 resilience — خواندن بدنه هم با همان مهلت قطع می‌شود؛ هدرِ رسیده با بدنهٔ معلق نباید استعلام را بی‌نهایت نگه دارد
+        const bodyAbort = new Promise((_, reject) => {
+            signal.addEventListener("abort", () => reject(new DOMException("The operation was aborted", "AbortError")), { once: true });
+        });
+        // وقتی مسابقه با شاخهٔ دیگر تمام شده، ردّ bodyAbort نباید unhandled rejection بسازد
+        bodyAbort.catch(() => undefined);
         const res = await fetch(mcpEndpointUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
             body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: toolName, arguments: args } }),
-            signal: AbortSignal.timeout(timeoutMs),
+            signal,
             cache: "no-store",
         });
         if (!res.ok) {
             return { ...mcpFailure(`mcp_http_${res.status}`, "", res.status), endpointUnavailable: res.status >= 500 && res.status !== 490 };
         }
-        const rawText = await res.text();
+        const rawText = await Promise.race([res.text(), bodyAbort]);
         try {
             const payload = res.headers.get("content-type")?.includes("text/event-stream") || /^\s*(?:data:|event:)/.test(rawText)
                 ? rawText.split(/\r?\n/).filter((line) => line.startsWith("data:")).at(-1)?.slice(5).trim() ?? "" : rawText;
@@ -205,9 +223,14 @@ function decodeMcpDetails(value, now) {
         },
     };
 }
-function fetchViaTorobMcpServer(opts) {
+let detailsCorrelationSeq = 0;
+async function fetchViaTorobMcpServer(opts) {
     const now = opts.now ?? new Date();
     let endpointUnavailable = false;
+    // سند P0 resilience — شناسهٔ همبستگی + ردّ تلاش‌های جزئیات برای اتصال یک استعلام به همهٔ درخواست‌های PRK
+    const detailsCorrelationId = `dtl-${now.getTime().toString(36)}-${(detailsCorrelationSeq += 1)}`;
+    const detailsAttemptTraces = [];
+    let seenDetailsCall = false;
     const invokeFallbackSearch = (req, timeoutMs) => {
         if (!opts.fallbackSearch)
             return Promise.resolve({ unavailable: true });
@@ -216,7 +239,7 @@ function fetchViaTorobMcpServer(opts) {
         }
         return opts.fallbackSearch(req, timeoutMs);
     };
-    return (0, torob_discovery_1.resolveTorobSource)({
+    const result = await (0, torob_discovery_1.resolveTorobSource)({
         ...opts,
         mode: opts.mode ?? opts.matchConfig?.discoveryMode ?? "interactive",
         now,
@@ -242,32 +265,43 @@ function fetchViaTorobMcpServer(opts) {
             return { ...out, origin: "torob_mcp", data: out.data ?? undefined };
         },
         details: async (card, timeoutMs) => {
-            if (endpointUnavailable && opts.fallbackDetails)
-                return opts.fallbackDetails(card, timeoutMs);
-            const started = Date.now();
-            const address = (0, torob_payload_1.safeTorobDetailsUrl)(card.detailsUrl, card.prk, true);
-            const discoveredAddress = address && new URL(address).searchParams.has("search_id") ? address : null;
-            const out = await callTorobMcpToolWithDiag(opts.mcpUrl, "product_details", {
-                prk: card.prk, ...(discoveredAddress ? { details_url: discoveredAddress } : { query: (0, torob_discovery_1.buildSearchQueries)(opts.productName, opts.sku)[0] }),
-                max_offers: 30, max_in_person: 30,
-            }, timeoutMs);
-            const remaining = timeoutMs - (Date.now() - started);
-            const decoded = out.data != null ? decodeMcpDetails(out.data, now) : {
-                ...out, issue: out.issue === "mcp_timeout" ? "details_timeout" : out.issue, data: undefined,
-            };
-            const hasTitle = (0, text_1.normalizeText)(decoded.data?.titleFa) || (0, text_1.normalizeText)(decoded.data?.titleEn) ||
-                (0, text_1.normalizeText)(card.titleFa) || (0, text_1.normalizeText)(card.titleEn);
-            const canUseFallback = !out.blocked && remaining > 1000 && opts.fallbackDetails &&
-                (!decoded.data || decoded.issue || !hasTitle) && decoded.issue !== "details_prk_mismatch";
-            if (canUseFallback) {
-                endpointUnavailable ||= out.endpointUnavailable === true;
-                const fallback = await opts.fallbackDetails(card, remaining);
-                if (fallback.blocked)
-                    return { ...fallback, data: decoded.data };
-                if (fallback.data && !fallback.issue)
-                    return fallback;
-            }
-            return decoded;
+            // سند P0 resilience — بودجهٔ اولین تلاش بخشی از مهلت است؛ بازیابی گذرا + fallback مستقیم در مهلت باقی‌مانده
+            const coldStart = !seenDetailsCall;
+            seenDetailsCall = true;
+            const recovery = await (0, torob_details_resilience_1.retrieveTorobDetailsWithRecovery)({
+                prk: card.prk,
+                correlationId: detailsCorrelationId,
+                timeoutMs,
+                coldStart,
+                transports: [
+                    {
+                        kind: "mcp",
+                        run: async (attemptTimeoutMs) => {
+                            const address = (0, torob_payload_1.safeTorobDetailsUrl)(card.detailsUrl, card.prk, true);
+                            const discoveredAddress = address && new URL(address).searchParams.has("search_id") ? address : null;
+                            const out = await callTorobMcpToolWithDiag(opts.mcpUrl, "product_details", {
+                                prk: card.prk,
+                                ...(discoveredAddress ? { details_url: discoveredAddress } : { query: (0, torob_discovery_1.buildSearchQueries)(opts.productName, opts.sku)[0] }),
+                                max_offers: 30, max_in_person: 30,
+                            }, attemptTimeoutMs);
+                            endpointUnavailable ||= out.endpointUnavailable === true && !out.blocked;
+                            return out.data != null ? decodeMcpDetails(out.data, now) : {
+                                ...out, issue: out.issue === "mcp_timeout" ? "details_timeout" : out.issue, data: undefined,
+                            };
+                        },
+                        // پاسخ بدون عنوانِ قابل استفاده، «قابل استفاده» نیست (رفتار قدیمی canUseFallback)
+                        isUsable: (read) => Boolean(read.data) && !read.issue && !read.unavailable && !read.blocked &&
+                            Boolean((0, text_1.normalizeText)(read.data?.titleFa) || (0, text_1.normalizeText)(read.data?.titleEn) ||
+                                (0, text_1.normalizeText)(card.titleFa) || (0, text_1.normalizeText)(card.titleEn)),
+                    },
+                    ...(opts.fallbackDetails ? [{
+                            kind: "torob_direct",
+                            run: (attemptTimeoutMs) => opts.fallbackDetails(card, attemptTimeoutMs),
+                        }] : []),
+                ],
+                onTrace: (trace) => detailsAttemptTraces.push(trace),
+            });
+            return recovery.read;
         },
         similar: async (card, limit, timeoutMs) => {
             if (endpointUnavailable && opts.fallbackSimilar)
@@ -293,4 +327,20 @@ function fetchViaTorobMcpServer(opts) {
             return history && Array.isArray(history.series) ? analyzeMcpPriceHistory(history) : null;
         },
     });
+    const failedTraces = detailsAttemptTraces.filter((trace) => trace.failureKind !== null);
+    if (detailsAttemptTraces.length || opts.relayInitMs != null) {
+        result.meta = {
+            ...result.meta,
+            detailsCorrelationId,
+            ...(detailsAttemptTraces.length ? { detailsAttempts: detailsAttemptTraces } : {}),
+            ...(opts.relayInitMs != null ? { relayInitMs: opts.relayInitMs } : {}),
+            ...(failedTraces.length
+                ? {
+                    detailsFailure: failedTraces.at(-1)?.failureKind,
+                    detailsRecovery: detailsAttemptTraces.some((trace) => trace.recoveredByLaterAttempt) ? "recovered" : "failed",
+                }
+                : {}),
+        };
+    }
+    return result;
 }

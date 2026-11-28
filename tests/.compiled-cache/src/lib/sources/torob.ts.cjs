@@ -12,7 +12,9 @@ const filters_1 = require("../pricing/filters");
 const text_1 = require("../pricing/match/text");
 const config_1 = require("../torob-relay/config");
 const crypto_1 = require("../torob-relay/crypto");
+const torob_details_resilience_1 = require("./torob-details-resilience");
 const humanize_1 = require("./humanize");
+let detailsCorrelationSeq = 0;
 const torob_cache_1 = require("./torob-cache");
 const torob_discovery_1 = require("./torob-discovery");
 const torob_mcp_client_1 = require("./torob-mcp-client");
@@ -325,6 +327,27 @@ exports.torobAdapter = {
     label: "ترب (مجهز به Torob MCP)",
     async fetchOffers(product) {
         const now = new Date();
+        // سند P0 resilience — شناسهٔ همبستگی و ردّ تلاش‌های جزئیات در سطح استعلام
+        const detailsCorrelationId = `dtl-${now.getTime().toString(36)}-${(detailsCorrelationSeq += 1)}`;
+        const detailsAttemptTraces = [];
+        let seenDetailsCall = false;
+        const attachDetailsMeta = (result) => {
+            const failedTraces = detailsAttemptTraces.filter((trace) => trace.failureKind !== null);
+            if (!detailsAttemptTraces.length)
+                return result;
+            result.meta = {
+                ...result.meta,
+                detailsCorrelationId,
+                detailsAttempts: detailsAttemptTraces,
+                ...(failedTraces.length
+                    ? {
+                        detailsFailure: failedTraces.at(-1)?.failureKind,
+                        detailsRecovery: detailsAttemptTraces.some((trace) => trace.recoveredByLaterAttempt) ? "recovered" : "failed",
+                    }
+                    : {}),
+            };
+            return result;
+        };
         const prk = extractPrk(product.torobUrl, product.torobPrk);
         const preferBroadDiscovery = Boolean(product.matchConfig?.preferBroadDiscovery);
         const directConfirmedLock = Boolean(product.torobLinkConfirmation);
@@ -350,19 +373,42 @@ exports.torobAdapter = {
             cache,
             now,
         };
-        const details = (card, timeoutMs) => fetchTorobDetails(card, now, timeoutMs);
+        const details = (card, timeoutMs) => {
+            // سند P0 resilience — مسیر مستقیم هم با بودجه‌بندی تلاش‌ها و بازیابی گذرا اجرا می‌شود
+            const coldStart = !seenDetailsCall;
+            seenDetailsCall = true;
+            return (0, torob_details_resilience_1.retrieveTorobDetailsWithRecovery)({
+                prk: card.prk,
+                correlationId: detailsCorrelationId,
+                timeoutMs,
+                coldStart,
+                transports: [{ kind: "torob_direct", run: (attemptTimeoutMs) => fetchTorobDetails(card, now, attemptTimeoutMs) }],
+                onTrace: (trace) => detailsAttemptTraces.push(trace),
+            }).then((recovery) => recovery.read);
+        };
         const mcpUrl = process.env.TOROB_MCP_URL?.trim();
         if (mcpUrl) {
+            // شروع سرد رله/پیکربندی — عامل محتمل timeouts اولین استعلام؛ اندازه‌گیری می‌شود نه فرض
+            const relayStarted = Date.now();
             await (0, config_1.syncTorobRelayToMcp)().catch(() => undefined);
-            return (0, torob_mcp_client_1.fetchViaTorobMcpServer)({
+            const relayInitMs = Date.now() - relayStarted;
+            const result = await (0, torob_mcp_client_1.fetchViaTorobMcpServer)({
                 ...options,
                 mcpUrl,
+                relayInitMs,
                 fallbackSearch: searchTorobProductV4,
                 fallbackDetails: details,
                 fallbackSimilar: similarTorobProductsV4,
             });
+            if (detailsAttemptTraces.length) {
+                result.meta = {
+                    ...result.meta,
+                    detailsAttempts: [...(Array.isArray(result.meta?.detailsAttempts) ? result.meta.detailsAttempts : []), ...detailsAttemptTraces],
+                };
+            }
+            return attachDetailsMeta(result);
         }
-        return (0, torob_discovery_1.resolveTorobSource)({
+        const directResult = await (0, torob_discovery_1.resolveTorobSource)({
             ...options,
             via: "torob_v4",
             search: searchTorobProductV4,
@@ -370,5 +416,6 @@ exports.torobAdapter = {
             similar: similarTorobProductsV4,
             priceTrend: (card) => fetchTorobPriceTrendV4(card.prk),
         });
+        return attachDetailsMeta(directResult);
     },
 };

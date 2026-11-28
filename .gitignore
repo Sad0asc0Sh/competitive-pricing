@@ -4,3 +4,6 @@ node_modules/
 .env.local
 *.log
 *.tsbuildinfo
+
+# ابزارهای محلی ZCode (پیش‌نویس workflow و لاگ‌ها)
+.zcode/
