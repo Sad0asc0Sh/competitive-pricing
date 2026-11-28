@@ -30,7 +30,7 @@ import type {
   TorobTitleOrigin,
 } from "@/lib/pricing/types";
 import { detailsCacheKey, searchCacheKey, type TorobDiscoveryCache } from "./torob-cache";
-import { assessDiscoveryEligibility, conflictingEvidence, inspectSellerOffers, isSellerEvidenceProbeCandidate, reviewCard, SELLER_EVIDENCE_NOTE, type DiscoveryEligibility } from "./torob-identity";
+import { assessDiscoveryEligibility, conflictingEvidence, inspectSellerOffers, isSellerEvidenceProbeCandidate, reviewCard, SELLER_EVIDENCE_NOTE, type DiscoveryEligibility, type ParentGate } from "./torob-identity";
 import { decodeTorobSearch, safeTorobDetailsUrl, torobProductUrl, type DecodedTorobSearch, type TorobDetailsData, type TorobSearchRequest, type TorobSearchSort } from "./torob-payload";
 import { buildSearchQueries, buildSearchQueryPlan, decomposeTargetProduct, extractVocabularyExpansions, type PlannedSearchQuery, type QueryStrategy } from "./torob-query";
 import type { KnownPrkHint, SourceMatchConfig } from "./types";
@@ -185,6 +185,9 @@ interface InspectedCard {
   sellerTitle?: string;
   sellerCorroborated: boolean;
   adminConfirmed: boolean;
+  /** دروازهٔ کارت والد (§4 سند رخداد) — منبع یگانه: assessDiscoveryEligibility؛ undefined یعنی عنوان قابل تجزیه نبود */
+  parentGate?: ParentGate;
+  familyMarkers: string[];
   sellerAssessments: SellerIdentityAssessment[];
   offers: RawOffer[];
 }
@@ -238,6 +241,8 @@ function inspectDetails(
   const adminConfirmed = confirmation?.prk === card.prk && confirmation.origin === "admin_review" &&
     result.titleState === "present" && result.status !== "IDENTITY_MISMATCH" && !result.hasConflict &&
     (!ambiguousPack || result.status === "MATCH_CONFIRMED");
+  // §4 سند رخداد — دروازهٔ کارت والد از مرحلهٔ A به پنل منتقل می‌شود (منبع یگانهٔ طبقه‌بندی).
+  const gateEligibility = assessDiscoveryEligibility(target, targetTitle, result);
   return {
     result,
     read,
@@ -246,6 +251,8 @@ function inspectDetails(
     sellerTitle,
     sellerCorroborated,
     adminConfirmed,
+    parentGate: gateEligibility.parentGate,
+    familyMarkers: gateEligibility.familyMarkers,
     sellerAssessments,
     offers,
   };
@@ -375,13 +382,15 @@ function scoreInspectionPriority(
     meta?.retrievalOrigin === "known_prk" ||
     meta?.retrievalOrigin === "hybrid_index";
   const eligibility = assessDiscoveryEligibility(target, targetTitle, result, { fromSimilarOrKnown });
-  if (!eligibility.eligible && !knownPrkSet.has(result.candidate.prk)) {
+  // §12 سند رخداد — fail-closed hint: hint ذخیره‌شده گیت مرحلهٔ A را فقط وقتی دور می‌زند که راستی‌آزمایی تازه
+  // هیچ تعارض ساختاری نیافته باشد؛ hint با تعارض تازه (خانواده/انکودینگ/ساختار) از گیت عبور نمی‌کند.
+  if (!eligibility.eligible && !(knownPrkSet.has(result.candidate.prk) && eligibility.hardContradictions.length === 0)) {
     return { priority: -100, probe: false, highAlignment: false, eligibility };
   }
   const probe = Boolean(eligibility.probe || (codeless && result.rejected && eligibility.eligible));
   const highAlignment = isHighAlignmentReviewCandidate(target, targetTitle, result, meta);
   let score = 0;
-  if (knownPrkSet.has(result.candidate.prk)) {
+  if (knownPrkSet.has(result.candidate.prk) && eligibility.hardContradictions.length === 0) {
     const hint = knownPrkHints?.get(result.candidate.prk);
     if (hint && hint.identityStatus === "MATCH_CONFIRMED" && (hint.externalCompetitorCount ?? 0) >= 2) {
       score += 150;
@@ -1529,7 +1538,14 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     const onlySelfStoreForSimilar = () =>
       !inspected.some((item) => verifiedExternalOffers(item).length > 0) &&
       inspected.some((item) => verifiedOwnOffers(item).length > 0 || buildItemPanelEvidence(item).ownStoreOfferCount > 0);
-    const totalExternalCount = inspected.reduce((sum, item) => sum + buildItemPanelEvidence(item).uniqueExternalSellerCount, 0);
+    // §8/§11 سند رخداد — فروشندگان کارت‌های دارای مارکر خانوادهٔ حل‌نشده یا تعارض سخت، پوششِ بازارِ هدف نیستند
+    // و نباید پروب similar را گرسنه کنند (تعداد فروشنده هرگز جایگزین هویت نمی‌شود).
+    const identityAlignedExternalCount = inspected.reduce((sum, item) => {
+      if (item.parentGate === "PARENT_HARD_CONFLICT") return sum;
+      if (item.parentGate === "PARENT_AMBIGUOUS" && (item.familyMarkers?.length ?? 0) > 0) return sum;
+      return sum + buildItemPanelEvidence(item).uniqueExternalSellerCount;
+    }, 0);
+    const totalExternalCount = identityAlignedExternalCount;
     const externalConfirmedPrimary = inspected.find((item) => verifiedExternalOffers(item).length > 0);
     const initialSeeds = rankSimilarSeeds();
     const topSeed = initialSeeds[0];
@@ -1712,10 +1728,21 @@ export async function resolveTorobSource(options: DiscoveryOptions): Promise<Sou
     }
     return { tier, utility, confirmedExt: ev.confirmedCompetitorCount, score: baseScore };
   };
+  // §11 سند رخداد — زیرکلاس هویتی پنل: COMPATIBLE(3) > AMBIGUOUS-نرم/undefined(2) > AMBIGUOUS-مارک‌دار(1) > HARD(0).
+  // undefined هرگز بهترین زیرکلاس نیست؛ بونوس فروشنده‌شمار فقط داخل هم‌زیرکلاس اثر دارد (زیرکلاس پیش از utility مقایسه می‌شود).
+  const parentSubclass = (item: InspectedCard): number => {
+    if (item.parentGate === "PARENT_HARD_CONFLICT") return 0;
+    if (item.parentGate === "PARENT_AMBIGUOUS" && (item.familyMarkers?.length ?? 0) > 0) return 1;
+    if (item.parentGate === "PARENT_COMPATIBLE") return 3;
+    return 2;
+  };
   const inspectedRanked = [...inspected].sort((a, b) => {
     const ra = rankPanelEntry(a);
     const rb = rankPanelEntry(b);
     if (rb.tier !== ra.tier) return rb.tier - ra.tier;
+    const sa = parentSubclass(a);
+    const sb = parentSubclass(b);
+    if (sb !== sa) return sb - sa;
     if (rb.utility !== ra.utility) return rb.utility - ra.utility;
     if (rb.confirmedExt !== ra.confirmedExt) return rb.confirmedExt - ra.confirmedExt;
     return rb.score - ra.score;

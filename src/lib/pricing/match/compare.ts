@@ -9,7 +9,7 @@
  */
 import type { SystemOneVerdict } from "../types";
 import { classifyThreeZoneScore } from "../systemone-supervisor";
-import { compareTitleDescriptors, type DescriptorPolicyConfig } from "./descriptors";
+import { compareNamedFamilies, compareTitleDescriptors, familyNounExplained, type DescriptorPolicyConfig } from "./descriptors";
 import { areBrandSetsCompatible, expandBrands, isAccessoryClass, VARIANT_WORDS } from "./lexicon";
 import { isAliasPrefix, type AttrValue, type ParsedCode, type ParsedTitle } from "./parse";
 
@@ -50,7 +50,7 @@ const REL_RANK: Record<CodeRel, number> = { equal: 8, alias: 7, tail: 6, ext_seg
 const PRIMARY_ATTRS = new Set([
   "mp", "ch", "cap", "ram", "ports", "volt", "amp", "watt", "va", "ah", "uf", "kvar", "ka",
   "poles", "curve", "phase", "ingress", "len", "cm", "mm2", "dim", "cat", "ctype", "rg", "speed", "poe", "inch", "cabletype", "lens", "gen",
-  "access_model", "frequency", "buttons", "bluetooth",
+  "access_model", "frequency", "buttons", "bluetooth", "encoding",
 ]);
 const SOFT_ATTRS = new Set(["wifi", "res"]);
 const ATTR_LABEL: Record<string, string> = {
@@ -58,6 +58,7 @@ const ATTR_LABEL: Record<string, string> = {
   ch: "تعداد کانال",
   cap: "ظرفیت",
   ram: "حافظه رم",
+  encoding: "انکودینگ/چیپ",
   ports: "تعداد پورت",
   volt: "ولتاژ",
   frequency: "فرکانس",
@@ -116,6 +117,10 @@ export interface CompareResult {
   blockers: string[];
   vetoes: string[];
   hasConflict: boolean;
+  /** §5 سند رخداد — تعارض اثبات‌شدهٔ خانوادهٔ طراحی نام‌دار (هر دو طرف نام‌دار و ریشه‌ها واقعاً متفاوت) */
+  familyConflict: boolean;
+  /** مارکر خانوادهٔ نام‌دارِ بیان‌نشده در طرف مقابل (ابهام، نه تعارض) */
+  unexplainedFamily: string[];
   scoreComponents: Record<string, number>;
   rawScore: number;
 }
@@ -590,13 +595,32 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
   }
   const softTargetSet = new Set(descCmp.unmatchedTargetSoft.map((item) => item.split(":").slice(1).join(":")));
   const hardTargetWords = t.words.filter((w) => !softTargetSet.has(w));
+  // §5/§6 سند رخداد — مقایسهٔ خانوادهٔ طراحی نام‌دار با تحمل املایی؛ تعارض اثبات‌شده وتو، مارکر یک‌طرفه جریمه/بلاکر.
+  // مارکر وقتی «بیان‌نشده» است که اسم خانواده هیچ‌جا در عنوان طرف مقابل نیامده باشد (حتی بدون واژهٔ «طرح»).
+  const familyCmpRaw = compareNamedFamilies(t.designFamily, c.designFamily);
+  const familyCmp = {
+    familyMismatch: familyCmpRaw.familyMismatch,
+    unexplainedCandFamily: familyCmpRaw.unexplainedCandFamily.filter((noun) => !familyNounExplained(noun, t.words, t.norm)),
+    unexplainedTargetFamily: familyCmpRaw.unexplainedTargetFamily.filter((noun) => !familyNounExplained(noun, c.words, c.norm)),
+  };
+  if (familyCmp.familyMismatch) {
+    veto(20, `خانوادهٔ طراحی نام‌دار متفاوت است (طرح ${t.designFamily} ≠ طرح ${c.designFamily})`);
+  }
+  // کف پوشش ۰٫۵۵/۰٫۳۵ فقط وقتی معنادار است که کارت هیچ توصیف‌گر سختِ پوشش‌نداده یا خانوادهٔ نام‌دارِ بدون پشتوانه ندارد؛
+  // نشت تطابق رنگِ descriptorWords به متر پوشش واژه‌ای نباید به کارتی که هیچ واژهٔ هدف را ندارد امتیاز کف بدهد.
+  const familyFloorAllowed =
+    descCmp.unmatchedCandHard.length === 0 && familyCmp.unexplainedCandFamily.length === 0 && !familyCmp.familyMismatch;
   if (t.words.length) {
     let hit = 0;
     for (const w of t.words) if (cWords.has(stem(w)) || cNorm.includes(` ${w} `)) hit++;
     coverage = hit / t.words.length;
     const hardHit = hardTargetWords.filter((w) => cWords.has(stem(w)) || cNorm.includes(` ${w} `)).length;
     const hardCoverage = hardTargetWords.length ? hardHit / hardTargetWords.length : 1;
-    const effectiveCoverage = hardTargetWords.length ? hardCoverage : Math.max(coverage, descCmp.matchedColors.length > 0 ? 0.55 : 0.35);
+    const effectiveCoverage = hardTargetWords.length
+      ? hardCoverage
+      : familyFloorAllowed
+        ? Math.max(coverage, descCmp.matchedColors.length > 0 ? 0.55 : 0.35)
+        : coverage;
     logit += (targetCoded ? 0.5 : 1.4) * effectiveCoverage - (targetCoded ? 0.2 : 0.5);
     if (!targetCoded) {
       const need = hardTargetWords.length >= 4 ? 0.75 : 0.99;
@@ -607,6 +631,13 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
         block(
           `توصیفات غیرفنی محصول سایت (ظاهر/جنس/شکل/بازاریابی) در کارت ترب یکسان نیست (${descCmp.unmatchedTargetSoft.map((x) => x.split(":")[1]).slice(0, 3).join("، ")})`,
         );
+      }
+      if (familyCmp.unexplainedCandFamily.length > 0) {
+        logit -= 1.0;
+        block(`کارت ترب خانوادهٔ طراحی نام‌دار («طرح ${familyCmp.unexplainedCandFamily[0]}») دارد که در محصول سایت نیامده است`);
+      } else if (familyCmp.unexplainedTargetFamily.length > 0) {
+        notes.push(`خانوادهٔ طراحی نام‌دار محصول سایت («طرح ${familyCmp.unexplainedTargetFamily[0]}») در کارت ترب نیامده است`);
+        missingCodes.push(`طرح ${familyCmp.unexplainedTargetFamily[0]}`);
       }
     }
   }
@@ -622,8 +653,13 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     const other = hardCandOnly.filter((w) => !/^[a-z]{3,}$/.test(w) && !VARIANT_WORDS.has(w));
     if (latin.length) block(`کارت ترب نام سری/نسخهٔ لاتین دارد که در محصول سایت نیست («${latin.slice(0, 3).join("، ")}»)`);
     else if (variant.length) block(`کارت ترب واژهٔ نوع‌ساز دارد که در محصول سایت نیست («${variant.slice(0, 3).join("، ")}»)`);
-    else if (other.length > (brand === "match" ? 3 : 1)) block("کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)");
-    else if (descCmp.unmatchedCandSoft.length > 0 && descCmp.unmatchedTargetSoft.length === 0) {
+    else if (other.length > (brand === "match" ? 3 : 1)) {
+      // جریمهٔ متقارن سمت کارت (آینهٔ جریمهٔ −۱٫۰ واژه‌های اختصاصی هدف): توضیحات اختصاصیِ پوشش‌نداده امتیاز را هم پایین می‌آورند.
+      logit -= 1.0;
+      block("کارت ترب توضیحات اختصاصی بیشتری از محصول سایت دارد (برند/سری/نسخهٔ احتمالاً متفاوت)");
+    } else if (descCmp.unmatchedCandSoft.length > 0 &&
+        (descCmp.unmatchedTargetSoft.length === 0 || descCmp.unmatchedTargetSoft.every((x) => x.startsWith("marketing:")))) {
+      // عدم‌تقارن سرکوب اصلاح شد: صفت بازاریابیِ تنها در هدف دیگر دروازهٔ این بلاکر را برای همهٔ کارت‌ها باز نمی‌کند.
       block(
         `کارت ترب توصیف ظاهری/جنس/شکل متفاوتی دارد (${descCmp.unmatchedCandSoft.map((x) => x.split(":")[1]).slice(0, 3).join("، ")})`,
       );
@@ -724,7 +760,7 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
       .filter(([key]) => !SOFT_ATTRS.has(key) && (key !== "gen" || Boolean(t.attrs.gen?.length)) && (key !== "buttons" || !sameRemoteFrequency))
       .map(([k, v]) => `${k}=${showVals(v)}`)
       .sort()
-      .join(",")}`;
+      .join(",")}|fam:${t.designFamily ?? ""}>${c.designFamily ?? ""}`;
   }
 
   return {
@@ -740,8 +776,10 @@ export function compareParsed(t: ParsedTitle, c: ParsedTitle, opt: CompareOption
     positiveId,
     blockers,
     vetoes: vetoes.map((v) => v.reason),
-    hasConflict: vetoes.length > 0 || structuralConflicts.length > 0 || familyContentConflict ||
+    hasConflict: vetoes.length > 0 || structuralConflicts.length > 0 || familyContentConflict || familyCmp.familyMismatch ||
       Boolean(c.evidenceConflicts?.length) || codeRel === "ext_seg" || codeRel === "ext_chars" || codeRel === "sibling",
+    familyConflict: familyCmp.familyMismatch,
+    unexplainedFamily: [...familyCmp.unexplainedCandFamily, ...familyCmp.unexplainedTargetFamily],
     scoreComponents,
     rawScore,
   };

@@ -1,16 +1,22 @@
 "use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_GROUP_TERMS = void 0;
+exports.resolveCategoryDescriptorPolicy = resolveCategoryDescriptorPolicy;
+exports.classifyDescriptorToken = classifyDescriptorToken;
+exports.analyzeTitleDescriptors = analyzeTitleDescriptors;
+exports.namedFamilyRootsCompatible = namedFamilyRootsCompatible;
+exports.compareNamedFamilies = compareNamedFamilies;
+exports.familyNounExplained = familyNounExplained;
+exports.compareTitleDescriptors = compareTitleDescriptors;
 /**
  * سیاست طبقه‌بندی توصیف‌گرهای محصول حساس به رده (Category-Sensitive Descriptor Policy).
  *
  * هدف: تمایز صریح بین صفات تبلیغاتی، سبک ظاهری، رنگ، جنس، شکل فیزیکی، ویژگی فنی،
  * شناسهٔ مدل، سازگاری و بسته‌بندی — به‌جای یکسان‌انگاری کورکورانه یا رد خودکار کارت‌ها.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.resolveCategoryDescriptorPolicy = resolveCategoryDescriptorPolicy;
-exports.classifyDescriptorToken = classifyDescriptorToken;
-exports.analyzeTitleDescriptors = analyzeTitleDescriptors;
-exports.compareTitleDescriptors = compareTitleDescriptors;
-const DEFAULT_GROUP_TERMS = {
+const text_1 = require("./text");
+/** واژگان پیش‌فرض گروه‌ها؛ parse.ts برای مجموعهٔ «واژهٔ خنثیِ پس از طرح» یکتای گروه‌های نرم از این‌جا union می‌گیرد. */
+exports.DEFAULT_GROUP_TERMS = {
     marketing: [
         "لوکس",
         "شیک",
@@ -201,7 +207,7 @@ function normalizeTerm(word) {
         .replace(/[\u200c\u200d\s]+/g, "");
 }
 const TERM_TO_GROUP = new Map();
-for (const [group, terms] of Object.entries(DEFAULT_GROUP_TERMS)) {
+for (const [group, terms] of Object.entries(exports.DEFAULT_GROUP_TERMS)) {
     for (const term of terms) {
         TERM_TO_GROUP.set(normalizeTerm(term), group);
     }
@@ -274,6 +280,46 @@ function analyzeTitleDescriptors(tokens, productClass, config) {
 }
 function stemDescriptor(word) {
     return word.replace(/(?:های|ها|ان|ی|ه|ات)$/u, "");
+}
+/**
+ * §5 سند رخداد — مقایسهٔ «خانوادهٔ طراحی نام‌دار» (مثل «طرح پرلا» در برابر «طرح بنزی») با تحمل املایی.
+ * نام‌داری فقط از مجرای متنی «طرح X» یا سیاست رده‌محور DescriptorPolicyConfig می‌آید؛ هیچ بلک‌لیست سراسری واژه‌ای وجود ندارد.
+ * هم‌خانواده: ریشه‌ها برابر، یا ریشهٔ کوتاه‌تر (طول ≥ ۲) پیشوند ریشهٔ بلندتر باشد («بنز↔بنزی»، «پرلا↔پرلاها»).
+ * جهت خطا به سمت ابهام است: فقط وقتی هیچ رابطهٔ پیشوندی برقرار نیست familyMismatch=true می‌شود.
+ */
+function namedFamilyRootsCompatible(a, b) {
+    const ra = a ? stemDescriptor(normalizeTerm(a)) : "";
+    const rb = b ? stemDescriptor(normalizeTerm(b)) : "";
+    if (!ra || !rb)
+        return true; // طرف بی‌نام هیچ‌گاه تعارض نمی‌سازد (ابهام، نه رد)
+    if (ra === rb)
+        return true;
+    const [short, long] = ra.length <= rb.length ? [ra, rb] : [rb, ra];
+    return short.length >= 2 && long.startsWith(short);
+}
+function compareNamedFamilies(targetFamily, candFamily) {
+    const t = targetFamily?.trim() || null;
+    const c = candFamily?.trim() || null;
+    return {
+        familyMismatch: Boolean(t && c && !namedFamilyRootsCompatible(t, c)),
+        unexplainedCandFamily: c && !t ? [c] : [],
+        unexplainedTargetFamily: t && !c ? [t] : [],
+    };
+}
+/**
+ * مارکر خانوادهٔ نام‌دار فقط وقتی «بیان‌نشده» است که اسم خانواده هیچ‌جا در عنوان طرف مقابل نیامده باشد —
+ * حتی بدون واژهٔ «طرح» (مثل هدفِ «ریموت بلوتوثی 315 بنزی 5 دکمه» در برابر کارتِ «طرح بنزی»: مارکر توضیح‌داده شده است).
+ * تشخیص متن‌آگاه، نه blacklist سراسری (§5 سند رخداد).
+ */
+function familyNounExplained(family, otherWords, otherNorm) {
+    const noun = normalizeTerm(family);
+    if (!noun)
+        return true;
+    const root = stemDescriptor(noun);
+    if (otherWords?.some((w) => stemDescriptor(normalizeTerm(w)) === root))
+        return true;
+    // بازرسی مرز-واژه‌ای روی متن نرمال‌شده (توکن خانواده تک‌واژه‌ای است)
+    return Boolean(otherNorm && ` ${(0, text_1.normalizeText)(otherNorm)} `.includes(` ${noun} `));
 }
 function tokenMatchesSet(token, otherTokens, otherNorm) {
     const st = stemDescriptor(token);

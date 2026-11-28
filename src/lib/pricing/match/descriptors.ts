@@ -4,6 +4,7 @@
  * هدف: تمایز صریح بین صفات تبلیغاتی، سبک ظاهری، رنگ، جنس، شکل فیزیکی، ویژگی فنی،
  * شناسهٔ مدل، سازگاری و بسته‌بندی — به‌جای یکسان‌انگاری کورکورانه یا رد خودکار کارت‌ها.
  */
+import { normalizeText } from "./text";
 
 export type DescriptorGroup =
   | "marketing"
@@ -56,7 +57,8 @@ export interface ClassifiedDescriptors {
   unknownTokens: string[];
 }
 
-const DEFAULT_GROUP_TERMS: Record<
+/** واژگان پیش‌فرض گروه‌ها؛ parse.ts برای مجموعهٔ «واژهٔ خنثیِ پس از طرح» یکتای گروه‌های نرم از این‌جا union می‌گیرد. */
+export const DEFAULT_GROUP_TERMS: Record<
   "marketing" | "cosmetic_style" | "color" | "shape" | "material",
   readonly string[]
 > = {
@@ -359,6 +361,61 @@ export interface DescriptorComparisonSummary {
 
 function stemDescriptor(word: string): string {
   return word.replace(/(?:های|ها|ان|ی|ه|ات)$/u, "");
+}
+
+/**
+ * §5 سند رخداد — مقایسهٔ «خانوادهٔ طراحی نام‌دار» (مثل «طرح پرلا» در برابر «طرح بنزی») با تحمل املایی.
+ * نام‌داری فقط از مجرای متنی «طرح X» یا سیاست رده‌محور DescriptorPolicyConfig می‌آید؛ هیچ بلک‌لیست سراسری واژه‌ای وجود ندارد.
+ * هم‌خانواده: ریشه‌ها برابر، یا ریشهٔ کوتاه‌تر (طول ≥ ۲) پیشوند ریشهٔ بلندتر باشد («بنز↔بنزی»، «پرلا↔پرلاها»).
+ * جهت خطا به سمت ابهام است: فقط وقتی هیچ رابطهٔ پیشوندی برقرار نیست familyMismatch=true می‌شود.
+ */
+export function namedFamilyRootsCompatible(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ra = a ? stemDescriptor(normalizeTerm(a)) : "";
+  const rb = b ? stemDescriptor(normalizeTerm(b)) : "";
+  if (!ra || !rb) return true; // طرف بی‌نام هیچ‌گاه تعارض نمی‌سازد (ابهام، نه رد)
+  if (ra === rb) return true;
+  const [short, long] = ra.length <= rb.length ? [ra, rb] : [rb, ra];
+  return short.length >= 2 && long.startsWith(short);
+}
+
+export interface NamedFamilyComparison {
+  /** تعارض اثبات‌شدهٔ خانوادهٔ نام‌دار — فقط وقتی هر دو طرف نام‌دار و ریشه‌ها واقعاً متفاوت‌اند */
+  familyMismatch: boolean;
+  /** خانوادهٔ نام‌دارِ سمت کارت که در محصول هدف نیامده است (مارکر ابهام، نه تعارض) */
+  unexplainedCandFamily: string[];
+  /** خانوادهٔ نام‌دارِ سمت هدف که در کارت نیامده است */
+  unexplainedTargetFamily: string[];
+}
+
+export function compareNamedFamilies(
+  targetFamily: string | null | undefined,
+  candFamily: string | null | undefined,
+): NamedFamilyComparison {
+  const t = targetFamily?.trim() || null;
+  const c = candFamily?.trim() || null;
+  return {
+    familyMismatch: Boolean(t && c && !namedFamilyRootsCompatible(t, c)),
+    unexplainedCandFamily: c && !t ? [c] : [],
+    unexplainedTargetFamily: t && !c ? [t] : [],
+  };
+}
+
+/**
+ * مارکر خانوادهٔ نام‌دار فقط وقتی «بیان‌نشده» است که اسم خانواده هیچ‌جا در عنوان طرف مقابل نیامده باشد —
+ * حتی بدون واژهٔ «طرح» (مثل هدفِ «ریموت بلوتوثی 315 بنزی 5 دکمه» در برابر کارتِ «طرح بنزی»: مارکر توضیح‌داده شده است).
+ * تشخیص متن‌آگاه، نه blacklist سراسری (§5 سند رخداد).
+ */
+export function familyNounExplained(
+  family: string,
+  otherWords: readonly string[] | undefined,
+  otherNorm: string | undefined,
+): boolean {
+  const noun = normalizeTerm(family);
+  if (!noun) return true;
+  const root = stemDescriptor(noun);
+  if (otherWords?.some((w) => stemDescriptor(normalizeTerm(w)) === root)) return true;
+  // بازرسی مرز-واژه‌ای روی متن نرمال‌شده (توکن خانواده تک‌واژه‌ای است)
+  return Boolean(otherNorm && ` ${normalizeText(otherNorm)} `.includes(` ${noun} `));
 }
 
 function tokenMatchesSet(token: string, otherTokens: string[], otherNorm: string): boolean {

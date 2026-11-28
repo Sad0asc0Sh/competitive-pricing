@@ -8,7 +8,7 @@
  */
 import type { SystemOneVerdict, TorobIdentityStatus, TorobTitleState } from "./types";
 import { compareParsed, conflictingPrimarySpec, DEFAULT_MATCH_FLAGS, relateCodes, type MatchFlags } from "./match/compare";
-import type { DescriptorPolicyConfig } from "./match/descriptors";
+import { compareNamedFamilies, type DescriptorPolicyConfig } from "./match/descriptors";
 import { areKnownBrandSetsCompatible } from "./match/lexicon";
 import { parseIdentityTitle, parseTitle, type IdentitySpec, type ParsedTitle } from "./match/parse";
 import { isInternalOrDatabaseId as isInternalId, normalizeText } from "./match/text";
@@ -49,6 +49,10 @@ export interface ScoredCandidateResult {
   scoreComponents?: Record<string, number>;
   rawScore?: number;
   hasConflict?: boolean;
+  /** §5 سند رخداد — تعارض اثبات‌شدهٔ خانوادهٔ طراحی نام‌دار (وتو؛ مثل ردشده‌ها پیش از score رتبه می‌شود) */
+  familyConflict?: boolean;
+  /** مارکر خانوادهٔ نام‌دارِ بیان‌نشده در طرف مقابل (ابهام؛ فقط در تساوی score و پیش از tie-break فروشنده‌شمار اثر دارد) */
+  unexplainedFamily?: string[];
   rejected: boolean;
   needsReview: boolean;
   rejectReason?: string;
@@ -211,6 +215,8 @@ export function evaluateTorobCandidate(
     scoreComponents: r.scoreComponents,
     rawScore: r.rawScore,
     hasConflict: r.hasConflict,
+    familyConflict: r.familyConflict,
+    unexplainedFamily: r.unexplainedFamily,
     rejected,
     needsReview: r.verdict === "review",
     rejectReason: rejected ? r.rejectReason : undefined,
@@ -234,6 +240,9 @@ export function areCompatibleConfirmedIdentities(a: ScoredCandidateResult, b: Sc
   const left = a.parsed;
   const right = b.parsed;
   if (left.head && right.head && left.head.cls !== right.head.cls) return false;
+  // §10 ناوردای ۷ — دو واریانت ناسازگار تجمیع نمی‌شوند: خانوادهٔ نام‌دار دوطرفهٔ متفاوت مانع تجمیع است؛
+  // تعارض انکودینگ از مجرای conflictingPrimarySpec (پایین) خودکار پوشش داده می‌شود.
+  if (compareNamedFamilies(left.designFamily, right.designFamily).familyMismatch) return false;
   if (!areKnownBrandSetsCompatible([...left.brands, ...left.impliedBrands], [...right.brands, ...right.impliedBrands])) return false;
   const codesA = left.codes.filter(({ inCompat }) => !inCompat);
   const codesB = right.codes.filter(({ inCompat }) => !inCompat);
@@ -295,11 +304,17 @@ export function selectBestTorobSearchMatch(
 
   const allRanked = [...evaluated].sort((a, b) => {
     if (a.rejected !== b.rejected) return a.rejected ? 1 : -1;
+    // تعارض خانوادهٔ اثبات‌شده با وتو خودش rejected=true می‌سازد و در گروه ردشده‌ها پیش از score می‌نشیند.
     if (VERDICT_RANK[b.verdict] !== VERDICT_RANK[a.verdict]) return VERDICT_RANK[b.verdict] - VERDICT_RANK[a.verdict];
     if (a.titleState !== b.titleState && (a.titleState === "present" || b.titleState === "present")) {
       return a.titleState === "present" ? -1 : 1;
     }
     if (b.score !== a.score) return b.score - a.score;
+    // مارکر نامفهومِ خانواده فقط در تساوی score و پیش از tie-break فروشنده‌شمار اثر دارد:
+    // تعداد فروشنده هرگز جبران ابهام هویتی نیست (§11 سند)، ولی کارت چندفروشندهٔ تمیز تنزیل نمی‌شود (§8).
+    const ua = a.unexplainedFamily?.length ?? 0;
+    const ub = b.unexplainedFamily?.length ?? 0;
+    if (ua !== ub) return ua - ub;
     const sa = a.candidate.sellerCount ?? 0;
     const sb = b.candidate.sellerCount ?? 0;
     if (sb !== sa) return sb - sa;

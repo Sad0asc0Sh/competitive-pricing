@@ -1,4 +1,4 @@
-import { compareTitleDescriptors } from "@/lib/pricing/match/descriptors";
+import { compareNamedFamilies, compareTitleDescriptors, familyNounExplained } from "@/lib/pricing/match/descriptors";
 import { areCompatibleConfirmedIdentities, evaluateTorobCandidate, type ProductMatchTarget, type ScoredCandidateResult } from "@/lib/pricing/matcher";
 import { conflictingPrimarySpec, relateCodes } from "@/lib/pricing/match/compare";
 import { areKnownBrandSetsCompatible, isAccessoryClass, PACK_WORDS, VARIANT_WORDS } from "@/lib/pricing/match/lexicon";
@@ -27,6 +27,11 @@ export function conflictingEvidence(a: ParsedTitle, b: ParsedTitle): string | un
   }
   if (a.packageUnits != null && b.packageUnits != null && a.packageUnits !== b.packageUnits) {
     return "تعداد اقلام بسته با شواهد محصول یکسان نیست";
+  }
+  // §5 سند رخداد — خانوادهٔ طراحی نام‌دار دوطرفهٔ متفاوت تعارض شواهد است (فروشنده ناسازگار کارت والد را تأیید نمی‌کند).
+  // تعارض انکودینگ از مجرای conflictingPrimarySpec (encoding در PRIMARY_ATTRS) خودکار می‌آید.
+  if (compareNamedFamilies(a.designFamily, b.designFamily).familyMismatch) {
+    return `خانوادهٔ طراحی با شواهد محصول متناقض است (طرح ${a.designFamily} ≠ طرح ${b.designFamily})`;
   }
   return conflictingPrimarySpec(a, b);
 }
@@ -116,6 +121,8 @@ function cardForSellerEvidence(target: ProductMatchTarget, targetTitle: ParsedTi
   return { result, card, ambiguousPack };
 }
 
+export type ParentGate = "PARENT_COMPATIBLE" | "PARENT_AMBIGUOUS" | "PARENT_HARD_CONFLICT";
+
 export interface DiscoveryEligibility {
   eligible: boolean;
   probe: boolean;
@@ -124,6 +131,10 @@ export interface DiscoveryEligibility {
   matchedTechnicalAttrs: string[];
   sharedDescriptors: string[];
   sharedBrand: boolean;
+  /** دروازهٔ مرحلهٔ A (§4 سند رخداد). undefined یعنی عنوان کارت اصلاً قابل تجزیه نبود — هرگز هم‌ارز COMPATIBLE نیست. */
+  parentGate?: ParentGate;
+  /** مارکرهای خانوادهٔ نام‌دارِ حل‌نشده (هر جهت، عنوان یا spec) — والدی با مارکر قرض عنوان/اسپک به فروشنده نمی‌دهد */
+  familyMarkers: string[];
   reason: string;
 }
 
@@ -146,6 +157,7 @@ export function assessDiscoveryEligibility(
       matchedTechnicalAttrs: [],
       sharedDescriptors: [],
       sharedBrand: false,
+      familyMarkers: [],
       reason: "عنوان کارت در جست‌وجو ناقص است و برای تکمیل به استعلام جزئیات نیاز دارد",
     };
   }
@@ -216,6 +228,25 @@ export function assessDiscoveryEligibility(
     hardContradictions.push(`تضاد واریانت رده (${descCmp.strictVariantMismatch.join("، ")})`);
   }
 
+  // §4 سند رخداد — دروازهٔ کارت والد: خانوادهٔ طراحی نام‌دار اثبات‌شدهٔ متفاوت (هر دو طرف نام‌دار) تعارض سخت است؛
+  // مارکر یک‌طرفه فقط ابهام مارک‌دار است و کشف را نمی‌بندد (حافظهٔ بالا حفظ می‌شود).
+  // مارکر وقتی «بیان‌نشده» است که اسم خانواده هیچ‌جا در عنوان طرف مقابل نیامده باشد (حتی بدون واژهٔ «طرح»).
+  const familyCmpRaw = compareNamedFamilies(targetTitle.designFamily, card.designFamily);
+  const familyMarkers = [
+    ...familyCmpRaw.unexplainedCandFamily.filter((noun) => !familyNounExplained(noun, targetTitle.words, targetTitle.norm)),
+    ...familyCmpRaw.unexplainedTargetFamily.filter((noun) => !familyNounExplained(noun, card.words, card.norm)),
+  ];
+  if (familyCmpRaw.familyMismatch) {
+    hardContradictions.push(`خانوادهٔ طراحی نام‌دار متفاوت است (طرح ${targetTitle.designFamily} ≠ طرح ${card.designFamily})`);
+  }
+  const parentGate: ParentGate = familyCmpRaw.familyMismatch
+    ? "PARENT_HARD_CONFLICT"
+    : familyMarkers.length > 0
+      ? "PARENT_AMBIGUOUS"
+      : descCmp.hasSoftDescriptorDifference
+        ? "PARENT_AMBIGUOUS"
+        : "PARENT_COMPATIBLE";
+
   const sharedBrand = Boolean(
     brands(card).length && brands(targetTitle).length && areKnownBrandSetsCompatible(brands(card), brands(targetTitle)),
   );
@@ -239,6 +270,12 @@ export function assessDiscoveryEligibility(
       matchedTechnicalAttrs,
       sharedDescriptors,
       sharedBrand,
+      parentGate: familyCmpRaw.familyMismatch
+        ? "PARENT_HARD_CONFLICT"
+        : familyMarkers.length > 0 || descCmp.hasSoftDescriptorDifference
+          ? "PARENT_AMBIGUOUS"
+          : "PARENT_COMPATIBLE",
+      familyMarkers,
       reason: hardContradictions[0],
     };
   }
@@ -292,6 +329,8 @@ export function assessDiscoveryEligibility(
     matchedTechnicalAttrs,
     sharedDescriptors,
     sharedBrand,
+    parentGate,
+    familyMarkers,
     reason: eligible
       ? matchedTechnicalAttrs.length > 0 || sharedDescriptors.length > 0
         ? "هم‌پوشانی فنی یا توصیفی بدون تضاد ساختاری — واجد شرایط بررسی جزئیات"
@@ -396,6 +435,22 @@ export function inspectSellerOffers(
   const cardSpecsConflictTarget = cardSpecsParsed ? conflictingEvidence(targetTitle, cardSpecsParsed) : undefined;
   const cardTitleConflictTarget = cardResult.parsed ? conflictingEvidence(targetTitle, cardResult.parsed) : undefined;
   const cardUnexpected = cardResult.parsed ? unexpectedContents(targetTitle, cardResult.parsed) : false;
+  // §4/§10 سند رخداد — دروازهٔ کارت والد نسبت به خانوادهٔ طراحی نام‌دار: تعارض اثبات‌شده (دوطرفه) سخت،
+  // مارکر یک‌طرفه (عنوان یا spec) ابهام مارک‌دار است که قرض‌دادن شواهد والد به فروشنده و جایگزینی نتیجهٔ والد را می‌بندد.
+  const cardTitleFamilyCmp = cardResult.parsed
+    ? compareNamedFamilies(targetTitle.designFamily, cardResult.parsed.designFamily)
+    : null;
+  const cardSpecsFamilyCmp = cardSpecsParsed
+    ? compareNamedFamilies(targetTitle.designFamily, cardSpecsParsed.designFamily)
+    : null;
+  // مارکر یک‌طرفه فقط وقتی مارکر است که اسم خانواده در عنوان هدف نیامده باشد (متن‌آگاه، بدون بلک‌لیست).
+  const hasFamilyMarker = (cmp: ReturnType<typeof compareNamedFamilies> | null, otherWords: string[], otherNorm: string): boolean =>
+    Boolean(cmp && [...cmp.unexplainedCandFamily, ...cmp.unexplainedTargetFamily]
+      .some((noun) => !familyNounExplained(noun, otherWords, otherNorm)));
+  const cardFamilyHard = Boolean(cardTitleFamilyCmp?.familyMismatch || cardSpecsFamilyCmp?.familyMismatch);
+  const cardFamilyMarked =
+    hasFamilyMarker(cardTitleFamilyCmp, targetTitle.words, targetTitle.norm) ||
+    hasFamilyMarker(cardSpecsFamilyCmp, targetTitle.words, targetTitle.norm);
 
   const assessments: OfferInspection[] = offers.map((offer) => {
     const listing = normalizeText(offer.listingTitle);
@@ -515,9 +570,10 @@ export function inspectSellerOffers(
       return assess("REVIEW_REQUIRED", "استخراج کامل فروشندگان و جزئیات کارت انجام نشد", { ...attrSummary, score: Math.min(seller.score, 70) });
     }
 
-    // اگر کارت والد به‌طور ساختاری با هدف متناقض است (نوع/کد/برند/بسته متفاوت)، فروشنده به‌تنهایی نباید کارت متضاد را خودکار تأیید کند
-    if (cardTitleConflictTarget || cardUnexpected || (cardResult.parsed?.codes.some((c) => !c.inCompat) && codeless)) {
-      const reason = cardTitleConflictTarget ?? "هویت کارت والد با محصول هدف یا اقلام همراه سازگار نیست";
+    // اگر کارت والد به‌طور ساختاری با هدف متناقض است (نوع/کد/برند/بسته/خانوادهٔ نام‌دار متفاوت)، فروشنده به‌تنهایی نباید کارت متضاد را خودکار تأیید کند
+    if (cardTitleConflictTarget || cardUnexpected || cardFamilyHard || (cardResult.parsed?.codes.some((c) => !c.inCompat) && codeless)) {
+      const reason = cardTitleConflictTarget ??
+        (cardFamilyHard ? "خانوادهٔ طراحی کارت والد با محصول هدف متناقض است" : "هویت کارت والد با محصول هدف یا اقلام همراه سازگار نیست");
       attrSummary.missing.push("compatible_parent_card");
       return assess("REVIEW_REQUIRED", reason, { ...attrSummary, score: Math.min(seller.score, 70) });
     }
@@ -539,8 +595,10 @@ export function inspectSellerOffers(
       return assess("REVIEW_REQUIRED", missingEvidence.join(" · "), { ...attrSummary, score: Math.min(seller.score, 72) });
     }
 
-    // ارزیابی سلسله‌مراتبی فروشنده: اول شواهد مستقل فروشنده، سپس تکمیل فقط فیلدهای غیرمتناقض کارت (بدون بازنویسی صفات فروشنده)
-    const canBorrowCardContext = Boolean(evidence && !cardTitleConflictTarget && !cardUnexpected);
+    // ارزیابی سلسله‌مراتبی فروشنده: اول شواهد مستقل فروشنده، سپس تکمیل فقط فیلدهای غیرمتناقض کارت (بدون بازنویسی صفات فروشنده).
+    // §10 ناوردای ۳و۵و۶ — والد با مارکر خانوادهٔ حل‌نشده (یا تعارض سخت) عنوان/اسپک خود را به ارزیابی و crossCheck فروشنده قرض نمی‌دهد؛
+    // نتیجهٔ فروشنده فقط با شواهد مستقل خودش صادر می‌شود.
+    const canBorrowCardContext = Boolean(evidence && !cardTitleConflictTarget && !cardUnexpected && !cardFamilyHard && !cardFamilyMarked);
     let verified: ScoredCandidateResult = seller;
     if (seller.status !== "MATCH_CONFIRMED") {
       if (canBorrowCardContext && evidence) {
@@ -644,6 +702,8 @@ export function inspectSellerOffers(
         cardTitleConflictTarget ||
         cardSpecsConflictTarget ||
         cardUnexpected ||
+        cardFamilyHard ||
+        cardFamilyMarked ||
         (cardResult.parsed?.codes.some((c) => !c.inCompat) && codeless),
       );
       if (!context.truncated && !cardHasMaterialContradiction) {

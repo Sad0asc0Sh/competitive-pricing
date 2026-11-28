@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isSpecToken = isSpecToken;
 exports.isAliasPrefix = isAliasPrefix;
+exports.normalizeChipEncoding = normalizeChipEncoding;
 exports.parseTitle = parseTitle;
 exports.parseIdentityTitle = parseIdentityTitle;
 /**
@@ -698,9 +699,31 @@ const COUNTERFEIT_TARH_WORDS = new Set([
     "ایفون", "آیفون", "گلکسی", "ایرپاد", "ایرپادز", "اپل", "واچ",
 ].map((word) => (0, text_1.normalizeText)(word)));
 const NEUTRAL_STYLE_WORDS = new Set([
-    "جدید", "قدیم", "قدیمی", "نوین", "لبخند", "لبخندی", "دام", "بولت", "سقفی", "دیواری",
-    "چوب", "چوبی", "سنگ", "سنگی", "چرم", "چرمی", "کربن", "مات", "براق", "کلاسیک", "مدرن", "اسپرت",
-].map((word) => (0, text_1.normalizeText)(word)));
+    // دستی فعلی (رفتار تاریخی حفظ می‌شود) ∪ گروه‌های نرم توصیف‌گر (بازاریابی/ظاهر/رنگ/جنس) از سیاست رده‌محور.
+    // «طرح لوکس/ممتاز/فانتزی/سیلیکونی/رنگی» خانوادهٔ نام‌دار نمی‌سازند؛ «طرح پرلا/بنزی/درپا» می‌سازند.
+    ...[
+        "جدید", "قدیم", "قدیمی", "نوین", "لبخند", "لبخندی", "دام", "بولت", "سقفی", "دیواری",
+        "چوب", "چوبی", "سنگ", "سنگی", "چرم", "چرمی", "کربن", "مات", "براق", "کلاسیک", "مدرن", "اسپرت",
+    ].map((word) => (0, text_1.normalizeText)(word)),
+    ...["marketing", "cosmetic_style", "color", "material"].flatMap((group) => (descriptors_1.DEFAULT_GROUP_TERMS[group] ?? []).map((term) => (0, text_1.normalizeText)(term))),
+]);
+/** برچسب‌های مشخصهٔ انکودینگ/چیپ در عنوان یا کلید spec — چیپ هرگز کد مدل یا توصیف واژگانی نمی‌شود. */
+const ENCODING_LABELS = new Set(["انکودینگ", "نوع انکودینگ", "انکودینگ کد", "کد انکودینگ", "encoding", "chip", "چیپ"].map((w) => (0, text_1.normalizeText)(w)));
+/** نرمال‌سازی مقدار چیپ: «EV 1527»→«ev1527» ، «PT-2262»→«pt2262»؛ مقدار غیرچیپی (فارسی/کوتاه) null است. */
+function normalizeChipEncoding(value) {
+    const cleaned = (0, text_1.normalizeText)(value).toLowerCase().replace(/[\s\-_.]/g, "");
+    return /^[a-z0-9]{3,20}$/.test(cleaned) ? cleaned : null;
+}
+/** استخراج خانوادهٔ نام‌دار از مقدار spec «طرح»: واژهٔ «طرح» حذف و واژهٔ خنثی/کانترفیت پرش می‌شود. */
+function designFamilyFromValue(value) {
+    const tokens = (0, text_1.tokenize)(value);
+    const next = tokens.find((t) => t !== "طرح" && t.length >= 2) ?? "";
+    if (!next || next === "طرح")
+        return null;
+    if (COUNTERFEIT_TARH_WORDS.has(next) || NEUTRAL_STYLE_WORDS.has(next))
+        return null;
+    return next;
+}
 const SINGLE_UNIT_PHRASES = [
     ["تکی"], ["تک", "عددی"], ["1", "عددی"], ["یک", "عددی"],
     ["single", "unit"], ["1", "pc"], ["1", "piece"],
@@ -795,6 +818,32 @@ function parseTitle(text, opts = {}) {
     const features = {};
     for (const [k, v] of Object.entries(featSets))
         features[k] = [...v];
+    // عبارت «انکودینگ/چیپ X» در عنوان: چیپ مشخصهٔ فنی است و به attrs.encoding می‌رود —
+    // هرگز کد مدل (codes) یا توصیف واژگانی نمی‌شود؛ پیش از اسکن کدها مصرف می‌شود تا «EV1527» کد مدل نشود.
+    const encodingConsumed = new Set();
+    for (let i = 0; i < tokens.length; i++) {
+        if (!ENCODING_LABELS.has(tokens[i]))
+            continue;
+        const next = tokens[i + 1] ?? "";
+        let chip = normalizeChipEncoding(next);
+        let chipLen = 1;
+        if (!chip && next && i + 2 < tokens.length) {
+            // چیپ دو-تکه: «EV 1527»
+            const joined = normalizeChipEncoding(`${next} ${tokens[i + 2]}`);
+            if (joined) {
+                chip = joined;
+                chipLen = 2;
+            }
+        }
+        if (chip) {
+            addAttr(attrs, "encoding", chip);
+            consumed.add(i);
+            for (let k = 1; k <= chipLen; k++) {
+                consumed.add(i + k);
+                encodingConsumed.add(i + k);
+            }
+        }
+    }
     // کدهای مدل
     const codes = [];
     const seenCanon = new Set();
@@ -811,6 +860,9 @@ function parseTitle(text, opts = {}) {
     };
     for (let i = 0; i < tokens.length; i++) {
         const tok = tokens[i];
+        // توکن چیپِ مصرف‌شدهٔ مجرای انکودینگ هرگز کد مدل نمی‌شود (حتی اگر شکل کد داشته باشد مثل EV1527).
+        if (encodingConsumed.has(i))
+            continue;
         if (consumed.has(i) && !looksLikeCode(tok))
             continue;
         // ترکیب سری با شماره/کد بعدی: Archer C6 ⇒ archer-c6 ، Note 12 ⇒ note-12 ، نوت 12 ⇒ note-12
@@ -869,6 +921,7 @@ function parseTitle(text, opts = {}) {
     const used = findPhrase(tokens, lexicon_1.USED_PHRASES);
     let counterfeit = findPhrase(tokens, lexicon_1.COUNTERFEIT_PHRASES);
     let designStyle = null;
+    let designFamily = null;
     if (!counterfeit) {
         // «قابلیت کپی»، «دستگاه کپی» و «کپی خور» نشانگر غیراصل بودن کالا نیستند.
         const standaloneCopy = tokens.some((token, i) => token === "کپی" &&
@@ -891,6 +944,8 @@ function parseTitle(text, opts = {}) {
                 continue;
             }
             designStyle = `طرح ${next}`;
+            // §5 سند رخداد: توکن پس از «طرح» نام خانوادهٔ نام‌دار است (مثل پرلا/بنزی) — جدا از توصیف ظاهری.
+            designFamily = next;
             consumed.add(kTarh);
         }
     }
@@ -981,6 +1036,7 @@ function parseTitle(text, opts = {}) {
         used,
         counterfeit,
         designStyle,
+        designFamily,
         defective,
         bundleWith,
         withAccessories,
@@ -1008,6 +1064,10 @@ function parseIdentityTitle(text, specs) {
     const titleCodes = title.codes.filter((code) => !code.inCompat);
     const specDescriptors = [...(title.specDescriptors ?? [])];
     const descriptorWords = [...(title.descriptorWords ?? title.words)];
+    // §5 سند رخداد — خانوادهٔ نام‌دار: اگر عنوان خانواده ندارد و spec دارد، spec جایگزین می‌شود؛
+    // اگر هر دو دارند و متناقض‌اند، evidenceConflict ثبت شده و مقدار عنوان دست‌نخورده می‌ماند.
+    let designFamilyOverride = null;
+    const specFamilyMarkers = [];
     const mergeAttr = (key, values) => {
         if (attrs[key]?.length && values.some((v) => !attrs[key].includes(v))) {
             evidenceConflicts.push(`مقادیر متناقض برای ${key} در عنوان و مشخصات ترب`);
@@ -1097,16 +1157,37 @@ function parseIdentityTitle(text, specs) {
             if (frequency.frequency?.length)
                 mergeAttr("frequency", frequency.frequency);
         }
-        else if (/^(?:جنس|جنس بدنه|جنس قاب|رنگ|رنگ بندی|طرح|شکل|باتری|نوع باتری|material|color|shape|battery)$/.test(key)) {
+        else if (ENCODING_LABELS.has(key)) {
+            // §13 سند رخداد — انکودینگ/چیپ مشخصهٔ فنی است: به attrs.encoding می‌رود و هرگز به codes/descriptorWords نمی‌رود.
+            const chip = normalizeChipEncoding(value);
+            if (chip)
+                mergeAttr("encoding", [chip]);
+        }
+        else if (/^(?:طرح|طرح بدنه|طرح رنگی|design|style)$/.test(key)) {
+            // مجرای مستقل خانوادهٔ نام‌دار از spec؛ بازنویسی بی‌صدای مقدار عنوان ممنوع است.
+            const specFamily = designFamilyFromValue(value);
+            if (title.designFamily && specFamily && !(0, descriptors_1.namedFamilyRootsCompatible)(title.designFamily, specFamily)) {
+                evidenceConflicts.push("خانوادهٔ طراحی در عنوان و مشخصات کارت متفاوت است");
+            }
+            if (specFamily && !designFamilyOverride)
+                designFamilyOverride = specFamily;
+            if (specFamily)
+                specFamilyMarkers.push(specFamily);
+        }
+        else if (/^(?:جنس|جنس بدنه|جنس قاب|رنگ|رنگ بندی|شکل|باتری|نوع باتری|material|color|shape|battery)$/.test(key)) {
+            // توکن‌های ناشناختهٔ گروه توصیف‌گر (مثل کد باتری «12v/27a») دیگر به descriptorWords نمی‌روند تا
+            // بلاکر قلابی «توضیحات اختصاصی بیشتر» نسازند (ریشهٔ علّی ۵ رخداد)؛ مقادیر گروه‌دار حفظ می‌شوند.
             specDescriptors.push(`${key}:${value}`);
             for (const tok of (0, text_1.tokenize)(value)) {
-                if (tok.length >= 2 && !lexicon_1.STOPWORDS.has(tok) && !descriptorWords.includes(tok)) {
+                if (tok.length >= 2 && !lexicon_1.STOPWORDS.has(tok) && !descriptorWords.includes(tok) &&
+                    (0, descriptors_1.classifyDescriptorToken)(tok, title.head?.cls).group !== "unknown") {
                     descriptorWords.push(tok);
                 }
             }
         }
     }
     const descriptors = (0, descriptors_1.analyzeTitleDescriptors)(descriptorWords, title.head?.cls);
+    const resolvedDesignFamily = title.designFamily ?? designFamilyOverride;
     return {
         ...title,
         attrs,
@@ -1114,9 +1195,10 @@ function parseIdentityTitle(text, specs) {
         brands,
         pack,
         packageUnits,
+        designFamily: resolvedDesignFamily,
         descriptorWords,
         descriptors,
-        ...(specDescriptors.length ? { specDescriptors: [...new Set(specDescriptors)] } : {}),
+        ...(specDescriptors.length || specFamilyMarkers.length ? { specDescriptors: [...new Set([...specDescriptors, ...specFamilyMarkers.map((f) => `طرح:${f}`)])] } : {}),
         evidenceConflicts: [...new Set(evidenceConflicts)],
     };
 }

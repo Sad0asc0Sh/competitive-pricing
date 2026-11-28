@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.InMemoryTorobHybridIndex = void 0;
+exports.CONFIRMED_HINT_FRESHNESS_DAYS = exports.InMemoryTorobHybridIndex = void 0;
 exports.buildCharTrigrams = buildCharTrigrams;
 exports.jaccardTrigramSimilarity = jaccardTrigramSimilarity;
 exports.canonicalizeCatalogEntry = canonicalizeCatalogEntry;
@@ -327,10 +327,11 @@ class InMemoryTorobHybridIndex {
             });
         }
     }
-    getProductLinks(productId) {
+    getProductLinks(productId, now = new Date()) {
         const byPrk = this.links.get(productId);
         if (!byPrk)
             return [];
+        const freshConfirmCutoffMs = exports.CONFIRMED_HINT_FRESHNESS_DAYS * 86_400_000;
         return [...byPrk.values()]
             .filter((r) => r.relationStatus !== "rejected")
             .sort((a, b) => {
@@ -340,15 +341,20 @@ class InMemoryTorobHybridIndex {
             }
             return b.externalCompetitorCount - a.externalCompetitorCount || (b.confidence ?? 0) - (a.confidence ?? 0);
         })
-            .map((r) => ({
-            prk: r.prk,
-            title: this.cards.get(r.prk)?.titleFa ?? this.cards.get(r.prk)?.titleEn ?? null,
-            identityStatus: r.relationStatus === "confirmed" ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
-            externalCompetitorCount: r.externalCompetitorCount,
-            ownStorePresent: r.ownStorePresent,
-            confidence: r.confidence,
-            lastVerifiedAt: r.lastVerifiedAt,
-        }));
+            .map((r) => {
+            const confirmedFresh = r.relationStatus === "confirmed" &&
+                r.lastVerifiedAt != null &&
+                now.getTime() - new Date(r.lastVerifiedAt).getTime() <= freshConfirmCutoffMs;
+            return {
+                prk: r.prk,
+                title: this.cards.get(r.prk)?.titleFa ?? this.cards.get(r.prk)?.titleEn ?? null,
+                identityStatus: confirmedFresh ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
+                externalCompetitorCount: r.externalCompetitorCount,
+                ownStorePresent: r.ownStorePresent,
+                confidence: r.confidence,
+                lastVerifiedAt: r.lastVerifiedAt,
+            };
+        });
     }
     search(query, limit = 6) {
         return rrfRankScore([...this.cards.values()], query, limit);
@@ -380,6 +386,7 @@ function buildLinkRecordsFromSource(opts) {
             lastVerifiedAt: opts.now,
         };
     });
+    // §12 سند رخداد — diagRecords باید دلیل/تعارض کامل را برای ممیزی و اعتبارسنجی مجدد نگه دارند.
     const diagRecords = (opts.source.torob?.discoveryDiagnostics ?? [])
         .filter((d) => !seenPrks.has(d.prk))
         .map((d) => ({
@@ -396,7 +403,7 @@ function buildLinkRecordsFromSource(opts) {
         externalCompetitorCount: d.externalCompetitorCount,
         reportedSellerCount: null,
         discoveringQueries: [],
-        lastReason: d.reasonForInclusionOrExclusion,
+        lastReason: [d.reasonForInclusionOrExclusion, ...d.hardContradictions].filter(Boolean).join(" · ") || null,
         lastVerifiedAt: opts.now,
     }));
     return [...evRecords, ...diagRecords];
@@ -405,11 +412,15 @@ function buildLinkRecordsFromSource(opts) {
  * Load known multi-PRK graph links + PostgreSQL hybrid discovery candidates as non-authoritative discovery hints.
  * Gracefully degrades to empty hints if DB tables aren't present or DB is offline.
  */
+/** §12 سند رخداد — تأیید ذخیره‌شدهٔ قدیمی‌تر از این پنجره، هنگام hintشدن ارتقای MATCH_CONFIRMED نمی‌گیرد (کهنه، نه معتبر). */
+exports.CONFIRMED_HINT_FRESHNESS_DAYS = 30;
 async function loadProductDiscoveryHints(opts) {
     const hintsMap = new Map();
     if (opts.torobPrk) {
         hintsMap.set(opts.torobPrk, { prk: opts.torobPrk });
     }
+    const now = opts.now ?? new Date();
+    const freshConfirmCutoffMs = exports.CONFIRMED_HINT_FRESHNESS_DAYS * 86_400_000;
     let hybridHitsUsed = 0;
     try {
         if (opts.multiPrkGraphEnabled !== false) {
@@ -422,9 +433,13 @@ async function loadProductDiscoveryHints(opts) {
            COALESCE(l.confidence, 0) DESC
          LIMIT 8`, [opts.productId]);
             for (const row of linkRes.rows) {
+                const confirmedFresh = row.relation_status === "confirmed" &&
+                    row.last_verified_at != null &&
+                    now.getTime() - new Date(row.last_verified_at).getTime() <= freshConfirmCutoffMs;
                 hintsMap.set(row.prk, {
                     prk: row.prk,
-                    identityStatus: row.relation_status === "confirmed" ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
+                    // تأیید ذخیره‌شده فقط در پنجرهٔ freshness ارتقای MATCH_CONFIRMED می‌گیرد؛ قدیمی‌تر = REVIEW_REQUIRED (کهنه).
+                    identityStatus: confirmedFresh ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
                     externalCompetitorCount: row.external_competitor_count,
                     ownStorePresent: row.own_store_present,
                     confidence: row.confidence,

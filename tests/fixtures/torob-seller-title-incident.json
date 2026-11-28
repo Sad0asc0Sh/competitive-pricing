@@ -56,5 +56,72 @@
         "available": true
       }
     ]
+  },
+  "negativePerlaCard": {
+    "prk": "perla-1",
+    "name_fa": "ریموت بلوتوثی ۴۳۳ رنگی طرح پرلا",
+    "price_toman": 149000,
+    "shop_count": 3,
+    "specs": [
+      { "key": "فرکانس", "value": "433 مگاهرتز" },
+      { "key": "نوع ریموت", "value": "بلوتوثی" },
+      { "key": "طرح", "value": "پرلا" }
+    ],
+    "offers": [
+      {
+        "shop_name": "فروشنده پرلا ۱",
+        "shop_id": "perla-s1",
+        "price_toman": 149000,
+        "product_title": "ریموت بلوتوثی 433 طرح پرلا رنگی",
+        "available": true
+      },
+      {
+        "shop_name": "فروشنده پرلا ۲",
+        "shop_id": "perla-s2",
+        "price_toman": 152000,
+        "product_title": "ریموت بلوتوثی طرح پرلا 433 رنگی",
+        "available": true
+      },
+      {
+        "shop_name": "فروشنده پرلا ۳",
+        "shop_id": "perla-s3",
+        "price_toman": 155000,
+        "product_title": "ریموت بلوتوثی پرلا فرکانس 433",
+        "available": true
+      }
+    ]
+  },
+  "simpleDesignCard": {
+    "prk": "simple-bt-433-3",
+    "name_fa": "ریموت بلوتوث فرکانس 433 مگاهرتز مدل رنگی طرح ساده",
+    "price_toman": 345000,
+    "shop_count": 1,
+    "specs": [
+      { "key": "فرکانس", "value": "433 مگاهرتز" },
+      { "key": "نوع ریموت", "value": "بلوتوثی" },
+      { "key": "طرح", "value": "ساده" }
+    ],
+    "offers": [
+      {
+        "shop_name": "فروشگاه ساده",
+        "shop_id": "simple-shop",
+        "price_toman": 345000,
+        "product_title": "ریموت بلوتوثی 433 طرح ساده رنگی",
+        "available": true
+      }
+    ]
+  },
+  "negativeCases": {
+    "wrongFrequency315": "ریموت بلوتوثی رنگی فرکانس 315 لوکس",
+    "incompatibleButtons": "ریموت بلوتوثی رنگی فرکانس 433 لوکس 2 دکمه",
+    "differentEncodingCard": {
+      "prk": "enc-pt2262-1",
+      "name_fa": "ریموت بلوتوثی RX-4330 رنگی فرکانس 433",
+      "specs": [{ "key": "انکودینگ", "value": "PT2262" }]
+    },
+    "differentModelFamily": "ریموت بلوتوثی رنگی فرکانس 433 طرح رازی",
+    "differentPackQuantity": "پک ۲ عددی ریموت بلوتوثی رنگی فرکانس 433 لوکس",
+    "accessoryOnlyListing": "کاور سیلیکونی ریموت بلوتوثی 433",
+    "similarButIncompatibleRemote": "ریموت بلوتوثی ۴۳۳ رنگی طرح پرلا"
   }
 }

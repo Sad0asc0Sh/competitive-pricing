@@ -401,9 +401,10 @@ export class InMemoryTorobHybridIndex {
     }
   }
 
-  getProductLinks(productId: number): KnownPrkHint[] {
+  getProductLinks(productId: number, now: Date = new Date()): KnownPrkHint[] {
     const byPrk = this.links.get(productId);
     if (!byPrk) return [];
+    const freshConfirmCutoffMs = CONFIRMED_HINT_FRESHNESS_DAYS * 86_400_000;
     return [...byPrk.values()]
       .filter((r) => r.relationStatus !== "rejected")
       .sort((a, b) => {
@@ -413,15 +414,20 @@ export class InMemoryTorobHybridIndex {
         }
         return b.externalCompetitorCount - a.externalCompetitorCount || (b.confidence ?? 0) - (a.confidence ?? 0);
       })
-      .map((r) => ({
-        prk: r.prk,
-        title: this.cards.get(r.prk)?.titleFa ?? this.cards.get(r.prk)?.titleEn ?? null,
-        identityStatus: r.relationStatus === "confirmed" ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
-        externalCompetitorCount: r.externalCompetitorCount,
-        ownStorePresent: r.ownStorePresent,
-        confidence: r.confidence,
-        lastVerifiedAt: r.lastVerifiedAt,
-      }));
+      .map((r) => {
+        const confirmedFresh = r.relationStatus === "confirmed" &&
+          r.lastVerifiedAt != null &&
+          now.getTime() - new Date(r.lastVerifiedAt).getTime() <= freshConfirmCutoffMs;
+        return {
+          prk: r.prk,
+          title: this.cards.get(r.prk)?.titleFa ?? this.cards.get(r.prk)?.titleEn ?? null,
+          identityStatus: confirmedFresh ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
+          externalCompetitorCount: r.externalCompetitorCount,
+          ownStorePresent: r.ownStorePresent,
+          confidence: r.confidence,
+          lastVerifiedAt: r.lastVerifiedAt,
+        };
+      });
   }
 
   search(
@@ -462,6 +468,7 @@ export function buildLinkRecordsFromSource(opts: {
       lastVerifiedAt: opts.now,
     };
   });
+  // §12 سند رخداد — diagRecords باید دلیل/تعارض کامل را برای ممیزی و اعتبارسنجی مجدد نگه دارند.
   const diagRecords: ProductPrkLinkRecord[] = (opts.source.torob?.discoveryDiagnostics ?? [])
     .filter((d) => !seenPrks.has(d.prk))
     .map((d) => ({
@@ -479,7 +486,7 @@ export function buildLinkRecordsFromSource(opts: {
       externalCompetitorCount: d.externalCompetitorCount,
       reportedSellerCount: null,
       discoveringQueries: [],
-      lastReason: d.reasonForInclusionOrExclusion,
+      lastReason: [d.reasonForInclusionOrExclusion, ...d.hardContradictions].filter(Boolean).join(" · ") || null,
       lastVerifiedAt: opts.now,
     }));
   return [...evRecords, ...diagRecords];
@@ -489,6 +496,9 @@ export function buildLinkRecordsFromSource(opts: {
  * Load known multi-PRK graph links + PostgreSQL hybrid discovery candidates as non-authoritative discovery hints.
  * Gracefully degrades to empty hints if DB tables aren't present or DB is offline.
  */
+/** §12 سند رخداد — تأیید ذخیره‌شدهٔ قدیمی‌تر از این پنجره، هنگام hintشدن ارتقای MATCH_CONFIRMED نمی‌گیرد (کهنه، نه معتبر). */
+export const CONFIRMED_HINT_FRESHNESS_DAYS = 30;
+
 export async function loadProductDiscoveryHints(opts: {
   productId: number;
   productName: string;
@@ -498,11 +508,14 @@ export async function loadProductDiscoveryHints(opts: {
   anchorPriceToman?: number | null;
   multiPrkGraphEnabled?: boolean;
   hybridIndexEnabled?: boolean;
+  now?: Date;
 }): Promise<{ knownPrks: string[]; knownPrkHints: KnownPrkHint[]; hybridHitsUsed: number }> {
   const hintsMap = new Map<string, KnownPrkHint>();
   if (opts.torobPrk) {
     hintsMap.set(opts.torobPrk, { prk: opts.torobPrk });
   }
+  const now = opts.now ?? new Date();
+  const freshConfirmCutoffMs = CONFIRMED_HINT_FRESHNESS_DAYS * 86_400_000;
 
   let hybridHitsUsed = 0;
   try {
@@ -526,9 +539,13 @@ export async function loadProductDiscoveryHints(opts: {
         [opts.productId],
       );
       for (const row of linkRes.rows) {
+        const confirmedFresh = row.relation_status === "confirmed" &&
+          row.last_verified_at != null &&
+          now.getTime() - new Date(row.last_verified_at).getTime() <= freshConfirmCutoffMs;
         hintsMap.set(row.prk, {
           prk: row.prk,
-          identityStatus: row.relation_status === "confirmed" ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
+          // تأیید ذخیره‌شده فقط در پنجرهٔ freshness ارتقای MATCH_CONFIRMED می‌گیرد؛ قدیمی‌تر = REVIEW_REQUIRED (کهنه).
+          identityStatus: confirmedFresh ? "MATCH_CONFIRMED" : "REVIEW_REQUIRED",
           externalCompetitorCount: row.external_competitor_count,
           ownStorePresent: row.own_store_present,
           confidence: row.confidence,

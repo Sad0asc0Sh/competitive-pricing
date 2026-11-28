@@ -125,11 +125,41 @@ test('ST1-ST3: Descriptor policy classifies لوکس/فانتزی/سیلیکون
     const elig = assessDiscoveryEligibility(incident.target, parsedTarget, scored)
     assert.equal(elig.eligible, true, `${titleFa} should pass Stage A discovery eligibility`)
   }
+  // §13 نگاتیو مطلق پرلا — کشف حفظ می‌شود (recall) ولی با مارکر خانوادهٔ نام‌دار، والد ابهام مارک‌دار است نه سازگار.
+  const perlaParsed = parseTitle(incident.negativePerlaCard.name_fa)
+  assert.equal(perlaParsed.designFamily, 'پرلا', 'named family must be extracted contextually (no blacklist needed)')
+  assert.equal(classifyDescriptorToken('پرلا', 'acc:remote').group, 'unknown', 'پرلا is not a hard-coded group term (context-aware named family only)')
+  const perlaScored = evaluateTorobCandidate(incident.target, { prk: incident.negativePerlaCard.prk, titleFa: incident.negativePerlaCard.name_fa })
+  const perlaElig = assessDiscoveryEligibility(incident.target, parsedTarget, perlaScored)
+  assert.equal(perlaElig.eligible, true, 'Perla stays discoverable (recall preserved)')
+  assert.equal(perlaElig.parentGate, 'PARENT_AMBIGUOUS', 'Perla parent gate is ambiguous (family marker), never COMPATIBLE')
+  assert.deepEqual(perlaElig.familyMarkers, ['پرلا'])
+  // والد با مارکر خانواده هرگز COMPATIBLE و هرگز تأیید خودکار نمی‌شود؛ و فروشندهٔ آن هم.
+  assert.notEqual(perlaScored.status, 'MATCH_CONFIRMED')
+  for (const offer of incident.negativePerlaCard.offers) {
+    const sellerScored = evaluateTorobCandidate(incident.target, { prk: incident.negativePerlaCard.prk, titleFa: offer.product_title })
+    assert.notEqual(sellerScored.status, 'MATCH_CONFIRMED', `Perla seller "${offer.product_title}" must never be auto-confirmed`)
+  }
   for (const badTitle of ['ریموت بلوتوثی رنگی فرکانس 315 لوکس', 'کاور سیلیکونی ریموت 433', 'پک ۵ عددی ریموت بلوتوثی 433']) {
     const scored = evaluateTorobCandidate(incident.target, { prk: 'bad', titleFa: badTitle })
     const elig = assessDiscoveryEligibility(incident.target, parsedTarget, scored)
     assert.equal(elig.eligible, false, `${badTitle} must be rejected by Stage A hard constraints`)
   }
+  // §13 نگاتیوهای دیگر سند — آرایش دکمه، تعداد بسته، لیست فقط-متعلقات، خانوادهٔ مدل متفاوت؛ هیچ‌کدام تأیید خودکار نمی‌شوند.
+  for (const [label, badTitle] of [
+    ['incompatible buttons', incident.negativeCases.incompatibleButtons],
+    ['different pack quantity', incident.negativeCases.differentPackQuantity],
+    ['accessory-only listing', incident.negativeCases.accessoryOnlyListing],
+    ['different model family', incident.negativeCases.differentModelFamily],
+    ['visually similar but incompatible', incident.negativeCases.similarButIncompatibleRemote],
+  ]) {
+    const scored = evaluateTorobCandidate(incident.target, { prk: 'neg2', titleFa: badTitle, priceToman: 365000 })
+    assert.notEqual(scored.status, 'MATCH_CONFIRMED', `${label} (${badTitle}) must never auto-confirm`)
+  }
+  // نگاتیو انکودینگ در سطح عنوان هدف: چیپ به attrs می‌رود و دیگر کد مدل نمی‌شود (باگ نهفتهٔ پیشین).
+  const encTarget = parseTitle('ریموت بلوتوثی رنگی فرکانس 433 لوکس انکودینگ EV 1527')
+  assert.deepEqual(encTarget.attrs.encoding, ['ev1527'], 'chip normalization «EV 1527»→«ev1527»')
+  assert.ok(!encTarget.codes.some((c) => c.canon === 'EV1527'), 'chip token must never become a model code')
 })
 
 test('ST4-ST8 & ST15: Exact production incident retrieves related similar_products card, expands seller vocabulary, and keeps ambiguous offers in REVIEW_REQUIRED', async (t) => {
@@ -161,8 +191,21 @@ test('ST4-ST8 & ST15: Exact production incident retrieves related similar_produc
       if (args.query.includes('سیلیکونی') || args.query.includes('فانتزی') || args.query.includes('مکعب')) {
         return [thirdSiblingCard]
       }
+      // §13 سند رخداد — کارت منفی پرلا و کارت «طرح ساده» در نتایج پیش‌فرض همان جست‌وجوی اصلی دیده می‌شوند.
       return [
         { prk: incident.initialCard.prk, name_fa: incident.initialCard.name_fa, price_toman: incident.initialCard.price_toman, shop_count: 1 },
+        {
+          prk: incident.negativePerlaCard.prk,
+          name_fa: incident.negativePerlaCard.name_fa,
+          price_toman: incident.negativePerlaCard.price_toman,
+          shop_count: incident.negativePerlaCard.shop_count,
+        },
+        {
+          prk: incident.simpleDesignCard.prk,
+          name_fa: incident.simpleDesignCard.name_fa,
+          price_toman: incident.simpleDesignCard.price_toman,
+          shop_count: incident.simpleDesignCard.shop_count,
+        },
         ...distractors,
       ]
     },
@@ -180,6 +223,8 @@ test('ST4-ST8 & ST15: Exact production incident retrieves related similar_produc
     detailsMap: {
       [incident.initialCard.prk]: makeDetailsPayload(incident.initialCard),
       [incident.relatedSimilarCard.prk]: makeDetailsPayload(incident.relatedSimilarCard),
+      [incident.negativePerlaCard.prk]: makeDetailsPayload(incident.negativePerlaCard),
+      [incident.simpleDesignCard.prk]: makeDetailsPayload(incident.simpleDesignCard),
       [thirdSiblingCard.prk]: makeDetailsPayload(thirdSiblingCard),
     },
   })
@@ -196,7 +241,21 @@ test('ST4-ST8 & ST15: Exact production incident retrieves related similar_produc
   // Must retrieve both initial باسلام card AND related فانتزی card from similar_products within bounded requests
   assert.ok(fake.calls.some((c) => c.name === 'similar_products' && c.args.prk === incident.initialCard.prk))
   assert.ok(res.torob.coverage.similarProbesExecuted >= 1)
+  // بودجهٔ API با افزودن کارت پرلا و «طرح ساده» اندازه‌گیری و پین شد (اجرای واقعی §15):
+  // 14 درخواست در این دنیا (5 جزئیات + 1 similar + جست‌وجوها؛ اندازه‌گیری با پروب مستقل همین دنیا)؛ سقف با حاشیه 18 حفظ شد.
   assert.ok(res.torob.coverage.apiRequestsMade <= 18, `Bounded API requests (${res.torob.coverage.apiRequestsMade})`)
+
+  // §11 سند رخداد — مرجع درست باسلام (lux) باید نامزد اول پنل بماند و هرگز پشت کارت چندفروشندهٔ پرلا نرود.
+  assert.equal(res.prk, incident.initialCard.prk, 'باسلام card (lux-bt-433-1) must be the primary panel candidate')
+  const panelOrder = res.torob.panelEvidence.map((p) => p.prk)
+  assert.equal(panelOrder[0], incident.initialCard.prk, 'panelEvidence[0] must be the باسلام reference card')
+  // ترتیب هویتی: lux (سازگار) > فانتزی/ساده (ابهام نرم) > پرلا (مارکر خانوادهٔ نام‌دار)
+  const luxIdx = panelOrder.indexOf(incident.initialCard.prk)
+  const fancyIdx = panelOrder.indexOf(incident.relatedSimilarCard.prk)
+  const simpleIdx = panelOrder.indexOf(incident.simpleDesignCard.prk)
+  const perlaIdx = panelOrder.indexOf(incident.negativePerlaCard.prk)
+  assert.ok(fancyIdx > luxIdx && simpleIdx > luxIdx, `fancy/simple must rank below lux reference (got ${JSON.stringify(panelOrder)})`)
+  assert.ok(perlaIdx > fancyIdx && perlaIdx > simpleIdx, `perla (family-marked) must rank below soft-ambiguous cards (got ${JSON.stringify(panelOrder)})`)
 
   const fancyDiag = res.torob.discoveryDiagnostics.find((d) => d.prk === incident.relatedSimilarCard.prk)
   assert.ok(fancyDiag, 'Related similar_products card must appear in discoveryDiagnostics')
@@ -210,6 +269,39 @@ test('ST4-ST8 & ST15: Exact production incident retrieves related similar_produc
   assert.ok(fancyDiag.technicalAttributeMatches.some((a) => a.includes('bluetooth')))
   assert.equal(fancyDiag.sellerAssessments.length, 3)
 
+  // §13 — کارت «طرح ساده» کشف و بازرسی کامل می‌شود ولی تأیید خودکار نمی‌شود.
+  const simpleDiag = res.torob.discoveryDiagnostics.find((d) => d.prk === incident.simpleDesignCard.prk)
+  assert.ok(simpleDiag, 'Simple-design card must be discovered')
+  assert.equal(simpleDiag.inspectionCompleted, true)
+  assert.equal(simpleDiag.classification, 'POTENTIAL_MATCH')
+  const simpleOffer = res.offers.find((o) => o.shopName === 'فروشگاه ساده')
+  assert.ok(simpleOffer, 'Simple-design card seller must be extracted')
+  assert.equal(simpleOffer.torobIdentity.status, 'REVIEW_REQUIRED', 'Simple-design seller must stay REVIEW_REQUIRED')
+
+  // §13 نگاتیو مطلق پرلا — بازرسی می‌شود، هرگز تأیید نمی‌شود و هرگز primary/مشمول قیمت نمی‌شود.
+  const perlaDiag = res.torob.discoveryDiagnostics.find((d) => d.prk === incident.negativePerlaCard.prk)
+  assert.ok(perlaDiag, 'Perla negative card must be discovered and inspected (recall preserved)')
+  assert.equal(perlaDiag.inspectionCompleted, true)
+  assert.ok(
+    perlaDiag.classification === 'POTENTIAL_MATCH' || perlaDiag.classification === 'CONFIRMED_INCOMPATIBLE',
+    `Perla must never be CONFIRMED_COMPATIBLE (got ${perlaDiag.classification})`,
+  )
+  assert.ok(perlaDiag.sellerAssessments.length === 3, 'Perla sellers must be individually assessed')
+  const perlaOffers = res.offers.filter((o) => o.torobIdentity.prk === incident.negativePerlaCard.prk)
+  assert.equal(perlaOffers.length, 3)
+  for (const off of perlaOffers) {
+    assert.ok(
+      off.torobIdentity.status === 'REVIEW_REQUIRED' || off.torobIdentity.status === 'IDENTITY_MISMATCH',
+      `Perla seller ${off.shopName} must be REVIEW_REQUIRED or IDENTITY_MISMATCH (got ${off.torobIdentity.status})`,
+    )
+    assert.ok(
+      (off.torobIdentity.reason ?? '').includes('پرلا') || (off.torobIdentity.reason ?? '').length > 0,
+      'Perla sellers must carry a structured reason',
+    )
+  }
+  assert.ok(!res.torob.selectedPanelPrks.includes(incident.negativePerlaCard.prk), 'Perla must never join selected panel')
+  assert.equal(res.torob.selectedPanelPrks.length, 0, 'Nothing is auto-confirmed in this codeless ambiguous world')
+
   // Every seller on the related card is individually assessed as REVIEW_REQUIRED (not auto-confirmed, not dropped!)
   const bestControl = res.offers.find((o) => o.shopName === 'بست کنترل')
   const arxis = res.offers.find((o) => o.shopName === 'آرکسیس سیستم‌های حفاظتی')
@@ -222,9 +314,15 @@ test('ST4-ST8 & ST15: Exact production incident retrieves related similar_produc
     assert.ok(off.torobIdentity.missingAttributes.some((a) => /^descriptor:/.test(a)))
   }
 
-  // Closed-loop seller-title vocabulary expansion must issue follow-up queries using observed seller adjectives
+  // پوزیتیو باسلام: آفر مرجع موجود است و وضعیتش بدتر از REVIEW_REQUIRED نمی‌شود.
+  const basalamOffer = res.offers.find((o) => o.shopName === 'باسلام')
+  assert.ok(basalamOffer, 'باسلام reference offer must be extracted')
+  assert.equal(basalamOffer.torobIdentity.status, 'REVIEW_REQUIRED', 'باسلام offer must stay REVIEW_REQUIRED (brandless world)')
+
+  // Closed-loop seller-title vocabulary expansion must issue follow-up queries using observed seller adjectives.
+  // با افزودن کارت پرلا، توکن اختصاصی فروشندهٔ آن («پرلا») هم به واژگان اضافه می‌شود — حفظ عمدیِ تزریق واژگان (§8/§9).
   assert.ok(
-    searchQueriesSeen.some((q) => q.includes('سیلیکونی') || q.includes('فانتزی') || q.includes('مکعب')),
+    searchQueriesSeen.some((q) => ['سیلیکونی', 'فانتزی', 'مکعب', 'پرلا', 'ساده'].some((w) => q.includes(w))),
     `Expected closed-loop seller vocab search query in ${JSON.stringify(searchQueriesSeen)}`,
   )
 
@@ -247,6 +345,76 @@ test('ST4-ST8 & ST15: Exact production incident retrieves related similar_produc
     now: NOW,
   })
   assert.ok(priced.torobInquiry.discoveryDiagnostics.some((d) => d.prk === incident.relatedSimilarCard.prk))
+  // §13 — هیچ آفر پرلا (حتی با قیمت ۱۴۹٬۰۰۰ ارزان‌تر) وارد محاسبهٔ قیمت خودکار نمی‌شود.
+  assert.ok(!priced.offers.find((o) => o.torobIdentity?.prk === incident.negativePerlaCard.prk)?.included, 'Perla offer must be excluded from pricing')
+  assert.notEqual(priced.lowestValid, 149000, 'lowestValid must never be the cheap perla price')
+})
+
+test('ST11-Pin: verified باسلام panel is never outranked by the 3-seller Perla card, and a stale review_required hint cannot bypass the Stage-A gate', async (t) => {
+  const distractors = Array.from({ length: 8 }, (_, i) => ({
+    prk: `distractor-315-${i}`,
+    name_fa: `ریموت کنترل بلوتوثی 315 کد R${10 + i}`,
+    price_toman: 350000,
+    shop_count: 2,
+  }))
+  const fake = makeMcpHarness({
+    searchFn: () => [
+      { prk: incident.initialCard.prk, name_fa: incident.initialCard.name_fa, price_toman: incident.initialCard.price_toman, shop_count: 1 },
+      {
+        prk: incident.negativePerlaCard.prk,
+        name_fa: incident.negativePerlaCard.name_fa,
+        price_toman: incident.negativePerlaCard.price_toman,
+        shop_count: incident.negativePerlaCard.shop_count,
+      },
+      ...distractors,
+    ],
+    similarFn: () => [],
+    detailsMap: {
+      [incident.initialCard.prk]: makeDetailsPayload(incident.initialCard),
+      [incident.negativePerlaCard.prk]: makeDetailsPayload(incident.negativePerlaCard),
+    },
+  })
+  t.after(fake.restore)
+
+  // (ب) §11 — دنیای با مرجع تأییدشدهٔ باسلام (قفل مدیریتی confirmation؛ مجرای واقعی «تأییدشده»):
+  const confirmedWorld = await fetchViaTorobMcpServer({
+    mcpUrl: 'http://fixture.invalid/mcp',
+    productName: incident.target.productName,
+    sku: incident.target.sku,
+    anchorPriceToman: incident.target.anchorPriceToman,
+    now: NOW,
+    confirmation: { prk: incident.initialCard.prk, confirmedAt: incident.observedAt, origin: 'admin_review', decisionId: 1 },
+  })
+  assert.equal(confirmedWorld.prk, incident.initialCard.prk, 'verified باسلام card must be the primary panel')
+  assert.deepEqual(confirmedWorld.torob.selectedPanelPrks, [incident.initialCard.prk], 'selectedPanelPrks must contain only the verified باسلام card')
+  assert.ok(
+    confirmedWorld.torob.reviewPanelPrks.includes(incident.negativePerlaCard.prk),
+    'Perla must sit in reviewPanelPrks (tier below the verified panel) — seller count must never outrank verified identity',
+  )
+  const confirmedPanelOrder = confirmedWorld.torob.panelEvidence.map((p) => p.prk)
+  assert.equal(confirmedPanelOrder[0], incident.initialCard.prk)
+  const perlaEvidence = confirmedWorld.torob.panelEvidence.find((p) => p.prk === incident.negativePerlaCard.prk)
+  assert.ok(perlaEvidence && perlaEvidence.identityStatus !== 'MATCH_CONFIRMED', 'Perla must never carry MATCH_CONFIRMED panel identity')
+  assert.ok(
+    !confirmedWorld.offers.some((o) => o.torobIdentity.prk === incident.negativePerlaCard.prk && o.torobIdentity.status === 'MATCH_CONFIRMED'),
+    'No Perla seller may be auto-confirmed in the verified world either',
+  )
+
+  // (ج) §12 — hint ذخیره‌شدهٔ review_required برای پرلا: گیت مرحلهٔ A دور زده نمی‌شود و primary نمی‌شود.
+  const hintedWorld = await fetchViaTorobMcpServer({
+    mcpUrl: 'http://fixture.invalid/mcp',
+    productName: incident.target.productName,
+    sku: incident.target.sku,
+    anchorPriceToman: incident.target.anchorPriceToman,
+    now: NOW,
+    knownPrkHints: [
+      { prk: incident.negativePerlaCard.prk, identityStatus: 'REVIEW_REQUIRED', externalCompetitorCount: 3, confidence: 0.7, lastVerifiedAt: NOW },
+    ],
+  })
+  assert.equal(hintedWorld.prk, incident.initialCard.prk, 'A review_required hint for Perla must not make it the primary candidate')
+  assert.ok(!hintedWorld.torob.selectedPanelPrks.includes(incident.negativePerlaCard.prk), 'Hinted Perla must not be auto-selected')
+  const hintedPerlaEvidence = hintedWorld.torob.panelEvidence.find((p) => p.prk === incident.negativePerlaCard.prk)
+  assert.ok(hintedPerlaEvidence && hintedPerlaEvidence.identityStatus !== 'MATCH_CONFIRMED', 'Hinted Perla identity stays unconfirmed on fresh evidence')
 })
 
 test('ST7-ST14: Mixed-variant partitioning, positive confirmation, multi-PRK merge, dedup, own-store exclusion, and price guardrails', async (t) => {
